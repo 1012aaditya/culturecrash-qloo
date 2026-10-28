@@ -17,6 +17,7 @@ export type ProjectSummary = {
   briefFilled: number;
   lastRunStatus: "queued" | "running" | "completed" | "failed" | null;
   lastRunMode: "live" | "demo" | null;
+  hasCompletedRun: boolean;
   evidenceCount: number;
   opportunityCount: number;
   strategyCount: number;
@@ -32,7 +33,7 @@ export const BRIEF_CORE_FIELDS = ["brand", "product", "category", "market", "aud
 /** Workflow progress derived from persisted records, never estimated. */
 export function stageStates(p: ProjectSummary): Record<"explore" | "interpret" | "create" | "test" | "track", StageState> {
   return {
-    explore: p.lastRunStatus === "completed" && p.briefFilled >= 4 ? "done" : p.briefFilled > 0 || p.lastRunStatus ? "partial" : "empty",
+    explore: p.hasCompletedRun && p.briefFilled >= 4 ? "done" : p.briefFilled > 0 || p.lastRunStatus ? "partial" : "empty",
     interpret: p.opportunityCount > 0 ? "done" : p.evidenceCount > 0 ? "partial" : "empty",
     create: p.hasSelectedDirection && p.creativeBriefCount > 0 ? "done" : p.strategyCount > 0 ? "partial" : "empty",
     test: p.experimentCount > 0 && p.resultCount > 0 ? "done" : p.experimentCount > 0 ? "partial" : "empty",

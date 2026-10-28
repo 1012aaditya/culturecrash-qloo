@@ -176,7 +176,7 @@ export function templateStrategy(brief: BriefInput, obs: Observation[], opportun
   const d3: DirectionContent = {
     name: "Participation & community",
     coreIdea: `Build ${brand} around a shared sensibility${tagEv.length ? ` (${tagEv.map((o) => o.entityName).join(", ")})` : ""} that the audience can take part in.`,
-    positioningStatement: `${brand} is where ${audience} expresses ${tagEv[0]?.entityName ?? "their taste"} together.`,
+    positioningStatement: `${brand} is where ${audience} come together around ${tagEv[0]?.entityName?.toLowerCase() ?? "a shared taste"}.`,
     audienceContext: tagEv.length ? "Built from taste tags associated with the signal." : "No tag data was returned; this direction is driven by the brief objective.",
     culturalConnections: tagEv.map((o) => o.entityName!),
     strategicRationale: "Community-led growth: value created by participation and creator content rather than broadcast messaging.",

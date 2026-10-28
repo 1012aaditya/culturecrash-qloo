@@ -28,7 +28,11 @@ export function CommandBar({ data }: { data: ShellData }) {
   const { open, setOpen } = useCommandPalette();
   const { pathname, projectId, reportId, creative } = useProjectFromPath();
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  React.useEffect(() => setMobileOpen(false), [pathname]);
+  const [prevPath, setPrevPath] = React.useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
+    setMobileOpen(false);
+  }
   const current = data.projects.find((p) => p.id === projectId) ?? null;
   const running = data.tasks.filter((t) => t.status === "running" || t.status === "queued").length;
 

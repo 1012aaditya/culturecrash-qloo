@@ -1,0 +1,52 @@
+import type { Metadata } from "next";
+import { themeForCategory } from "@/components/art/plate";
+import { ResearchWorkspace } from "@/components/research/research-workspace";
+import { generatorLabel, llmConfigured } from "@/lib/ai";
+import { loadConversation } from "@/lib/ai/copilot-actions";
+import { withUser } from "@/lib/db";
+import { demoModeAllowed, env } from "@/lib/env";
+import { loadBrief } from "@/lib/data/briefs";
+import { getProjectContext } from "@/lib/data/project-context";
+import { getResearchView } from "@/lib/data/research";
+import { firstName } from "@/lib/data/workspace";
+import { can } from "@/lib/permissions";
+import { buildPlan } from "@/lib/research/engine";
+
+export const metadata: Metadata = { title: "Cultural research" };
+
+export default async function ResearchPage({ params, searchParams }: PageProps<"/projects/[projectId]/research">) {
+  const { projectId } = await params;
+  const sp = await searchParams;
+  const { ctx, project, stages } = await getProjectContext(projectId);
+  const view = await getResearchView(ctx, projectId, typeof sp.run === "string" ? sp.run : null);
+  const { brief, featured, oppCount } = await withUser(ctx.user.id, async (tx) => {
+    const [f] = await tx`select id, title, description, is_demo, generator, cardinality(evidence_ids) as n from opportunities
+      where project_id = ${projectId} and status in ('saved','investigating','linked','new') order by (status = 'saved') desc, updated_at desc limit 1`;
+    const [{ count }] = await tx`select count(*)::int from opportunities where project_id = ${projectId} and status <> 'dismissed'`;
+    return { brief: await loadBrief(tx, projectId), featured: f, oppCount: count as number };
+  });
+  const plan = buildPlan(brief!);
+  const copilot = await loadConversation(projectId);
+  return (
+    <ResearchWorkspace
+      project={{ id: project.id, name: project.name, category: project.category, market: project.market, isDemo: project.isDemo, description: [brief?.product, brief?.audience ? `for ${brief.audience}` : null].filter(Boolean).join(" ").slice(0, 140) || [project.category, project.market].filter(Boolean).join(" · ") }}
+      theme={themeForCategory(project.category)}
+      stages={stages}
+      run={view.run}
+      runs={view.runs}
+      entities={view.entities}
+      relationships={view.relationships}
+      sources={view.sources}
+      plan={{ question: plan.question, seeds: plan.seedQueries.map((s) => s.query), location: plan.location, targets: plan.targets, notes: plan.notes }}
+      featured={featured ? { id: featured.id, title: featured.title, description: featured.description, isDemo: featured.is_demo, generator: featured.generator, evidenceCount: featured.n } : null}
+      opportunityCount={oppCount}
+      canRun={can(ctx.workspace.role, "research.run")}
+      demoAllowed={demoModeAllowed()}
+      qlooConfigured={Boolean(env().QLOO_API_KEY)}
+      llm={llmConfigured()}
+      generatorLabel={view.run?.interpretationGenerator ? generatorLabel(view.run.interpretationGenerator) : null}
+      copilot={copilot}
+      user={{ name: firstName(ctx), workspace: ctx.workspace.name }}
+    />
+  );
+}

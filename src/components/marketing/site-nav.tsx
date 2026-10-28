@@ -19,7 +19,11 @@ const links = [
 export function SiteNav({ signedIn }: { signedIn: boolean }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  useEffect(() => setOpen(false), [pathname]);
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
+    setOpen(false);
+  }
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);

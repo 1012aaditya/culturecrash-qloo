@@ -26,7 +26,14 @@ function runLabel(p: ProjectSummary) {
 
 export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, userId }: Props) {
   const [q, setQ] = React.useState("");
-  const [view, setView] = React.useState<"gallery" | "list">("gallery");
+  const stored = React.useSyncExternalStore(
+    () => () => {},
+    () => { try { return localStorage.getItem("cc:library-view"); } catch { return null; } },
+    () => null,
+  );
+  const [chosen, setView] = React.useState<"gallery" | "list" | null>(null);
+  const view = chosen ?? (stored === "list" ? "list" : "gallery");
+  const [now] = React.useState(() => Date.now());
   const [client, setClient] = React.useState("");
   const [status, setStatus] = React.useState("open");
   const [category, setCategory] = React.useState("");
@@ -34,12 +41,6 @@ export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, use
   const [since, setSince] = React.useState("");
   const [sort, setSort] = React.useState<"updated" | "name">("updated");
 
-  React.useEffect(() => {
-    try {
-      const v = localStorage.getItem("cc:library-view");
-      if (v === "list" || v === "gallery") setView(v);
-    } catch {}
-  }, []);
   const setViewPersist = (v: "gallery" | "list") => {
     setView(v);
     try { localStorage.setItem("cc:library-view", v); } catch {}
@@ -54,7 +55,7 @@ export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, use
     .filter((p) => !client || p.clientId === client)
     .filter((p) => !category || p.category === category)
     .filter((p) => !owner || p.ownerId === owner)
-    .filter((p) => !since || Date.now() - new Date(p.updatedAt).getTime() <= Number(since) * 86400000)
+    .filter((p) => !since || now - new Date(p.updatedAt).getTime() <= Number(since) * 86400000)
     .filter((p) => {
       const t = q.trim().toLowerCase();
       return !t || [p.name, p.clientName, p.category, p.market].some((v) => v?.toLowerCase().includes(t));

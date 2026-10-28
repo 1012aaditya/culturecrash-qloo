@@ -43,18 +43,17 @@ export function CommandPalette({ open, onOpenChange, data, projectId }: { open: 
   const [loading, setLoading] = React.useState(false);
   const [active, setActive] = React.useState(0);
 
-  React.useEffect(() => {
+  const [prevOpen, setPrevOpen] = React.useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (!open) {
       setQ("");
       setHits([]);
     }
-  }, [open]);
+  }
 
   React.useEffect(() => {
-    if (q.trim().length < 2) {
-      setHits([]);
-      return;
-    }
+    if (q.trim().length < 2) return;
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
       setLoading(true);
@@ -101,11 +100,11 @@ export function CommandPalette({ open, onOpenChange, data, projectId }: { open: 
   const term = q.trim().toLowerCase();
   const items: Item[] = [
     ...actions.filter((a) => !term || a.label.toLowerCase().includes(term) || a.hint?.toLowerCase().includes(term)),
-    ...hits.map((h) => ({ id: `${h.type}-${h.id}`, label: h.title, hint: h.subtitle ?? undefined, group: "Search results", href: h.href, icon: hitIcon[h.type] ?? Search })),
+    ...(term.length >= 2 ? hits : []).map((h) => ({ id: `${h.type}-${h.id}`, label: h.title, hint: h.subtitle ?? undefined, group: "Search results", href: h.href, icon: hitIcon[h.type] ?? Search })),
   ];
   const groups = [...new Set(items.map((i) => i.group))];
 
-  React.useEffect(() => setActive(0), [q, hits.length]);
+  const current = Math.min(active, Math.max(items.length - 1, 0));
 
   function go(item: Item | undefined) {
     if (!item) return;
@@ -128,16 +127,16 @@ export function CommandPalette({ open, onOpenChange, data, projectId }: { open: 
             <input
               autoFocus
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => { setQ(e.target.value); setActive(0); }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, items.length - 1)); }
                 if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-                if (e.key === "Enter") { e.preventDefault(); go(items[active]); }
+                if (e.key === "Enter") { e.preventDefault(); go(items[current]); }
               }}
               role="combobox"
               aria-expanded="true"
               aria-controls="cc-palette-list"
-              aria-activedescendant={items[active] ? `cc-item-${items[active].id}` : undefined}
+              aria-activedescendant={items[current] ? `cc-item-${items[current].id}` : undefined}
               placeholder="Search projects, evidence, strategies — or type a command"
               className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-faint"
             />
@@ -160,12 +159,12 @@ export function CommandPalette({ open, onOpenChange, data, projectId }: { open: 
                         key={item.id}
                         id={`cc-item-${item.id}`}
                         role="option"
-                        aria-selected={idx === active}
+                        aria-selected={idx === current}
                         onMouseMove={() => setActive(idx)}
                         onClick={() => go(item)}
-                        className={cn("flex cursor-pointer items-center gap-3 rounded-[12px] px-3 py-2.5 text-[14px]", idx === active && "bg-lilac/60")}
+                        className={cn("flex cursor-pointer items-center gap-3 rounded-[12px] px-3 py-2.5 text-[14px]", idx === current && "bg-lilac/60")}
                       >
-                        <item.icon className={cn("size-4 shrink-0", idx === active ? "text-violet" : "text-muted")} />
+                        <item.icon className={cn("size-4 shrink-0", idx === current ? "text-violet" : "text-muted")} />
                         <span className="min-w-0 flex-1 truncate">{item.label}</span>
                         {item.hint && <span className="max-w-[45%] truncate text-[12px] text-muted">{item.hint}</span>}
                       </li>

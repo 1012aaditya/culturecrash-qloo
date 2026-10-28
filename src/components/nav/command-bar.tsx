@@ -145,26 +145,19 @@ export function CommandBar({ data }: { data: ShellData }) {
                 <MenuSeparator />
                 <MenuLabel>Workspace</MenuLabel>
                 {data.memberships.map((m) => (
-                  <form key={m.workspaceId} action={switchWorkspaceAction}>
-                    <input type="hidden" name="workspaceId" value={m.workspaceId} />
-                    <MenuItem asChild>
-                      <button type="submit" className="w-full">
-                        <Building2 />
-                        <span className="flex-1 truncate text-left">{m.name}</span>
-                        <span className="text-[11px] capitalize text-muted">{m.role}</span>
-                        {m.workspaceId === data.workspace.id && <Check className="!text-violet" />}
-                      </button>
-                    </MenuItem>
-                  </form>
+                  <MenuItem key={m.workspaceId} onSelect={() => { const fd = new FormData(); fd.set("workspaceId", m.workspaceId); void switchWorkspaceAction(fd); }}>
+                    <Building2 />
+                    <span className="flex-1 truncate text-left">{m.name}</span>
+                    <span className="text-[11px] capitalize text-muted">{m.role}</span>
+                    {m.workspaceId === data.workspace.id && <Check className="!text-violet" />}
+                  </MenuItem>
                 ))}
                 <MenuSeparator />
                 <MenuItem asChild><Link href="/workspace"><Users /> Workspace overview</Link></MenuItem>
                 <MenuItem asChild><Link href="/settings/profile"><Settings /> Settings</Link></MenuItem>
                 <MenuItem asChild><Link href="/help"><CircleHelp /> Help & feedback</Link></MenuItem>
                 <MenuSeparator />
-                <form action={signOutAction}>
-                  <MenuItem asChild><button type="submit" className="w-full"><LogOut /> Sign out</button></MenuItem>
-                </form>
+                <MenuItem onSelect={() => void signOutAction()}><LogOut /> Sign out</MenuItem>
               </MenuContent>
             </Menu>
 

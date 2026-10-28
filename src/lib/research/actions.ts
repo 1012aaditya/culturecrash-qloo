@@ -41,7 +41,11 @@ export async function startResearchAction(raw: z.input<typeof input>): Promise<S
     const [{ research_runs_today: today }] = await tx`select research_runs_today(${ws})`;
     const [{ research_runs_daily_limit: limit }] = await tx`select research_runs_daily_limit from workspaces where id = ${ws}`;
     if (today >= limit) return { ok: false as const, error: `This workspace has reached its limit of ${limit} research runs in 24 hours.` };
-    const plan = buildPlan(brief);
+    const [qs] = await tx`select enabled, config from integration_settings where workspace_id = ${ws} and provider = 'qloo'`;
+    if (mode === "live" && qs && !qs.enabled) return { ok: false as const, error: "Qloo research is disabled for this workspace in Settings → Integrations." };
+    const defaultLocation = typeof qs?.config?.defaultLocation === "string" ? (qs.config.defaultLocation as string) : null;
+    const plan = buildPlan(brief.market || !defaultLocation ? brief : { ...brief, market: defaultLocation });
+    if (!brief.market && defaultLocation) plan.notes.push(`No market in the brief: used the workspace default location “${defaultLocation}”.`);
     const [run] = await tx`
       insert into research_runs (project_id, workspace_id, mode, provider, question, plan, brief_revision, idempotency_key, started_by)
       values (${projectId}, ${ws}, ${mode}, ${mode === "demo" ? "qloo-demo-fixture" : "qloo"}, ${plan.question}, ${tx.json(plan as never)}, ${brief.revision}, ${idempotencyKey}, ${ctx.user.id})

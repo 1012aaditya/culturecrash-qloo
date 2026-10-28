@@ -127,3 +127,12 @@ export async function deleteProjectAction(projectId: string, confirmName: string
   revalidatePath("/projects");
   return { ok: true };
 }
+
+export async function openDemoWorkspaceAction() {
+  const { demoModeAllowed } = await import("@/lib/env");
+  if (!demoModeAllowed()) return;
+  const ctx = await getCtx();
+  const ws = await withUser(ctx.user.id, async (tx) => (await tx`select create_demo_workspace() as id`)[0].id as string);
+  (await cookies()).set(WORKSPACE_COOKIE, ws, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
+  redirect("/dashboard");
+}

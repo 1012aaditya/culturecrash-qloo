@@ -1,0 +1,32 @@
+import { expect, test } from "@playwright/test";
+import { createCampaign, fillBrief, runDemoResearch, signUp, unique } from "./helpers";
+
+test("Scenario C — three directions, evidence references, edit → new version, select, creative brief", async ({ page }) => {
+  await signUp(page, unique("c"));
+  const projectId = await createCampaign(page, "Scenario C");
+  await fillBrief(page);
+  await runDemoResearch(page, projectId);
+  await page.goto(`/projects/${projectId}/strategy`);
+  await page.getByRole("button", { name: /Generate three directions/ }).click();
+  await expect(page.locator("article[id^=direction-]")).toHaveCount(3);
+  const first = page.locator("article[id^=direction-]").first();
+  await first.getByText(/Evidence trail \(\d+\)/).click();
+  await first.locator("a[href*='/evidence/']").first().click();
+  await expect(page.getByText("Provenance")).toBeVisible();
+  await page.goBack();
+  await first.getByRole("button", { name: /^Edit$/ }).click();
+  await page.fill("#ed-coreIdea", "Edited core idea from the e2e test.");
+  await page.getByRole("button", { name: "Save new version" }).click();
+  await expect(page.getByText("Edited core idea from the e2e test.")).toBeVisible();
+  await expect(page.getByRole("link", { name: /2 versions/ })).toBeVisible();
+  await page.locator("article[id^=direction-]").first().getByRole("button", { name: "Select direction" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /^Select$/ }).click();
+  await expect(page.getByText("Selected").first()).toBeVisible();
+  await page.getByRole("button", { name: /Generate creative brief/ }).click();
+  await expect(page.getByRole("link", { name: /Open creative brief/ })).toBeVisible({ timeout: 20_000 });
+  await page.goto(`/projects/${projectId}/creative-brief`);
+  await expect(page.getByRole("heading", { name: "Core message" })).toBeVisible();
+  const md = await page.request.get(`/api/projects/${projectId}/creative-brief/export`);
+  expect(md.status()).toBe(200);
+  expect(await md.text()).toContain("## Supporting evidence");
+});

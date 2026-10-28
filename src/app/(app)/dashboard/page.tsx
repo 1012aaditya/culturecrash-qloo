@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle, Surface } from "@/components/ui/surface";
 import { getDashboard } from "@/lib/data/dashboard";
+import { openDemoWorkspaceAction } from "@/app/(app)/actions";
+import { demoModeAllowed } from "@/lib/env";
 import { currentStage, listProjects, stageStates } from "@/lib/data/projects";
 import { firstName, getCtx } from "@/lib/data/workspace";
 import { can } from "@/lib/permissions";
@@ -44,6 +46,9 @@ export default async function DashboardPage() {
           <div className="space-y-3">
             {canCreate && <Button asChild size="lg"><Link href="/projects/new"><Plus /> New campaign</Link></Button>}
             <AskEntry />
+            {demoModeAllowed() && !ctx.workspace.isDemo && !ctx.memberships.some((m) => m.isDemo) && (
+              <form action={openDemoWorkspaceAction}><Button type="submit" variant="ghost" size="sm"><FlaskConical /> Open a demo workspace (fixture data)</Button></form>
+            )}
           </div>
         </div>
 

@@ -16,6 +16,10 @@ export type EntityRow = {
   id: string; providerId: string; name: string; type: string; role: "seed" | "result" | "tag" | "audience"; affinity: number | null;
   popularity: number | null; tags: string[]; description: string | null; retrievedAt: string; sourceId: string | null; evidenceId: string | null;
   imageUrl: string | null; profileOf: string | null;
+  culturalTier?: "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit" | null;
+  deltaScore?: number | null;
+  hop?: number | null;
+  subculturalAnchor?: string | null;
 };
 export type RelRow = { id: string; from: string; to: string; relation: string; value: number | null };
 export type SourceRow = { id: string; endpoint: string; params: Record<string, string>; status: string; httpStatus: number | null; resultCount: number; durationMs: number | null; errorMessage: string | null; retrievedAt: string };
@@ -58,6 +62,10 @@ export async function getResearchView(ctx: Ctx, projectId: string, runId?: strin
         popularity: e.popularity === null ? null : Number(e.popularity), tags: e.tags ?? [], description: e.properties?.description ?? null,
         retrievedAt: new Date(e.retrieved_at).toISOString(), sourceId: e.source_id, evidenceId: e.evidence_id,
         imageUrl: e.properties?.image_url ?? null, profileOf: e.properties?.profile_of ?? null,
+        culturalTier: (e.properties?.cultural_tier as "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit") ?? null,
+        deltaScore: typeof e.properties?.delta_score === "number" ? e.properties.delta_score : null,
+        hop: typeof e.properties?.hop === "number" ? e.properties.hop : 1,
+        subculturalAnchor: typeof e.properties?.subcultural_anchor === "string" ? e.properties.subcultural_anchor : null,
       })),
       relationships: rels.map((r): RelRow => ({ id: r.id, from: r.from_entity_id, to: r.to_entity_id, relation: r.relation, value: r.value === null ? null : Number(r.value) })),
       sources: sources.map((s): SourceRow => ({ id: s.id, endpoint: s.endpoint, params: s.params, status: s.status, httpStatus: s.http_status, resultCount: s.result_count, durationMs: s.duration_ms, errorMessage: s.error_message, retrievedAt: new Date(s.retrieved_at).toISOString() })),

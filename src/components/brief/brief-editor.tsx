@@ -2,7 +2,7 @@
 
 import { When } from "@/components/ui/time";
 import Link from "next/link";
-import { AlertCircle, CheckCircle2, CloudOff, FileText, Loader2, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, CloudOff, FileText, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import {
@@ -190,7 +190,38 @@ export function BriefEditor({
           <section className="rounded-cc-lg border border-line bg-paper p-6">
             <h2 className="cc-eyebrow mb-5 text-muted">The people & the goal</h2>
             <div className="grid gap-5">
-              <Field label="Target audience" htmlFor="audience" hint="Who you want to reach, in your own words."><Textarea id="audience" value={str("audience")} onChange={(e) => set("audience", e.target.value)} maxLength={2000} /></Field>
+              <Field label="Target audience" htmlFor="audience" hint="Who you want to reach, in your own words. Mentioning age cohorts enables demographic filtering in Qloo.">
+                <Textarea id="audience" value={str("audience")} onChange={(e) => set("audience", e.target.value)} maxLength={2000} />
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-muted">Quick age cohort filter:</span>
+                  {[
+                    { label: "Gen Z (18–24)", tag: "18-24" },
+                    { label: "Young Millennials (25–34)", tag: "25-34" },
+                    { label: "Older Millennials (35–44)", tag: "35-44" },
+                    { label: "Gen X (45–54)", tag: "45-54" },
+                  ].map((cohort) => {
+                    const active = str("audience").toLowerCase().includes(cohort.tag);
+                    return (
+                      <button
+                        key={cohort.tag}
+                        type="button"
+                        onClick={() => {
+                          const cur = str("audience");
+                          if (active) return;
+                          const updated = cur ? `${cur.trim()} [Age cohort: ${cohort.label}]` : cohort.label;
+                          set("audience", updated);
+                        }}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 transition-colors",
+                          active ? "border-violet bg-lilac font-medium text-violet-ink" : "border-line bg-paper text-muted hover:border-line-strong hover:text-ink",
+                        )}
+                      >
+                        {cohort.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
               <Field label="Campaign objective" htmlFor="objective"><Textarea id="objective" value={str("objective")} onChange={(e) => set("objective", e.target.value)} maxLength={2000} /></Field>
               <div className="grid gap-5 md:grid-cols-2">
                 <Field label="Budget range" htmlFor="budgetRange" optional><Input id="budgetRange" value={str("budgetRange")} onChange={(e) => set("budgetRange", e.target.value)} maxLength={120} /></Field>
@@ -232,24 +263,30 @@ export function BriefEditor({
         </section>
 
         <section className="rounded-cc-lg border border-line bg-paper p-5">
-          <h2 className="text-[14px] font-semibold">Documents</h2>
-          <p className="mt-1 text-[12px] text-muted">PDF, DOCX, TXT or Markdown up to 10 MB. Text is extracted and treated as untrusted content — instructions inside documents are ignored.</p>
-          <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown" className="sr-only" id="brief-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ""; }} />
+          <h2 className="text-[14px] font-semibold">Documents & Moodboards</h2>
+          <p className="mt-1 text-[12px] text-muted">PDF, DOCX, TXT, MD, or visual moodboards & creative assets (PNG, JPG, WEBP). Visual aesthetics, cultural tags, and audience taste codes are extracted via Claude Vision.</p>
+          <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,image/*" className="sr-only" id="brief-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ""; }} />
           <Button variant="outline" size="sm" className="mt-3" disabled={disabled || busy === "upload"} onClick={() => fileRef.current?.click()}>
-            {busy === "upload" ? <Loader2 className="animate-spin" /> : <Upload />} Upload document
+            {busy === "upload" ? <Loader2 className="animate-spin" /> : <Upload />} Upload document or moodboard
           </Button>
           <ul className="mt-4 space-y-2">
-            {documents.map((d) => (
-              <li key={d.id} className="rounded-cc-sm border border-line p-2.5 text-[12px]">
-                <div className="flex items-center gap-2">
-                  <FileText className="size-4 text-violet" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{d.fileName}</span>
-                  {canEdit && <button onClick={async () => { await deleteBriefDocumentAction(projectId, d.id); router.refresh(); }} aria-label={`Delete ${d.fileName}`} className="text-muted hover:text-danger"><Trash2 className="size-3.5" /></button>}
-                </div>
-                <p className="mt-1 text-muted">{(d.size / 1024).toFixed(0)} KB · {d.status === "extracted" ? "text extracted" : d.status === "failed" ? "extraction failed" : "unsupported"}{d.stored ? " · original stored" : " · original not stored"}</p>
-                {d.text && canEdit && <Button size="sm" variant="soft" className="mt-2" disabled={busy === "propose"} onClick={() => propose(d.text!)}><Wand2 /> Propose fields</Button>}
-              </li>
-            ))}
+            {documents.map((d) => {
+              const isImg = /\.(png|jpe?g|webp|gif)$/i.test(d.fileName);
+              return (
+                <li key={d.id} className="rounded-cc-sm border border-line p-2.5 text-[12px]">
+                  <div className="flex items-center gap-2">
+                    {isImg ? <ImageIcon className="size-4 text-coral" /> : <FileText className="size-4 text-violet" />}
+                    <span className="min-w-0 flex-1 truncate font-medium">{d.fileName}</span>
+                    {canEdit && <button onClick={async () => { await deleteBriefDocumentAction(projectId, d.id); router.refresh(); }} aria-label={`Delete ${d.fileName}`} className="text-muted hover:text-danger"><Trash2 className="size-3.5" /></button>}
+                  </div>
+                  <p className="mt-1 text-muted">
+                    {(d.size / 1024).toFixed(0)} KB · {isImg ? (d.status === "extracted" ? "visual aesthetics extracted (Claude Vision)" : "vision processing failed") : (d.status === "extracted" ? "text extracted" : d.status === "failed" ? "extraction failed" : "unsupported")}
+                    {d.stored ? " · original stored" : " · original not stored"}
+                  </p>
+                  {d.text && canEdit && <Button size="sm" variant="soft" className="mt-2" disabled={busy === "propose"} onClick={() => propose(d.text!)}><Wand2 /> Propose fields</Button>}
+                </li>
+              );
+            })}
           </ul>
         </section>
 

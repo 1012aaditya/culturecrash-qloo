@@ -5,24 +5,34 @@ import { z } from "zod";
  * Server-side environment, validated once. Secrets never use the NEXT_PUBLIC_ prefix
  * and are only read here.
  */
+/** Treat empty-string env vars the same as missing (undefined). */
+function opt<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+}
+
 const schema = z.object({
-  DATABASE_URL: z.string().url().optional(),
+  DATABASE_URL: opt(z.string().url()),
   AUTH_MODE: z.enum(["supabase", "local"]).default("supabase"),
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(10).optional(),
+  NEXT_PUBLIC_SUPABASE_URL: opt(z.string().url()),
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: opt(z.string().min(10)),
   SUPABASE_STORAGE_BUCKET: z.string().default("brief-documents"),
-  SESSION_SECRET: z.string().min(32).optional(),
-  QLOO_API_KEY: z.string().min(8).optional(),
+  SESSION_SECRET: opt(z.string().min(32)),
+  QLOO_API_KEY: opt(z.string().min(8)),
   QLOO_API_URL: z.string().url().default("https://hackathon.api.qloo.com"),
-  ANTHROPIC_API_KEY: z.string().min(8).optional(),
+  ANTHROPIC_API_KEY: opt(z.string().min(8)),
+  TAVILY_API_KEY: opt(z.string().min(8)),
+  BRAVE_API_KEY: opt(z.string().min(8)),
+  EXA_API_KEY: opt(z.string().min(8)),
+  FIRECRAWL_API_KEY: opt(z.string().min(8)),
+  YOUTUBE_API_KEY: opt(z.string().min(8)),
   LLM_MODEL: z.string().default("claude-opus-5-5"),
   CC_DEMO_MODE: z.enum(["enabled", "disabled"]).default("disabled"),
-  RESEND_API_KEY: z.string().min(8).optional(),
-  EMAIL_FROM: z.string().min(3).optional(),
-  PILOT_NOTIFY_EMAIL: z.string().email().optional(),
-  CRON_SECRET: z.string().min(16).optional(),
+  RESEND_API_KEY: opt(z.string().min(8)),
+  EMAIL_FROM: opt(z.string().min(3)),
+  PILOT_NOTIFY_EMAIL: opt(z.string().email()),
+  CRON_SECRET: opt(z.string().min(8)),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
-  VERCEL_ENV: z.string().optional(),
+  VERCEL_ENV: opt(z.string()),
 });
 
 export type ServerEnv = z.infer<typeof schema>;
@@ -63,7 +73,12 @@ export function integrationStatus() {
     qlooHost: new URL(e.QLOO_API_URL).host,
     llm: Boolean(e.ANTHROPIC_API_KEY),
     llmModel: e.LLM_MODEL,
-    webResearch: false,
+    webResearch: true,
+    tavily: Boolean(e.TAVILY_API_KEY),
+    brave: Boolean(e.BRAVE_API_KEY),
+    exa: Boolean(e.EXA_API_KEY),
+    firecrawl: Boolean(e.FIRECRAWL_API_KEY),
+    youtube: Boolean(e.YOUTUBE_API_KEY),
     email: Boolean(e.RESEND_API_KEY && e.EMAIL_FROM),
     demoMode: demoModeAllowed(),
     storage: e.AUTH_MODE === "supabase" && Boolean(e.NEXT_PUBLIC_SUPABASE_URL),

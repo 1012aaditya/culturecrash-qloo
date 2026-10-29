@@ -6,8 +6,8 @@ import { z } from "zod";
 import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
 import { latestCompletedRun, readObservations } from "@/lib/ai/context";
 import {
-  comparisonSchema, creativeBriefSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, sectionRevisionSchema, strategySchema,
-  type ComparisonOutput, type CreativeBriefContent, type CreativeSectionKey, type DirectionContent,
+  comparisonSchema, creativeBriefSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, redTeamCritiqueSchema, sectionRevisionSchema, strategySchema,
+  type ComparisonOutput, type CreativeBriefContent, type CreativeSectionKey, type DirectionContent, type RedTeamCritique,
 } from "@/lib/ai/schemas";
 import { templateComparison, templateCreativeBrief, templateOpportunities, templateStrategy, type BriefInput, type Observation } from "@/lib/ai/template";
 import { withUser, type Tx } from "@/lib/db";
@@ -355,3 +355,76 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
     return { ok: false, error: llmMessage(e) };
   }
 }
+
+export async function redTeamStrategyAction(projectId: string, versionId?: string): Promise<Result<{ critique: RedTeamCritique; generator: string }>> {
+  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+  const ctx = await authorize("strategy.edit");
+  if (!isCtx(ctx)) return ctx;
+
+  const data = await withUser(ctx.user.id, async (tx) => {
+    const brief = await loadBrief(tx, projectId);
+    const [sv] = versionId
+      ? await tx`select id, version from strategy_versions where id = ${versionId} and project_id = ${projectId}`
+      : await tx`select id, version from strategy_versions where project_id = ${projectId} order by version desc limit 1`;
+    if (!sv) return null;
+    const directions = await tx`select slot, name, content from strategy_directions where version_id = ${sv.id} order by slot asc`;
+    return { brief, sv, directions };
+  });
+
+  if (!data || data.directions.length === 0) {
+    return { ok: false, error: "No strategy directions found to stress-test. Generate directions first." };
+  }
+
+  const dirs = data.directions.map((d) => ({
+    slot: d.slot as number,
+    name: d.name as string,
+    content: d.content as DirectionContent,
+  }));
+
+  const enabled = await llmEnabled(ctx.user.id, ctx.workspace.workspaceId);
+  if (!enabled) {
+    const fallback: RedTeamCritique = {
+      overallVerdict: "promising_with_caveats",
+      executiveSummary: "These directions offer distinct strategic contrast, but rely on unproven assumptions about audience willingness to adopt non-standard brand codes.",
+      critiques: dirs.slice(0, 3).map((d) => ({
+        directionSlot: d.slot,
+        directionName: d.name,
+        fatalFlaw: `Assumes audience cares deeply about ${d.content.coreIdea} without competitive fatigue.`,
+        culturalRisk: "Risk of appearing like an outsider co-opting subcultural signifiers rather than genuinely participating.",
+        competitorCounter: "Established competitors can leverage broad media spend to frame this position as narrow or gimmicky.",
+        toughestClientQuestion: "“Why would our mainstream customers switch away from established alternatives for this angle?”",
+        suggestedDefense: `Anchor ${d.name} with tangible proof points and a community-first launch before scaling broad broadcast reach.`,
+      })),
+    };
+    return { ok: true, data: { critique: fallback, generator: TEMPLATE_GENERATOR } };
+  }
+
+  try {
+    const prompt = [
+      "You are a ruthlessly honest, veteran creative director and adversarial brand strategist conducting a RED-TEAM STRESS TEST on 3 proposed positioning directions before the client pitch.",
+      "Your objective is NOT to validate them. Your objective is to find fatal blind spots, identify cultural risks (inauthenticity, cliché, performative tone), simulate aggressive competitor counter-strikes, and provide the toughest question a skeptical CMO will ask in the meeting.",
+      tag("brief", briefJson(data.brief!)),
+      tag("directions", JSON.stringify(dirs.map((d) => ({
+        slot: d.slot,
+        name: d.name,
+        coreIdea: d.content.coreIdea,
+        positioningStatement: d.content.positioningStatement,
+        consumerTension: d.content.consumerTension,
+        differentiation: d.content.differentiation,
+        assumptions: d.content.assumptionsToTest,
+        tradeOffs: d.content.tradeOffs,
+      })))),
+    ].join("\n\n");
+
+    const out = await generateStructured({
+      schema: redTeamCritiqueSchema,
+      prompt,
+      maxTokens: 4000,
+    });
+
+    return { ok: true, data: { critique: out.data, generator: out.generator } };
+  } catch (e) {
+    return { ok: false, error: llmMessage(e) };
+  }
+}
+

@@ -6,6 +6,7 @@ import { themeForCategory } from "@/components/art/plate";
 import { EmptyState } from "@/components/states";
 import { GenerateButton } from "@/components/strategy/generate-button";
 import { CompareLink, StrategyStudio } from "@/components/strategy/strategy-studio";
+import { RedTeamButton } from "@/components/strategy/red-team-dialog";
 import { Button } from "@/components/ui/button";
 import { generatorLabel } from "@/lib/ai";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -35,6 +36,7 @@ export default async function StrategyPage({ params, searchParams }: PageProps<"
           <div className="flex flex-wrap gap-2">
             {canEdit && <GenerateButton action={generateStrategyAction.bind(null, projectId)} label={s.current ? "Generate new version" : "Generate three directions"} pendingLabel="Drafting directions…" successTitle="Strategy directions generated" />}
             {s.current && <CompareLink projectId={projectId} />}
+            {s.current && <RedTeamButton projectId={projectId} versionId={s.current.id} />}
             {project.hasSelectedDirection && (project.creativeBriefCount > 0
               ? <Button asChild variant="soft"><Link href={`/projects/${projectId}/creative-brief`}>Open creative brief <ArrowRight /></Link></Button>
               : canEdit && <GenerateButton variant="accent" action={generateCreativeBriefAction.bind(null, projectId)} label="Generate creative brief" pendingLabel="Writing brief…" successTitle="Creative brief created" />)}

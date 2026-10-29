@@ -15,9 +15,13 @@ const byType: Record<string, NormalizedEntity[]> = {
   brand: [E("b1", "Lumen Skin Co. (fictional)", "brand", 0.91, 0.62, ["skincare", "minimalism"]), E("b2", "Seoul Dew Lab (fictional)", "brand", 0.88, 0.55, ["k-beauty"]), E("b3", "Petal & Proof (fictional)", "brand", 0.81, 0.4), E("b4", "Gloss Republic (fictional)", "brand", 0.74, 0.7)],
   artist: [E("a1", "Velvet Hours (fictional band)", "artist", 0.86, 0.48, ["indie pop"]), E("a2", "Mira Kael (fictional artist)", "artist", 0.83, 0.52, ["k-pop"]), E("a3", "Neon Monsoon (fictional)", "artist", 0.77, 0.31)],
   tv_show: [E("t1", "Glass Morning (fictional series)", "tv_show", 0.84, 0.44, ["k-drama"]), E("t2", "Studio Ritual (fictional)", "tv_show", 0.72, 0.29)],
+  movie: [E("m1", "Pastoral Echoes (fictional film)", "movie", 0.87, 0.42, ["arthouse", "cinematography"]), E("m2", "Neon Suburbia (fictional)", "movie", 0.79, 0.38, ["indie film"])],
+  person: [E("pe1", "Aria Lin (fictional creator)", "person", 0.89, 0.54, ["visual design", "streetwear"]), E("pe2", "Soren Drake (fictional director)", "person", 0.81, 0.41, ["documentary"])],
   place: [E("p1", "Matcha House Bandra (fictional)", "place", 0.8, 0.22, ["cafe"]), E("p2", "Indiranagar Night Market (fictional)", "place", 0.76, 0.35)],
   podcast: [E("c1", "Slow Self Care (fictional podcast)", "podcast", 0.79, 0.2, ["wellness"])],
   destination: [E("d1", "Jeju Island (demo value)", "destination", 0.73, 0.6), E("d2", "Goa coast (demo value)", "destination", 0.69, 0.66)],
+  video_game: [E("vg1", "Aether Drift (fictional game)", "video_game", 0.82, 0.58, ["cozy indie", "solarpunk"])],
+  book: [E("bk1", "The Quiet Radical (fictional essay)", "book", 0.78, 0.36, ["design culture", "slow living"])],
 };
 
 const tags: NormalizedTag[] = [

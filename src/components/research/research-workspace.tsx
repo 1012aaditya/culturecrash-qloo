@@ -76,6 +76,7 @@ export function ResearchWorkspace(p: Props) {
   const [selected, setSelected] = React.useState<string | null>(null);
   const [view, setView] = React.useState<"network" | "list">("network");
   const [types, setTypes] = React.useState<Set<string>>(new Set());
+  const [tierFilter, setTierFilter] = React.useState<"all" | "white_space" | "subcultural_orbit" | "consensus" | "competitor_stronghold">("all");
   const [query, setQuery] = React.useState("");
   const [starting, setStarting] = React.useState<"live" | "demo" | null>(null);
   const keyRef = React.useRef<Record<string, string>>({});
@@ -172,12 +173,55 @@ export function ResearchWorkspace(p: Props) {
               <span className="sr-only">Search entities</span>
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search entities" className="w-36 bg-transparent text-[12px] outline-none" />
             </label>
+
+            <div className="flex items-center gap-1 rounded-full border border-line bg-white/90 p-1">
+              <button
+                onClick={() => setTierFilter("all")}
+                aria-pressed={tierFilter === "all"}
+                className={cn("rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "all" ? "bg-ink text-white" : "text-muted hover:text-ink")}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setTierFilter("white_space")}
+                aria-pressed={tierFilter === "white_space"}
+                className={cn("flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "white_space" ? "bg-emerald-600 text-white shadow-sm" : "text-emerald-700 hover:bg-emerald-50")}
+              >
+                🎯 White-Space
+              </button>
+              <button
+                onClick={() => setTierFilter("subcultural_orbit")}
+                aria-pressed={tierFilter === "subcultural_orbit"}
+                className={cn("flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "subcultural_orbit" ? "bg-cyan-600 text-white shadow-sm" : "text-cyan-700 hover:bg-cyan-50")}
+              >
+                🪐 Subcultural Orbits
+              </button>
+              <button
+                onClick={() => setTierFilter("consensus")}
+                aria-pressed={tierFilter === "consensus"}
+                className={cn("rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "consensus" ? "bg-slate-700 text-white" : "text-slate-600 hover:bg-slate-100")}
+              >
+                🤝 Consensus
+              </button>
+              <button
+                onClick={() => setTierFilter("competitor_stronghold")}
+                aria-pressed={tierFilter === "competitor_stronghold"}
+                className={cn("rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "competitor_stronghold" ? "bg-coral text-white" : "text-coral hover:bg-coral/10")}
+              >
+                🛡️ Competitor
+              </button>
+            </div>
+
             {presentTypes.map((t) => (
               <button key={t} onClick={() => toggleType(t)} aria-pressed={types.has(t)} className={cn("rounded-full border px-3 py-1.5 text-[12px] transition-colors", types.has(t) ? "border-violet bg-lilac text-violet-ink" : "border-line bg-white/85 text-ink/75 hover:bg-white")}>
                 {TYPE_LABEL[t] ?? t}
               </button>
             ))}
-            {types.size > 0 && <button onClick={() => setTypes(new Set())} className="text-[12px] text-muted underline-offset-2 hover:underline">Clear</button>}
+            {(types.size > 0 || tierFilter !== "all") && (
+              <button onClick={() => { setTypes(new Set()); setTierFilter("all"); }} className="text-[12px] text-muted underline-offset-2 hover:underline">
+                Clear filters
+              </button>
+            )}
           </div>
         )}
 
@@ -227,6 +271,7 @@ export function ResearchWorkspace(p: Props) {
               selectedId={selected}
               onSelect={setSelected}
               typeFilter={types}
+              tierFilter={tierFilter}
               query={query}
               audienceLabel={[p.project.market, p.plan.seeds[0]].filter(Boolean).join(" · ") || "Brief signal"}
               theme={p.theme}
@@ -236,18 +281,51 @@ export function ResearchWorkspace(p: Props) {
               <table className="w-full min-w-[560px] text-left text-[13px]">
                 <caption className="sr-only">Entities returned by the research run</caption>
                 <thead className="sticky top-0 bg-paper text-[11px] uppercase tracking-wider text-muted">
-                  <tr><th className="py-2 font-medium">Entity</th><th className="py-2 font-medium">Type</th><th className="py-2 font-medium">Role</th><th className="py-2 text-right font-medium">Affinity</th><th className="py-2 text-right font-medium">Popularity</th></tr>
+                  <tr>
+                    <th className="py-2 font-medium">Entity</th>
+                    <th className="py-2 font-medium">Tier</th>
+                    <th className="py-2 font-medium">Type</th>
+                    <th className="py-2 font-medium">Role</th>
+                    <th className="py-2 text-right font-medium">Affinity</th>
+                    <th className="py-2 text-right font-medium">Popularity</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {p.entities.filter((e) => (types.size === 0 || e.role === "seed" || types.has(e.role === "tag" ? "tag" : e.type)) && (!query || e.name.toLowerCase().includes(query.toLowerCase()))).map((e) => (
-                    <tr key={e.id} className={cn("border-t border-line", selected === e.id && "bg-lilac/40")}>
-                      <td className="py-2"><button onClick={() => setSelected(e.id)} className="text-left font-medium hover:text-violet">{e.name}</button></td>
-                      <td className="py-2 text-muted">{e.role === "tag" ? "taste tag" : e.type}</td>
-                      <td className="py-2 text-muted">{e.role === "seed" ? "signal (from brief)" : e.role}</td>
-                      <td className="py-2 text-right tabular-nums">{e.affinity?.toFixed(2) ?? "—"}</td>
-                      <td className="py-2 text-right tabular-nums text-muted">{e.popularity?.toFixed(2) ?? "—"}</td>
-                    </tr>
-                  ))}
+                  {p.entities
+                    .filter(
+                      (e) =>
+                        (types.size === 0 || e.role === "seed" || types.has(e.role === "tag" ? "tag" : e.type)) &&
+                        (tierFilter === "all" || e.role === "seed" || e.culturalTier === tierFilter) &&
+                        (!query || e.name.toLowerCase().includes(query.toLowerCase())),
+                    )
+                    .map((e) => (
+                      <tr key={e.id} className={cn("border-t border-line", selected === e.id && "bg-lilac/40")}>
+                        <td className="py-2">
+                          <button onClick={() => setSelected(e.id)} className="text-left font-medium hover:text-violet">
+                            {e.name}
+                          </button>
+                        </td>
+                        <td className="py-2">
+                          {e.culturalTier === "white_space" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                              🎯 White-Space
+                            </span>
+                          ) : e.culturalTier === "competitor_stronghold" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-coral/10 px-2 py-0.5 text-[10px] font-medium text-coral">
+                              🛡️ Competitor
+                            </span>
+                          ) : e.role === "result" ? (
+                            <span className="text-[11px] text-muted">Consensus</span>
+                          ) : (
+                            <span className="text-[11px] text-faint">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 text-muted">{e.role === "tag" ? "taste tag" : e.type}</td>
+                        <td className="py-2 text-muted">{e.role === "seed" ? "signal (from brief)" : e.role}</td>
+                        <td className="py-2 text-right tabular-nums">{e.affinity?.toFixed(2) ?? "—"}</td>
+                        <td className="py-2 text-right tabular-nums text-muted">{e.popularity?.toFixed(2) ?? "—"}</td>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -335,6 +413,75 @@ function RunOverview({ run, entities, projectId, generatorLabel, onSelect, theme
           </>
         )}
       </section>
+
+      {it?.culturalPulse && (
+        <section className="rounded-[28px] border border-cyan-500/30 bg-gradient-to-br from-cyan-950/5 via-paper to-violet/5 p-5 shadow-card">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="flex size-6 items-center justify-center rounded-full bg-cyan-600 text-[12px] text-white">⚡</span>
+              <h2 className="text-[14px] font-semibold text-ink">Live Cultural Pulse (2026)</h2>
+            </div>
+            <Badge tone="glass">Real-Time Zeitgeist</Badge>
+          </div>
+          <p className="mt-2 text-[12px] leading-relaxed text-ink/90 font-medium">
+            {it.culturalPulse.zeitgeistSummary}
+          </p>
+
+          <div className="mt-3 space-y-2">
+            <p className="cc-eyebrow text-[9px] text-cyan-700">Emerging Micro-Aesthetics</p>
+            <div className="grid grid-cols-1 gap-2">
+              {it.culturalPulse.microAesthetics.map((a, i) => (
+                <div key={i} className="rounded-xl border border-cyan-500/20 bg-white/70 p-2.5 backdrop-blur-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-bold text-ink">{a.name}</span>
+                    <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[9px] font-medium text-cyan-800">{a.platformOrigin}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted">{a.description}</p>
+                  <p className="mt-1 text-[10px] text-cyan-900/80 italic">{a.audienceRelevance}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {it.culturalPulse.culturalTensions.length > 0 && (
+            <div className="mt-3">
+              <p className="cc-eyebrow text-[9px] text-violet">Active Category Friction</p>
+              <ul className="mt-1.5 space-y-1.5">
+                {it.culturalPulse.culturalTensions.map((t, i) => (
+                  <li key={i} className="rounded-lg bg-violet/5 p-2 text-[11px]">
+                    <span className="font-semibold text-ink">{t.tension}: </span>
+                    <span className="text-muted">{t.implicationForBrand}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {it.culturalPulse.liveWebSources && it.culturalPulse.liveWebSources.length > 0 && (
+            <div className="mt-3">
+              <p className="cc-eyebrow text-[9px] text-cyan-800">Verified Live Web Intelligence</p>
+              <ul className="mt-1.5 space-y-2">
+                {it.culturalPulse.liveWebSources.map((w, i) => (
+                  <li key={i} className="rounded-xl border border-line bg-white/80 p-2 text-[11px] shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-semibold text-ink line-clamp-1">{w.title}</span>
+                      <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-700">{w.source}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-muted line-clamp-2">{w.snippet}</p>
+                    {w.url && (
+                      <a href={w.url} target="_blank" rel="noreferrer noopener" className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium text-cyan-700 hover:underline">
+                        <span>Read original source</span>
+                        <ExternalLink className="size-2.5" />
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
       {top.length > 0 && (
         <section className="rounded-[28px] border border-line bg-paper p-5 shadow-card">
           <div className="flex items-center justify-between"><h2 className="text-[14px] font-semibold">Supporting evidence</h2><Link href={`/projects/${projectId}/opportunities#evidence`} className="text-[12px] text-muted hover:text-ink">All →</Link></div>
@@ -368,6 +515,32 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
         <div>
           <p className="cc-eyebrow text-[10px] text-muted">{e.role === "seed" ? "Signal entity (from brief)" : e.role === "tag" ? "Taste tag" : `Entity · ${e.type}`}</p>
           <h2 className="cc-display mt-1 text-3xl">{e.name}</h2>
+          {e.culturalTier === "white_space" && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-800">
+              <span>🎯 Exclusive White-Space</span>
+              <span className="text-[10px] text-emerald-600/90 font-normal">· High brand divergence</span>
+            </div>
+          )}
+          {e.culturalTier === "subcultural_orbit" && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold text-cyan-800">
+              <span>🪐 2-Hop Subcultural Orbit</span>
+              {e.subculturalAnchor && (
+                <span className="text-[10px] text-cyan-600/90 font-normal">· Anchored to {e.subculturalAnchor}</span>
+              )}
+            </div>
+          )}
+          {e.culturalTier === "competitor_stronghold" && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1 text-[11px] font-semibold text-coral">
+              <span>🛡️ Competitor Stronghold</span>
+              <span className="text-[10px] text-coral/80 font-normal">· Favors competitor audience</span>
+            </div>
+          )}
+          {e.culturalTier === "consensus" && e.role === "result" && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-line bg-ivory px-3 py-1 text-[11px] font-medium text-muted">
+              <span>🤝 Category Consensus</span>
+              <span className="text-[10px] text-faint font-normal">· Shared with competitors</span>
+            </div>
+          )}
           {e.profileOf && <p className="mt-1 text-[12px] text-muted">From Qloo’s profile of {e.profileOf}</p>}
         </div>
         <button onClick={onClose} className="rounded-full p-1.5 hover:bg-ink/5" aria-label="Close details"><X className="size-4" /></button>

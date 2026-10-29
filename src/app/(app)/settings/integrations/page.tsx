@@ -127,12 +127,28 @@ export default async function IntegrationsPage() {
         <Card
           className="lg:col-span-5"
           icon={Globe}
-          title="Public web research"
-          state={s.webResearch ? "configured" : "unavailable"}
-          envVars={["(no provider supported yet)"]}
+          title="Multi-Source Cultural Intelligence"
+          state="configured"
+          envVars={["EXA_API_KEY", "YOUTUBE_API_KEY", "FIRECRAWL_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"]}
           details={[
-            ["Status", "No web research provider is integrated in this build"],
-            ["External sources", "added manually as evidence with URL and access date"],
+            [
+              "Active engines",
+              [
+                s.exa ? "Exa.ai" : null,
+                s.youtube ? "YouTube" : null,
+                s.firecrawl ? "Firecrawl" : null,
+                s.tavily ? "Tavily" : s.brave ? "Brave" : null,
+                "Reddit (Free)",
+                "Wikipedia (Free)",
+                "Wikidata (Free)",
+                "News RSS (Free)",
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            ],
+            ["Encyclopedic provenance", "Wikipedia + Wikidata Knowledge Graph (Zero-config)"],
+            ["Social & commentary", "Reddit consumer sentiment + YouTube cultural video essays"],
+            ["Audit trail", "Every article saved to evidence ledger with verified source URL"],
           ]}
         />
 

@@ -58,10 +58,11 @@ export function layoutNetwork(entities: EntityRow[]): Positioned[] {
 }
 
 export function CulturalNetwork({
-  entities, relationships, selectedId, onSelect, typeFilter, query, audienceLabel, theme,
+  entities, relationships, selectedId, onSelect, typeFilter, query, audienceLabel, theme, tierFilter = "all",
 }: {
   entities: EntityRow[]; relationships: RelRow[]; selectedId: string | null; onSelect: (id: string | null) => void;
   typeFilter: Set<string>; query: string; audienceLabel: string; theme: PlateTheme;
+  tierFilter?: "all" | "white_space" | "subcultural_orbit" | "consensus" | "competitor_stronghold";
 }) {
   const nodes = React.useMemo(() => layoutNetwork(entities), [entities]);
   const [view, setView] = React.useState({ x: 0, y: 0, k: 1 });
@@ -100,7 +101,17 @@ export function CulturalNetwork({
   }, [selectedId, relationships]);
 
   const q = query.trim().toLowerCase();
-  const visible = (n: Positioned) => n.role === "seed" || typeFilter.size === 0 || typeFilter.has(n.role === "tag" ? "tag" : n.type);
+  const visible = (n: Positioned) => {
+    if (n.role === "seed") return true;
+    if (tierFilter && tierFilter !== "all") {
+      if (tierFilter === "white_space") {
+        if (n.culturalTier !== "white_space" && n.culturalTier !== "subcultural_orbit") return false;
+      } else if (n.culturalTier !== tierFilter) {
+        return false;
+      }
+    }
+    return typeFilter.size === 0 || typeFilter.has(n.role === "tag" ? "tag" : n.type);
+  };
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const scale = fit * view.k;
 
@@ -111,13 +122,35 @@ export function CulturalNetwork({
       onPointerDown={(e) => {
         if ((e.target as HTMLElement).closest("button")) return;
         drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        try {
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
       }}
       onPointerMove={(e) => {
-        if (!drag.current) return;
-        setView((v) => ({ ...v, x: drag.current!.vx + (e.clientX - drag.current!.x), y: drag.current!.vy + (e.clientY - drag.current!.y) }));
+        const cur = drag.current;
+        if (!cur) return;
+        const dx = e.clientX - cur.x;
+        const dy = e.clientY - cur.y;
+        setView((v) => ({ ...v, x: cur.vx + dx, y: cur.vy + dy }));
       }}
-      onPointerUp={() => (drag.current = null)}
+      onPointerUp={(e) => {
+        drag.current = null;
+        try {
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      }}
+      onPointerCancel={(e) => {
+        drag.current = null;
+        try {
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onSelect(null);
       }}
@@ -187,11 +220,24 @@ export function CulturalNetwork({
                 className={cn(
                   "cc-animate-pop absolute overflow-hidden rounded-[18px] text-left text-white shadow-[0_20px_40px_-18px_rgba(23,21,30,0.7)] transition-[opacity,scale,box-shadow] duration-500 ease-[var(--cc-ease-spring)] focus-visible:outline-4",
                   sel ? "z-20 scale-110 ring-4 ring-violet" : "z-10 hover:scale-105",
+                  n.culturalTier === "white_space" && "ring-2 ring-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.45)]",
+                  n.culturalTier === "subcultural_orbit" && "ring-2 ring-cyan-400 shadow-[0_0_24px_rgba(34,211,238,0.5)]",
+                  n.culturalTier === "competitor_stronghold" && "border-2 border-dashed border-coral/80",
                   dim && "opacity-25",
                 )}
                 style={{ left: n.x - 50, top: n.y - 62, width: 100, height: 124, ...pop }}
               >
                 <EntityImage src={n.imageUrl} theme={TYPE_THEME[n.type] ?? theme} seed={n.providerId} rounded={false} className="absolute inset-0" />
+                {n.culturalTier === "white_space" && (
+                  <span className="absolute left-2 top-2 z-10 rounded-full bg-emerald-600/90 px-1.5 py-0.5 text-[9px] font-bold text-white shadow backdrop-blur">
+                    🎯 White-Space
+                  </span>
+                )}
+                {n.culturalTier === "subcultural_orbit" && (
+                  <span className="absolute left-2 top-2 z-10 rounded-full bg-cyan-600/90 px-1.5 py-0.5 text-[9px] font-bold text-white shadow backdrop-blur">
+                    🪐 Subcultural Orbit
+                  </span>
+                )}
                 <span className="absolute inset-x-2 bottom-2">
                   <span className="block truncate text-[12px] font-semibold leading-tight">{n.name}</span>
                   <span className="block text-[10px] text-white/75">{n.affinity !== null ? `affinity ${n.affinity.toFixed(2)}` : n.type}</span>
@@ -211,13 +257,32 @@ export function CulturalNetwork({
               <span
                 className={cn(
                   "block size-3.5 shrink-0 rounded-full border-2 border-white shadow transition-[scale,box-shadow] duration-300 ease-[var(--cc-ease-spring)] group-hover:scale-125",
-                  n.role === "seed" ? "size-4 bg-ink" : n.role === "tag" ? "bg-coral" : "bg-violet",
+                  n.culturalTier === "white_space"
+                    ? "bg-emerald-500 ring-2 ring-emerald-300"
+                    : n.culturalTier === "subcultural_orbit"
+                    ? "bg-cyan-400 ring-2 ring-cyan-300"
+                    : n.culturalTier === "competitor_stronghold"
+                    ? "bg-coral ring-2 ring-coral/40"
+                    : n.role === "seed"
+                    ? "size-4 bg-ink"
+                    : n.role === "tag"
+                    ? "bg-coral"
+                    : "bg-violet",
                   sel && "scale-150 ring-4 ring-lilac",
                   match && "ring-4 ring-peach",
                 )}
               />
-              <span className={cn("max-w-[130px] truncate rounded-full px-1.5 text-[11px] leading-5", n.role === "seed" ? "bg-ink font-medium text-white" : "bg-white/70 text-ink/80 backdrop-blur group-hover:bg-white")}>
-                {n.name}
+              <span className={cn(
+                "max-w-[130px] truncate rounded-full px-1.5 text-[11px] leading-5",
+                n.culturalTier === "white_space"
+                  ? "border border-emerald-300 bg-emerald-50 font-medium text-emerald-950"
+                  : n.culturalTier === "subcultural_orbit"
+                  ? "border border-cyan-300 bg-cyan-50 font-medium text-cyan-950"
+                  : n.role === "seed"
+                  ? "bg-ink font-medium text-white"
+                  : "bg-white/70 text-ink/80 backdrop-blur group-hover:bg-white"
+              )}>
+                {n.culturalTier === "white_space" ? `🎯 ${n.name}` : n.culturalTier === "subcultural_orbit" ? `🪐 ${n.name}` : n.name}
               </span>
             </button>
           );

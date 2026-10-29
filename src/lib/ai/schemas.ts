@@ -12,6 +12,30 @@ export const researchInterpretationSchema = z.object({
   contradictions: z.array(z.string()),
   missingInformation: z.array(z.string()),
   followUpQuestions: z.array(z.string()),
+  culturalPulse: z.object({
+    zeitgeistSummary: z.string(),
+    microAesthetics: z.array(z.object({
+      name: z.string(),
+      platformOrigin: z.string(),
+      description: z.string(),
+      audienceRelevance: z.string(),
+    })),
+    culturalTensions: z.array(z.object({
+      tension: z.string(),
+      implicationForBrand: z.string(),
+    })),
+    watchouts: z.array(z.object({
+      risk: z.string(),
+      recommendation: z.string(),
+    })),
+    liveWebSources: z.array(z.object({
+      title: z.string(),
+      url: z.string(),
+      source: z.string(),
+      snippet: z.string(),
+      relevance: z.string().optional(),
+    })).optional().nullable(),
+  }).optional().nullable(),
 });
 export type ResearchInterpretation = z.infer<typeof researchInterpretationSchema>;
 
@@ -101,3 +125,19 @@ export const briefExtractionSchema = z.object({
   objective: z.string(), existingPositioning: z.string(), competitors: z.array(z.string()), interests: z.array(z.string()), timeframe: z.string(), budgetRange: z.string(),
 });
 export type BriefExtraction = z.infer<typeof briefExtractionSchema>;
+
+export const redTeamCritiqueSchema = z.object({
+  overallVerdict: z.enum(["bulletproof", "promising_with_caveats", "vulnerable", "high_risk"]),
+  executiveSummary: z.string().describe("Ruthless 2-3 sentence agency partner critique."),
+  critiques: z.array(z.object({
+    directionSlot: z.number().int().min(1).max(3),
+    directionName: z.string(),
+    fatalFlaw: z.string().describe("The single biggest point of failure or strategic vulnerability."),
+    culturalRisk: z.string().describe("Risk of being perceived as tone-deaf, cliché, performative, or inauthentic."),
+    competitorCounter: z.string().describe("How a rival brand could easily counter, ridicule, or neutralize this position."),
+    toughestClientQuestion: z.string().describe("The hardest, most skeptical question a client CMO will ask in the pitch meeting."),
+    suggestedDefense: z.string().describe("Actionable advice to fortify and defend this direction."),
+  })),
+});
+export type RedTeamCritique = z.infer<typeof redTeamCritiqueSchema>;
+

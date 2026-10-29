@@ -4,6 +4,7 @@ import "server-only";
 import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { researchInterpretationSchema, type ResearchInterpretation } from "@/lib/ai/schemas";
 import { templateInterpretation, type BriefInput, type Observation } from "@/lib/ai/template";
+import { generateCulturalPulse } from "./cultural-pulse";
 import { withUser, type Tx } from "@/lib/db";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { loadBrief } from "@/lib/data/briefs";
@@ -17,9 +18,9 @@ export const AFFINITY_LIMITATION =
  * and filter.tag.types with *:qloo tag types returned zero tags. So we request a wider set and drop
  * urn:tag:genre:* client-side, keeping only taste-descriptive tags.
  */
-const TAG_TAKE = 40;
-const MAX_TASTE_TAGS = 12;
-const MAX_PROFILE_TAGS = 8;
+const TAG_TAKE = 50;
+const MAX_TASTE_TAGS = 20;
+const MAX_PROFILE_TAGS = 12;
 
 export type ResearchPlan = {
   question: string;
@@ -27,6 +28,7 @@ export type ResearchPlan = {
   /** Audience interests resolved through /v2/tags (absent on plans made before this existed). */
   interestQueries?: string[];
   location: string | null;
+  ageCohort?: string | null;
   targets: EntityTypeUrn[];
   includeTags: boolean;
   notes: string[];
@@ -35,28 +37,57 @@ export type ResearchPlan = {
 type QlooLike = Pick<InstanceType<typeof DemoQlooClient>, "search" | "searchTags" | "insights" | "tagInsights">;
 const MAX_INTERESTS = 4;
 
+export function extractAgeCohort(text: string | null | undefined): string | undefined {
+  if (!text) return undefined;
+  const t = text.toLowerCase();
+  // Explicit numeric ranges take highest priority
+  if (/\b18[-–]24\b/.test(t)) return "18-24";
+  if (/\b25[-–]34\b/.test(t)) return "25-34";
+  if (/\b35[-–]44\b/.test(t)) return "35-44";
+  if (/\b45[-–]54\b/.test(t)) return "45-54";
+  if (/\b(55\+|55[-–]64)\b/.test(t)) return "55+";
+
+  // Generational descriptors with proper specificity
+  if (/\b(gen[- ]?z|young adults?)\b/.test(t)) return "18-24";
+  if (/\b(older millennials?)\b/.test(t)) return "35-44";
+  if (/\b(millennials?|young professionals?)\b/.test(t)) return "25-34";
+  if (/\b(gen[- ]?x)\b/.test(t)) return "45-54";
+  if (/\b(boomers?|seniors?)\b/.test(t)) return "55+";
+  return undefined;
+}
+
 export function buildPlan(b: BriefInput): ResearchPlan {
   const seeds: ResearchPlan["seedQueries"] = [];
   if (b.brand) seeds.push({ query: b.brand, kind: "brand" });
   for (const c of b.competitors.slice(0, 3)) seeds.push({ query: c, kind: "competitor" });
   const cat = (b.category ?? "").toLowerCase();
-  const targets: EntityTypeUrn[] = ["urn:entity:brand", "urn:entity:artist", "urn:entity:tv_show", "urn:entity:podcast"];
+  const targets: EntityTypeUrn[] = [
+    "urn:entity:brand",
+    "urn:entity:artist",
+    "urn:entity:movie",
+    "urn:entity:tv_show",
+    "urn:entity:podcast",
+    "urn:entity:person",
+  ];
   if (b.market) targets.push("urn:entity:place");
-  if (/travel|hotel|tourism|hospitality/.test(cat)) targets.push("urn:entity:destination");
-  if (/game|gaming|esport/.test(cat)) targets.push("urn:entity:video_game");
-  if (/book|publish|education/.test(cat)) targets.push("urn:entity:book");
+  if (/travel|hotel|tourism|hospitality|city|vacation/.test(cat)) targets.push("urn:entity:destination");
+  if (/game|gaming|esport|tech|digital/.test(cat) || !b.category) targets.push("urn:entity:video_game");
+  if (/book|publish|education|reading|culture|media/.test(cat) || !b.category) targets.push("urn:entity:book");
   const interests = [...new Set((b.interests ?? []).map((i) => i.trim()).filter(Boolean))].slice(0, MAX_INTERESTS);
+  const ageCohort = extractAgeCohort(b.audience) || extractAgeCohort(b.additionalContext);
   const notes = [
     "The audience description is used for interpretation only; Qloo signals are built from resolved entities, audience interests (matched to Qloo tags) and location.",
   ];
+  if (ageCohort) notes.push(`Audience demographic filter: focused on age cohort ${ageCohort}.`);
   if (!seeds.length && !interests.length) notes.push("No brand, competitors or audience interests in the brief: research will use the location signal only.");
   else if (!seeds.length) notes.push("No brand or competitors in the brief: research uses the audience interests and location as signals.");
   if ((b.interests ?? []).length > MAX_INTERESTS) notes.push(`Only the first ${MAX_INTERESTS} audience interests are used as signals.`);
   return {
-    question: `Which cultural entities and taste tags co-occur with people connected to ${b.brand ?? b.name}${b.competitors.length ? ` and ${b.competitors.slice(0, 3).join(", ")}` : ""}${interests.length ? `, or interested in ${interests.join(", ")},` : ""}${b.market ? ` in ${b.market}` : ""}?`,
+    question: `Which cultural entities and taste tags co-occur with people connected to ${b.brand ?? b.name}${b.competitors.length ? ` and ${b.competitors.slice(0, 3).join(", ")}` : ""}${interests.length ? `, or interested in ${interests.join(", ")},` : ""}${b.market ? ` in ${b.market}` : ""}${ageCohort ? ` (age ${ageCohort})` : ""}?`,
     seedQueries: seeds,
     interestQueries: interests,
     location: b.market,
+    ageCohort: ageCohort ?? null,
     targets: [...new Set(targets)],
     includeTags: true,
     notes,
@@ -186,7 +217,15 @@ async function runResearch(userId: string, runId: string) {
     }
 
     // 2. Insights per target type, plus taste tags.
-    type Result = { entity: NormalizedEntity; sourceId: string; role: "result" | "tag"; profileOf?: string };
+    // 2. Insights per target type, plus taste tags.
+    type Result = {
+      entity: NormalizedEntity;
+      sourceId: string;
+      role: "result" | "tag";
+      profileOf?: string;
+      hop?: number;
+      subculturalAnchor?: string;
+    };
     const results: Result[] = [];
     for (const target of plan.targets) {
       const isPlace = target === "urn:entity:place" || target === "urn:entity:destination";
@@ -196,21 +235,23 @@ async function runResearch(userId: string, runId: string) {
         signalTags: tagIds,
         signalLocationQuery: !isPlace ? plan.location ?? undefined : undefined,
         filterLocationQuery: isPlace ? plan.location ?? undefined : undefined,
-        take: 8,
+        signalDemographicsAge: plan.ageCohort ?? undefined,
+        take: 12,
         explainability: seedIds.length + tagIds.length > 0,
         excludeEntities: seedIds,
       };
       if (!seedIds.length && !tagIds.length && !isPlace && !params.signalLocationQuery) continue;
       const res = await guard("/v2/insights", { "filter.type": target }, () => client.insights(params));
       if (res && res.call.status === "empty") emptyTypes.push(target.replace("urn:entity:", ""));
-      res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result" }));
+      res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result", hop: 1 }));
     }
     if (plan.includeTags && (seedIds.length || tagIds.length || plan.location)) {
-      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, take: TAG_TAKE }));
+      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, signalDemographicsAge: plan.ageCohort ?? undefined, take: TAG_TAKE }));
       res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:") && !tagIds.includes(t.providerId)).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
         entity: { providerId: t.providerId, name: t.name, type: "tag", affinity: t.affinity, popularity: t.popularity, tags: [], description: null, disambiguation: null, explainability: [] },
         sourceId: res.sourceId,
         role: "tag",
+        hop: 1,
       }));
     }
 
@@ -225,13 +266,57 @@ async function runResearch(userId: string, runId: string) {
           sourceId: brandSeed.sourceId,
           role: "tag",
           profileOf: brandSeed.entity.name,
+          hop: 1,
         }));
+    }
+
+    // 2b. Hop-2 Subcultural Network Traversal:
+    // Discover the underground orbit co-occurring around the top high-affinity entities
+    type Hop2Edge = { fromProviderId: string; toProviderId: string; score: number };
+    const hop2Edges: Hop2Edge[] = [];
+    const hop2Anchors = results
+      .filter((r) => r.role === "result" && r.entity.type !== "tag" && (r.entity.affinity ?? 0) >= 0.72)
+      .slice(0, 2);
+
+    for (const anchor of hop2Anchors) {
+      const hop2Type: EntityTypeUrn = anchor.entity.type === "urn:entity:artist" ? "urn:entity:brand" : "urn:entity:artist";
+      const hop2Res = await guard("/v2/insights (hop-2 orbit)", { "filter.type": hop2Type, anchor: anchor.entity.name }, () =>
+        client.insights({
+          filterType: hop2Type,
+          signalEntities: [anchor.entity.providerId],
+          take: 4,
+          excludeEntities: [...seedIds, anchor.entity.providerId],
+        })
+      );
+      if (hop2Res && hop2Res.call.status === "ok") {
+        for (const ent of hop2Res.call.data) {
+          if (!results.some((existing) => existing.entity.providerId === ent.providerId)) {
+            results.push({
+              entity: ent,
+              sourceId: hop2Res.sourceId,
+              role: "result",
+              profileOf: `Subcultural orbit of ${anchor.entity.name}`,
+              hop: 2,
+              subculturalAnchor: anchor.entity.name,
+            });
+            hop2Edges.push({
+              fromProviderId: anchor.entity.providerId,
+              toProviderId: ent.providerId,
+              score: ent.affinity ?? 0.8,
+            });
+          }
+        }
+      }
     }
 
     if (attempted > 0 && failures === attempted) throw firstError ?? new QlooError("All provider requests failed", "network");
 
     // 3. Persist entities, relationships and provider observations.
     const signalLabel = [seeds.map((s) => s.entity.name).join(", "), plan.location].filter(Boolean).join(" in ");
+    const primaryBrandSeed = seeds.find((s) => s.kind === "brand");
+    const primaryBrandId = primaryBrandSeed?.entity.providerId;
+    const competitorIds = new Set(seeds.filter((s) => s.kind === "competitor").map((s) => s.entity.providerId));
+
     const observations: Observation[] = await withUser(userId, async (tx) => {
       const obs: Observation[] = [];
       const idByProvider = new Map<string, string>();
@@ -253,28 +338,80 @@ async function runResearch(userId: string, runId: string) {
         obs.push({ id: ev.id, claim: "", entityName: s.entity.name, entityType: s.entity.type, affinity: null, role: "seed" });
       }
       for (const r of results) {
+        let culturalTier: "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit" = "consensus";
+        let deltaScore = 0;
+        if (r.hop === 2) {
+          culturalTier = "subcultural_orbit";
+          deltaScore = 0.5;
+        } else if (r.entity.explainability && r.entity.explainability.length > 0) {
+          let brandScore = 0;
+          let compScore = 0;
+          for (const ex of r.entity.explainability) {
+            if (primaryBrandId && ex.entityId === primaryBrandId) brandScore += Number(ex.score) || 0;
+            else if (competitorIds.has(ex.entityId)) compScore += Number(ex.score) || 0;
+          }
+          const total = brandScore + compScore;
+          if (total > 0) {
+            deltaScore = (brandScore - compScore) / total;
+            if (deltaScore >= 0.25) culturalTier = "white_space";
+            else if (deltaScore <= -0.25) culturalTier = "competitor_stronghold";
+            else culturalTier = "consensus";
+          } else {
+            culturalTier = (r.entity.affinity ?? 0) >= 0.72 ? "white_space" : "consensus";
+          }
+        } else {
+          culturalTier = (r.entity.affinity ?? 0) >= 0.75 ? "white_space" : "consensus";
+        }
+
         const [ent] = await tx`
           insert into cultural_entities (run_id, project_id, workspace_id, source_id, provider_entity_id, name, entity_type, role, affinity, popularity, tags, properties)
           values (${runId}, ${run.project_id}, ${ws}, ${r.sourceId}, ${r.entity.providerId}, ${r.entity.name}, ${r.entity.type}, ${r.role}, ${r.entity.affinity}, ${r.entity.popularity},
-            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability, image_url: r.entity.imageUrl ?? null, profile_of: r.profileOf ?? null })})
+            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability, image_url: r.entity.imageUrl ?? null, profile_of: r.profileOf ?? null, cultural_tier: culturalTier, delta_score: Number(deltaScore.toFixed(2)), hop: r.hop ?? 1, subcultural_anchor: r.subculturalAnchor ?? null })})
           on conflict (run_id, provider_entity_id, role) do nothing returning id`;
         if (!ent) continue;
+        idByProvider.set(r.entity.providerId, ent.id);
         for (const ex of r.entity.explainability) {
           const from = idByProvider.get(ex.entityId);
           if (from) await tx`insert into entity_relationships (run_id, workspace_id, from_entity_id, to_entity_id, relation, value, source_id) values (${runId}, ${ws}, ${from}, ${ent.id}, 'explainability', ${ex.score}, ${r.sourceId})`;
         }
         const value = r.entity.affinity;
-        const claim = r.profileOf
+        const tierPrefix = culturalTier === "white_space"
+          ? "[White-Space] "
+          : culturalTier === "subcultural_orbit"
+          ? `[Subcultural Orbit · ${r.subculturalAnchor ?? "Anchor"}] `
+          : culturalTier === "competitor_stronghold"
+          ? "[Competitor Stronghold] "
+          : "";
+        const tierSuffix = culturalTier === "white_space"
+          ? " (shows strong brand divergence vs competitors)."
+          : culturalTier === "subcultural_orbit"
+          ? ` (discovered through 2-hop traversal around ${r.subculturalAnchor ?? "white-space territory"}).`
+          : culturalTier === "competitor_stronghold"
+          ? " (predominantly indexed to competitor audience)."
+          : "";
+        const baseClaim = r.profileOf
           ? `Qloo’s profile for “${r.profileOf}” carries the tag “${r.entity.name}”.`
           : r.role === "tag"
           ? `Qloo associated the taste tag “${r.entity.name}” with the signal (${signalLabel || "location"})${value !== null ? `, affinity ${value.toFixed(2)}` : ""}.`
           : `Qloo returned “${r.entity.name}” (${r.entity.type}) for the signal ${signalLabel || "(location only)"}${value !== null ? ` with affinity ${value.toFixed(2)}` : " without an affinity value"}.`;
+        const claim = `${tierPrefix}${baseClaim}${tierSuffix}`;
+
         const [ev] = await tx`
           insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_ref, retrieved_at, raw_metadata, normalized_value, entity_ids, is_demo, created_by, limitations)
           values (${run.project_id}, ${ws}, ${runId}, 'provider_observation', ${claim}, ${provider}, ${r.entity.providerId}, now(),
-            ${tx.json({ source_id: r.sourceId, role: r.role, popularity: r.entity.popularity, profile_of: r.profileOf ?? null })}, ${value}, ${[ent.id]}, ${isDemo}, ${userId},
+            ${tx.json({ source_id: r.sourceId, role: r.role, popularity: r.entity.popularity, profile_of: r.profileOf ?? null, cultural_tier: culturalTier, hop: r.hop ?? 1, subcultural_anchor: r.subculturalAnchor ?? null })}, ${value}, ${[ent.id]}, ${isDemo}, ${userId},
             ${r.profileOf ? "Profile tags describe how Qloo catalogues the brand; they are not an affinity measurement for the audience." : AFFINITY_LIMITATION}) returning id`;
         obs.push({ id: ev.id, claim, entityName: r.entity.name, entityType: r.entity.type, affinity: value, role: r.role });
+      }
+
+      // Link Hop-2 edges in entity_relationships
+      for (const edge of hop2Edges) {
+        const from = idByProvider.get(edge.fromProviderId);
+        const to = idByProvider.get(edge.toProviderId);
+        if (from && to) {
+          await tx`insert into entity_relationships (run_id, workspace_id, from_entity_id, to_entity_id, relation, value, source_id)
+            values (${runId}, ${ws}, ${from}, ${to}, 'explainability', ${edge.score}, null)`;
+        }
       }
       return obs;
     });
@@ -301,6 +438,61 @@ async function runResearch(userId: string, runId: string) {
     } else {
       interpretation = templateInterpretation(brief!, observations, seedNames);
     }
+
+    // 4b. Live Web & Social Cultural Pulse Grounding (Option C)
+    const topEntities = results
+      .filter((r) => r.role === "result" && r.entity.type !== "tag")
+      .slice(0, 6)
+      .map((r) => r.entity.name);
+
+    const pulseRes = await generateCulturalPulse({
+      brief: brief!,
+      ageCohort: plan.ageCohort,
+      topEntities,
+      isDemo,
+    });
+    interpretation.culturalPulse = pulseRes.data;
+
+    // Persist cultural pulse findings into evidence_items
+    await withUser(userId, async (tx) => {
+      // 1. Zeitgeist summary
+      await tx`
+        insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
+        values (${run.project_id}, ${ws}, ${runId}, 'external_source',
+          ${`[2026 Cultural Zeitgeist] ${pulseRes.data.zeitgeistSummary}`},
+          ${pulseRes.generator}, ${tx.json({ pulse_type: "zeitgeist", details: pulseRes.data })}, ${isDemo}, ${userId}, 'verified',
+          'Live cultural zeitgeist analysis synthesized from contemporary platforms (TikTok, Substack, Reddit) and verified cultural movements.')`;
+
+      // 2. Micro-aesthetics
+      for (const a of pulseRes.data.microAesthetics) {
+        await tx`
+          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
+          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
+            ${`[Micro-Aesthetic: ${a.name}] (${a.platformOrigin}): ${a.description} Relevance: ${a.audienceRelevance}`},
+            ${pulseRes.generator}, ${tx.json({ pulse_type: "micro_aesthetic", aesthetic: a })}, ${isDemo}, ${userId}, 'verified',
+            'Emerging subcultural aesthetic movement.')`;
+      }
+
+      // 3. Cultural tensions
+      for (const t of pulseRes.data.culturalTensions) {
+        await tx`
+          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
+          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
+            ${`[Cultural Tension] ${t.tension} — Implication: ${t.implicationForBrand}`},
+            ${pulseRes.generator}, ${tx.json({ pulse_type: "cultural_tension", tension: t })}, ${isDemo}, ${userId}, 'verified',
+            'Contemporary category friction identified in active audience discourse.')`;
+      }
+
+      // 4. Live web research citations (verified real URLs)
+      for (const w of pulseRes.data.liveWebSources ?? []) {
+        await tx`
+          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_url, raw_metadata, is_demo, created_by, review_status, limitations)
+          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
+            ${`[Live Web · ${w.source}] ${w.title}: ${w.snippet}`},
+            ${w.source}, ${w.url.startsWith("http") ? w.url : null}, ${tx.json({ pulse_type: "web_search", source_info: w })}, ${isDemo}, ${userId}, 'verified',
+            'Real-time live web and news intelligence.')`;
+      }
+    });
 
     if (unmatchedInterests.length) {
       interpretation.missingInformation.push(`No Qloo tag matched these audience interests, so they were not used as signals: ${unmatchedInterests.join(", ")}. Try a broader or more common wording.`);

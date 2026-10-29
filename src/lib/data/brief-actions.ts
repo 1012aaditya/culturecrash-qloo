@@ -65,11 +65,18 @@ export async function saveBriefAction(projectId: string, baseRevision: number, f
   });
 }
 
+import { extractVisualAesthetics, isImageFile } from "@/lib/ai/vision";
+
 const ALLOWED = new Map([
   ["application/pdf", "pdf"],
   ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"],
   ["text/plain", "txt"],
   ["text/markdown", "md"],
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/jpg", "jpg"],
+  ["image/webp", "webp"],
+  ["image/gif", "gif"],
 ]);
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -81,8 +88,9 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
   if (!isUuid(projectId) || !(file instanceof File)) return { ok: false, error: "Choose a file to upload." };
   if (file.size === 0 || file.size > MAX_BYTES) return { ok: false, error: "Files must be between 1 byte and 10 MB." };
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const kind = ALLOWED.get(file.type) ?? (["pdf", "docx", "txt", "md"].includes(ext) ? ext : null);
-  if (!kind) return { ok: false, error: "Supported formats: PDF, DOCX, TXT and Markdown." };
+  const isImage = isImageFile(file.name, file.type);
+  const kind = ALLOWED.get(file.type) ?? (["pdf", "docx", "txt", "md", "png", "jpg", "jpeg", "webp", "gif"].includes(ext) ? ext : null);
+  if (!kind) return { ok: false, error: "Supported formats: PDF, DOCX, TXT, Markdown, and Moodboards/Images (PNG, JPG, WEBP, GIF)." };
   const ctx = await getCtx();
   try {
     assertCan(ctx.workspace.role, "brief.edit");
@@ -97,7 +105,9 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
   let extracted: string | null = null;
   let status: "extracted" | "unsupported" | "failed" = "unsupported";
   try {
-    if (kind === "pdf") {
+    if (isImage) {
+      extracted = await extractVisualAesthetics(bytes, file.name, file.type);
+    } else if (kind === "pdf") {
       const { extractText, getDocumentProxy } = await import("unpdf");
       const pdf = await getDocumentProxy(new Uint8Array(bytes));
       const { text: t } = await extractText(pdf, { mergePages: true });

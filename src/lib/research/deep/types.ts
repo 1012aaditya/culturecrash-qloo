@@ -15,7 +15,7 @@ export type ClaimType =
 export type Intent = "competitor" | "community" | "creator" | "culture" | "trend" | "brand_context" | "audience" | "counterevidence";
 
 export type ProviderKey =
-  | "brave" | "tavily" | "exa" | "youtube" | "reddit" | "wikipedia" | "brand_docs" | "demo_web"
+  | "brave" | "serper" | "tavily" | "exa" | "youtube" | "reddit" | "wikipedia" | "brand_docs" | "demo_web"
   | "google_trends" | "hacker_news";
 
 export type Capability = "web_search" | "video" | "community" | "encyclopedia" | "brand_context" | "trend_velocity";

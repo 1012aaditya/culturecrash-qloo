@@ -18,6 +18,7 @@ import { demoSearch } from "./providers/demo";
 import { googleTrendsSearch } from "./providers/google-trends";
 import { hackerNewsSearch } from "./providers/hacker-news";
 import { redditSearch } from "./providers/reddit";
+import { serperSearch } from "./providers/serper";
 import { wikipediaSearch } from "./providers/wikipedia";
 import { youtubeSearch } from "./providers/youtube";
 import { scoreClaim } from "./quality";
@@ -228,6 +229,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   async function callProvider(p: ProviderKey, query: string): Promise<ProviderCall<Hit[]>> {
     switch (p) {
       case "demo_web": return demoSearch(query);
+      case "serper": return serperSearch({ query, count: depth === "quick" ? 5 : 8, country, apiKey: e.SERPER_API_KEY!, usdPerCall: e.SERPER_USD_PER_REQUEST });
       case "brave": return braveSearch({ query, count: depth === "quick" ? 5 : 8, country, freshness, apiKey: e.BRAVE_API_KEY!, usdPerCall: e.BRAVE_USD_PER_REQUEST });
       case "tavily": return tavilySearch({ query, count: 8, apiKey: e.TAVILY_API_KEY!, usdPerCall: e.TAVILY_USD_PER_REQUEST });
       case "exa": return exaSearch({ query, count: 8, apiKey: e.EXA_API_KEY!, usdPerCall: e.EXA_USD_PER_REQUEST });
@@ -241,7 +243,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   }
 
   function estimateUsd(p: ProviderKey) {
-    return p === "brave" ? e.BRAVE_USD_PER_REQUEST : p === "tavily" ? e.TAVILY_USD_PER_REQUEST : p === "exa" ? e.EXA_USD_PER_REQUEST : 0;
+    return p === "serper" ? e.SERPER_USD_PER_REQUEST : p === "brave" ? e.BRAVE_USD_PER_REQUEST : p === "tavily" ? e.TAVILY_USD_PER_REQUEST : p === "exa" ? e.EXA_USD_PER_REQUEST : 0;
   }
 
   function rankForRetrieval(items: { h: Hit; q: ResearchQuestion }[], n: number) {

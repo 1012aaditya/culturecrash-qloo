@@ -25,6 +25,7 @@ const schema = z.object({
   ANTHROPIC_API_KEY: opt(z.string().min(8)),
   TAVILY_API_KEY: opt(z.string().min(8)),
   BRAVE_API_KEY: opt(z.string().min(8)),
+  SERPER_API_KEY: opt(z.string().min(8)),
   EXA_API_KEY: opt(z.string().min(8)),
   FIRECRAWL_API_KEY: opt(z.string().min(8)),
   YOUTUBE_API_KEY: opt(z.string().min(8)),
@@ -34,6 +35,7 @@ const schema = z.object({
   REDDIT_COMMERCIAL_ACCESS: opt(z.enum(["approved"])),
   // Estimated prices per request (USD) — providers rarely return actual charges. Check your plan.
   BRAVE_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
+  SERPER_USD_PER_REQUEST: z.coerce.number().min(0).default(0.001),
   TAVILY_USD_PER_REQUEST: z.coerce.number().min(0).default(0.008),
   EXA_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
   LLM_MODEL: z.string().default("claude-opus-5-5"),
@@ -89,6 +91,7 @@ export function integrationStatus() {
     webResearch: true,
     tavily: Boolean(e.TAVILY_API_KEY),
     brave: Boolean(e.BRAVE_API_KEY),
+    serper: Boolean(e.SERPER_API_KEY),
     exa: Boolean(e.EXA_API_KEY),
     firecrawl: Boolean(e.FIRECRAWL_API_KEY),
     youtube: Boolean(e.YOUTUBE_API_KEY),

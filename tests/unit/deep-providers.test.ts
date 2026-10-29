@@ -133,7 +133,7 @@ describe("Wikipedia, Tavily and Exa adapters", () => {
     expect(w.data[0]).toMatchObject({ url: "https://en.wikipedia.org/wiki/K-pop", sourceType: "encyclopedia", snippet: "Genre — South Korean popular music" });
     const t = await tavilySearch({ query: "q", apiKey: "k-12345678", usdPerCall: 0.008, fetcher: vi.fn(async () => json({ results: [{ title: "T", url: "https://t.test", content: "c", published_date: "2026-01-02" }] })) });
     expect(t.data[0]).toMatchObject({ provider: "tavily", publishedAt: "2026-01-02T00:00:00.000Z" });
-    const e = await exaSearch({ query: "q", apiKey: "k-12345678", usdPerCall: 0.005, fetcher: vi.fn(async () => json({ results: [{ id: "e1", title: "E", url: "https://e.test", text: "body" }] })) });
-    expect(e.data[0]).toMatchObject({ provider: "exa", externalId: "e1", publishedAt: null });
+    const e = await exaSearch({ query: "q", apiKey: "k-12345678", usdPerCall: 0.005, fetcher: vi.fn(async () => json({ results: [{ id: "e1", title: "E", url: "https://e.test", highlights: ["cultural highlight snippet"] }] })) });
+    expect(e.data[0]).toMatchObject({ provider: "exa", externalId: "e1", snippet: "cultural highlight snippet", publishedAt: null });
   });
 });

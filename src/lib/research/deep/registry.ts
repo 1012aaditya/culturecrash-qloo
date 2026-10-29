@@ -30,6 +30,11 @@ export function providerRegistry(opts: { demo?: boolean } = {}): ProviderInfo[] 
       costModel: `per request, estimated $${e.BRAVE_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Brave Search API terms; results cached privately per workspace.", verified: "contract_only",
     },
     {
+      key: "serper", label: "Google Search (Serper)", capability: "web_search", strengths: "Live Google Search organic web index, news, and brand websites",
+      configured: Boolean(e.SERPER_API_KEY), unavailableReason: e.SERPER_API_KEY ? null : "SERPER_API_KEY is not set",
+      costModel: `per request, estimated $${e.SERPER_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Serper.dev Google Search API terms.", verified: "live",
+    },
+    {
       key: "tavily", label: "Tavily", capability: "web_search", strengths: "Alternate web search when Brave is not configured",
       configured: Boolean(e.TAVILY_API_KEY), unavailableReason: e.TAVILY_API_KEY ? null : "TAVILY_API_KEY is not set",
       costModel: `per request, estimated $${e.TAVILY_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Tavily terms.", verified: "contract_only",
@@ -97,5 +102,5 @@ export const ROUTES: Record<Intent, Capability[]> = {
 /** The one web-search provider for a job: Brave, else Tavily, else Exa (or demo fixtures in demo runs). */
 export function pickWebSearch(providers: ProviderInfo[], demo: boolean): ProviderKey | null {
   if (demo) return "demo_web";
-  return (["brave", "tavily", "exa"] as const).find((k) => providers.find((p) => p.key === k)?.configured) ?? null;
+  return (["serper", "brave", "exa", "tavily"] as const).find((k) => providers.find((p) => p.key === k)?.configured) ?? null;
 }

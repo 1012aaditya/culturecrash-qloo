@@ -18,18 +18,41 @@ export async function tavilySearch(opts: { query: string; count?: number; apiKey
   });
 }
 
-/** Exa search — alternate web-search implementation (stronger on long-tail essays and blogs). */
+/** Exa search — canonical implementation following Exa's build-with-exa specification. */
 export async function exaSearch(opts: { query: string; count?: number; apiKey: string; usdPerCall: number; fetcher?: Fetcher }): Promise<ProviderCall<Hit[]>> {
   const params = { query: opts.query.slice(0, 400), numResults: String(Math.min(opts.count ?? 8, 10)) };
   return requestJson<Hit[]>({
     url: "https://api.exa.ai/search",
-    init: { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": opts.apiKey }, body: JSON.stringify({ query: params.query, numResults: Number(params.numResults), contents: { text: { maxCharacters: 1200 } } }) },
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": opts.apiKey },
+      body: JSON.stringify({
+        query: params.query,
+        type: "auto",
+        numResults: Number(params.numResults),
+        contents: { highlights: true },
+      }),
+    },
     params, fallback: [], usdPerCall: opts.usdPerCall, fetcher: opts.fetcher,
     parse: (b) => ((b as { results?: unknown[] })?.results ?? []).flatMap((r): Hit[] => {
       const o = r as Record<string, unknown>;
       const url = str(o.url), title = str(o.title);
       if (!url || !title) return [];
-      return [{ provider: "exa", sourceType: "web_page", url, externalId: str(o.id), title: decodeEntities(title), snippet: decodeEntities(str(o.text) ?? "").slice(0, 1500), publisher: str(o.author), publishedAt: isoOrNull(o.publishedDate), language: null, metrics: {}, usageRestrictions: null }];
+      const highlights = Array.isArray(o.highlights) ? (o.highlights as unknown[]).map((x) => str(x)).filter(Boolean) : [];
+      const snippet = highlights.length > 0 ? highlights.join(" … ") : str(o.text) ?? "";
+      return [{
+        provider: "exa",
+        sourceType: "web_page",
+        url,
+        externalId: str(o.id),
+        title: decodeEntities(title),
+        snippet: decodeEntities(snippet).slice(0, 1500),
+        publisher: str(o.author),
+        publishedAt: isoOrNull(o.publishedDate),
+        language: null,
+        metrics: {},
+        usageRestrictions: null,
+      }];
     }),
     empty: (d) => d.length === 0,
   });

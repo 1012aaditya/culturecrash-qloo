@@ -30,6 +30,7 @@ export async function loadBrief(tx: Tx, projectId: string): Promise<BriefRecord 
     objective: r.objective,
     existingPositioning: r.existing_positioning,
     competitors: r.competitors ?? [],
+    interests: r.interests ?? [],
     brandGuidelines: r.brand_guidelines,
     budgetRange: r.budget_range,
     timeframe: r.timeframe,
@@ -56,6 +57,7 @@ export function validateBrief(b: BriefInput): BriefIssue[] {
   if (!b.market) issues.push({ field: "market", severity: "important", why: "Without a market, no location signal is applied and results reflect a global taste graph." });
   if (!b.audience) issues.push({ field: "audience", severity: "important", why: "The audience frames interpretation and strategy. Without it, findings describe the brand’s signal rather than the people you want to reach." });
   if (!b.objective) issues.push({ field: "objective", severity: "important", why: "Strategies and experiments are assessed against the objective." });
+  if (!(b.interests ?? []).length) issues.push({ field: "interests", severity: "helpful", why: "Audience interests are matched to Qloo taste tags and sharpen results, especially when the brand itself isn’t in Qloo." });
   if (!b.competitors.length) issues.push({ field: "competitors", severity: "helpful", why: "Competitors add signal entities and let CultureCrash compare cultural associations." });
   if (!b.category) issues.push({ field: "category", severity: "helpful", why: "The category guides which cultural domains are queried." });
   if (!b.existingPositioning) issues.push({ field: "existingPositioning", severity: "helpful", why: "Existing positioning is the baseline for differentiation and experiments." });

@@ -98,6 +98,6 @@ export type CopilotAnswer = z.infer<typeof copilotAnswerSchema>;
 
 export const briefExtractionSchema = z.object({
   brand: z.string(), product: z.string(), category: z.string(), market: z.string(), audience: z.string(),
-  objective: z.string(), existingPositioning: z.string(), competitors: z.array(z.string()), timeframe: z.string(), budgetRange: z.string(),
+  objective: z.string(), existingPositioning: z.string(), competitors: z.array(z.string()), interests: z.array(z.string()), timeframe: z.string(), budgetRange: z.string(),
 });
 export type BriefExtraction = z.infer<typeof briefExtractionSchema>;

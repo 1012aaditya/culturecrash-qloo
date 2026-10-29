@@ -17,6 +17,8 @@ export type BriefInput = {
   objective: string | null;
   existingPositioning: string | null;
   competitors: string[];
+  /** Audience interests, resolved to Qloo tags at research time. */
+  interests?: string[];
   brandGuidelines: string | null;
   budgetRange: string | null;
   timeframe: string | null;
@@ -291,6 +293,7 @@ export function templateBriefExtraction(text: string): BriefExtraction {
     return "";
   };
   const competitors = grab("competitors?", "competition", "competitive set");
+  const interests = grab("interests?", "audience interests", "passions", "cultural interests");
   return {
     brand: grab("brand", "client brand"),
     product: grab("product", "product or service", "service", "offering"),
@@ -300,6 +303,7 @@ export function templateBriefExtraction(text: string): BriefExtraction {
     objective: grab("objective", "campaign objective", "goal", "business objective"),
     existingPositioning: grab("positioning", "existing positioning", "brand positioning"),
     competitors: competitors ? competitors.split(/[,;]| and /).map((s) => s.trim()).filter(Boolean).slice(0, 10) : [],
+    interests: interests ? interests.split(/[,;]| and /).map((s) => s.trim()).filter(Boolean).slice(0, 10) : [],
     timeframe: grab("timeframe", "timing", "timeline", "launch"),
     budgetRange: grab("budget", "budget range"),
   };

@@ -128,4 +128,20 @@ describe("QlooClient — live /v2/insights shapes", () => {
     expect(new URL((fetcher.mock.calls[0] as unknown as [string])[0]).searchParams.get("filter.tag.types")).toBe("urn:tag:lifestyle:qloo");
     expect(call.data[0]).toMatchObject({ name: "Self-Care Routine", type: "urn:tag:lifestyle:qloo", affinity: 0.97 });
   });
+
+  it("resolves interests through /v2/tags and sends them as signal.interests.tags", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(json(200, { success: true, results: { tags: [{ id: "urn:tag:keyword:qloo:skincare", name: "Skincare", type: "urn:tag:keyword:qloo" }] } }))
+      .mockResolvedValueOnce(json(200, { results: { entities: [] } }));
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", fetcher, noSleep);
+    const tags = await c.searchTags("skincare");
+    const u1 = new URL((fetcher.mock.calls[0] as unknown as [string])[0]);
+    expect(u1.pathname).toBe("/v2/tags");
+    expect(u1.searchParams.get("filter.query")).toBe("skincare");
+    expect(tags.data[0]).toMatchObject({ providerId: "urn:tag:keyword:qloo:skincare", name: "Skincare" });
+    await c.insights({ filterType: "urn:entity:brand", signalTags: [tags.data[0].providerId] });
+    const u2 = new URL((fetcher.mock.calls[1] as unknown as [string])[0]);
+    expect(u2.searchParams.get("signal.interests.tags")).toBe("urn:tag:keyword:qloo:skincare");
+    expect(u2.searchParams.has("signal.interests.entities")).toBe(false);
+  });
 });

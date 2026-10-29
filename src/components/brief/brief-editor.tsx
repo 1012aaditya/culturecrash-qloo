@@ -21,7 +21,7 @@ type SaveState = "idle" | "dirty" | "saving" | "saved" | "error" | "conflict";
 
 const LABELS: Record<string, string> = {
   brand: "Brand", product: "Product or service", category: "Product category", market: "Market & geography", audience: "Target audience",
-  objective: "Campaign objective", existingPositioning: "Existing positioning", competitors: "Competitors", timeframe: "Campaign timeframe", budgetRange: "Budget range",
+  objective: "Campaign objective", existingPositioning: "Existing positioning", competitors: "Competitors", interests: "Audience interests", timeframe: "Campaign timeframe", budgetRange: "Budget range",
 };
 
 function TagInput({ id, value, onChange, placeholder, disabled }: { id: string; value: string[]; onChange: (v: string[]) => void; placeholder: string; disabled?: boolean }) {
@@ -140,6 +140,7 @@ export function BriefEditor({
     if (!proposal) return;
     const v = proposal.data[key];
     if (key === "competitors") set("competitors", [...new Set([...(fields.competitors ?? []), ...(v as string[])])]);
+    else if (key === "interests") set("interests", [...new Set([...(fields.interests ?? []), ...(v as string[])])]);
     else set(key as keyof BriefFields, v as never);
   }
 
@@ -182,6 +183,7 @@ export function BriefEditor({
             <div className="mt-5 grid gap-5">
               <Field label="Existing positioning" htmlFor="existingPositioning"><Textarea id="existingPositioning" value={str("existingPositioning")} onChange={(e) => set("existingPositioning", e.target.value)} maxLength={2000} /></Field>
               <Field label="Competitors" htmlFor="competitors" hint="Press Enter or comma to add. Up to 3 are used as research signals."><TagInput id="competitors" value={fields.competitors ?? []} onChange={(v) => set("competitors", v)} placeholder="Add a competitor" disabled={disabled} /></Field>
+              <Field label="Audience interests" htmlFor="interests" hint="Passions and lifestyles, e.g. skincare, K-pop, street football. Up to 4 are matched to Qloo taste tags and used as research signals."><TagInput id="interests" value={fields.interests ?? []} onChange={(v) => set("interests", v)} placeholder="Add an interest" disabled={disabled} /></Field>
             </div>
           </section>
 

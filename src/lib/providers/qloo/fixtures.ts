@@ -43,6 +43,11 @@ export class DemoQlooClient {
     const type = p.filterType.replace("urn:entity:", "");
     return call("/v2/insights", { "filter.type": p.filterType }, (byType[type] ?? []).map((e) => ({ ...e, explainability: (p.signalEntities ?? []).slice(0, 2).map((id, i) => ({ entityId: id, score: Number(((e.affinity ?? 0.5) - i * 0.1).toFixed(2)) })) })));
   }
+  async searchTags(query: string, _take = 3): Promise<QlooCall<NormalizedTag[]>> {
+    void _take;
+    const slug = query.toLowerCase().replace(/\W+/g, "-");
+    return call("/v2/tags", { "filter.query": query }, [{ providerId: `demo-interest-${slug}`, name: query, type: "urn:tag:keyword", affinity: null, popularity: null }]);
+  }
   async tagInsights(_p: Omit<InsightsParams, "filterType">) {
     void _p;
     return call("/v2/insights", { "filter.type": "urn:tag" }, tags);

@@ -60,4 +60,10 @@ describe("research plan", () => {
   it("explains when there is no entity signal", () => {
     expect(buildPlan({ ...brief, brand: null, competitors: [] }).notes.join(" ")).toMatch(/location signal only/);
   });
+  it("keeps up to four distinct audience interests as tag queries", () => {
+    const plan = buildPlan({ ...brief, brand: null, competitors: [], interests: ["skincare", "K-pop", "skincare", " ", "yoga", "chess", "surf"] });
+    expect(plan.interestQueries).toEqual(["skincare", "K-pop", "yoga", "chess"]);
+    expect(plan.notes.join(" ")).toMatch(/audience interests and location/);
+    expect(plan.notes.join(" ")).toMatch(/first 4 audience interests/);
+  });
 });

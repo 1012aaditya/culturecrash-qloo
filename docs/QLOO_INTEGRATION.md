@@ -70,6 +70,19 @@ app queries.
   observations labelled "from Qloo's profile of <brand>". They describe how Qloo catalogues the brand,
   not audience affinity, and the evidence limitation says so.
 
+### Audience interests → `/v2/tags` (not yet verified live)
+The brief's "Audience interests" (up to 4) are resolved with `GET /v2/tags?filter.query=<interest>&take=3`. The
+top non-genre tag is stored as a signal (role `seed`, type `tag`) and sent to every insights call as
+`signal.interests.tags`. Interests with no matching tag are listed in the run's "missing information". The
+`filter.query` parameter name comes from Qloo's tag-search pattern and has **not** been confirmed against a live
+key. Check it once with:
+
+```bash
+curl -s -H "X-Api-Key: $QLOO_API_KEY" "https://hackathon.api.qloo.com/v2/tags?filter.query=skincare&take=3" | head -c 600
+```
+
+If the response doesn't contain `results.tags`, change `searchTags()` in `src/lib/providers/qloo/client.ts`.
+
 ## What the adapter assumes
 
 | Item | Value | Source |

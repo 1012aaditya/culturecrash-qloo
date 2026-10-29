@@ -10,6 +10,8 @@ type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export type InsightsParams = {
   filterType: EntityTypeUrn | "urn:tag" | "urn:demographics";
   signalEntities?: string[];
+  /** Tag ids from /v2/tags → signal.interests.tags. */
+  signalTags?: string[];
   signalLocationQuery?: string;
   /** Restrict urn:tag insights to these tag types (e.g. urn:tag:lifestyle:qloo). */
   filterTagTypes?: string[];
@@ -124,6 +126,16 @@ export class QlooClient {
     return this.call<NormalizedEntity[]>("/v2/insights", params, (b) => parseEntities(b), (d) => d.length === 0);
   }
 
+  /** /v2/tags — resolve free text (e.g. an audience interest) to Qloo tag ids. */
+  searchTags(query: string, take = 3) {
+    const params = { "filter.query": query.slice(0, 120), take: String(Math.max(1, Math.min(take, 20))) };
+    return this.call<NormalizedTag[]>("/v2/tags", params, (b) => {
+      const list = extractList(b, "tags");
+      if (list === null) throw new QlooError("Unexpected Qloo tags response shape", "invalid_response");
+      return list.map(normalizeTag).filter((t): t is NormalizedTag => Boolean(t));
+    }, (d) => d.length === 0);
+  }
+
   /** /v2/insights with filter.type=urn:tag — taste tags associated with the signal. */
   tagInsights(p: Omit<InsightsParams, "filterType">) {
     const params = insightParams({ ...p, filterType: "urn:tag" });
@@ -138,6 +150,7 @@ export class QlooClient {
 function insightParams(p: InsightsParams): Record<string, string> {
   const params: Record<string, string> = { "filter.type": p.filterType, take: String(Math.max(1, Math.min(p.take ?? 8, 50))) };
   if (p.signalEntities?.length) params["signal.interests.entities"] = p.signalEntities.join(",");
+  if (p.signalTags?.length) params["signal.interests.tags"] = p.signalTags.join(",");
   if (p.signalLocationQuery) params["signal.location.query"] = p.signalLocationQuery;
   if (p.filterLocationQuery) params["filter.location.query"] = p.filterLocationQuery;
   if (p.signalDemographicsAge) params["signal.demographics.age"] = p.signalDemographicsAge;

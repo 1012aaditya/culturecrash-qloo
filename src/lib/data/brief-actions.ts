@@ -18,6 +18,7 @@ const briefSchema = z.object({
   brand: text(160), product: text(400), category: text(120), market: text(160), audience: text(2000), objective: text(2000),
   existingPositioning: text(2000), brandGuidelines: text(6000), budgetRange: text(120), timeframe: text(160), additionalContext: text(8000),
   competitors: z.array(z.string().trim().min(1).max(160)).max(20),
+  interests: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   publicUrls: z.array(z.string().trim().url().max(500).refine((u) => /^https?:\/\//i.test(u), "Only http(s) URLs")).max(20),
 });
 export type BriefFields = z.input<typeof briefSchema>;
@@ -45,12 +46,12 @@ export async function saveBriefAction(projectId: string, baseRevision: number, f
     }
     const wasComplete = current ? BRIEF_CORE_FIELDS.every((f) => current[f]) : false;
     const [row] = await tx`
-      insert into campaign_briefs (project_id, workspace_id, brand, product, category, market, audience, objective, existing_positioning, competitors,
+      insert into campaign_briefs (project_id, workspace_id, brand, product, category, market, audience, objective, existing_positioning, competitors, interests,
         brand_guidelines, budget_range, timeframe, public_urls, additional_context, updated_by, revision)
-      values (${projectId}, ${ws}, ${d.brand}, ${d.product}, ${d.category}, ${d.market}, ${d.audience}, ${d.objective}, ${d.existingPositioning}, ${d.competitors},
+      values (${projectId}, ${ws}, ${d.brand}, ${d.product}, ${d.category}, ${d.market}, ${d.audience}, ${d.objective}, ${d.existingPositioning}, ${d.competitors}, ${d.interests},
         ${d.brandGuidelines}, ${d.budgetRange}, ${d.timeframe}, ${d.publicUrls}, ${d.additionalContext}, ${ctx.user.id}, 1)
       on conflict (project_id) do update set brand = excluded.brand, product = excluded.product, category = excluded.category, market = excluded.market,
-        audience = excluded.audience, objective = excluded.objective, existing_positioning = excluded.existing_positioning, competitors = excluded.competitors,
+        audience = excluded.audience, objective = excluded.objective, existing_positioning = excluded.existing_positioning, competitors = excluded.competitors, interests = excluded.interests,
         brand_guidelines = excluded.brand_guidelines, budget_range = excluded.budget_range, timeframe = excluded.timeframe, public_urls = excluded.public_urls,
         additional_context = excluded.additional_context, updated_by = excluded.updated_by, revision = campaign_briefs.revision + 1
       returning revision, updated_at`;

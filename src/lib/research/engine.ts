@@ -24,13 +24,16 @@ const MAX_PROFILE_TAGS = 8;
 export type ResearchPlan = {
   question: string;
   seedQueries: { query: string; kind: "brand" | "competitor" }[];
+  /** Audience interests resolved through /v2/tags (absent on plans made before this existed). */
+  interestQueries?: string[];
   location: string | null;
   targets: EntityTypeUrn[];
   includeTags: boolean;
   notes: string[];
 };
 
-type QlooLike = Pick<InstanceType<typeof DemoQlooClient>, "search" | "insights" | "tagInsights">;
+type QlooLike = Pick<InstanceType<typeof DemoQlooClient>, "search" | "searchTags" | "insights" | "tagInsights">;
+const MAX_INTERESTS = 4;
 
 export function buildPlan(b: BriefInput): ResearchPlan {
   const seeds: ResearchPlan["seedQueries"] = [];
@@ -42,13 +45,17 @@ export function buildPlan(b: BriefInput): ResearchPlan {
   if (/travel|hotel|tourism|hospitality/.test(cat)) targets.push("urn:entity:destination");
   if (/game|gaming|esport/.test(cat)) targets.push("urn:entity:video_game");
   if (/book|publish|education/.test(cat)) targets.push("urn:entity:book");
+  const interests = [...new Set((b.interests ?? []).map((i) => i.trim()).filter(Boolean))].slice(0, MAX_INTERESTS);
   const notes = [
-    "The audience description is used for interpretation only; Qloo signals are built from resolved entities and location.",
+    "The audience description is used for interpretation only; Qloo signals are built from resolved entities, audience interests (matched to Qloo tags) and location.",
   ];
-  if (!seeds.length) notes.push("No brand or competitors in the brief: research will use the location signal only.");
+  if (!seeds.length && !interests.length) notes.push("No brand, competitors or audience interests in the brief: research will use the location signal only.");
+  else if (!seeds.length) notes.push("No brand or competitors in the brief: research uses the audience interests and location as signals.");
+  if ((b.interests ?? []).length > MAX_INTERESTS) notes.push(`Only the first ${MAX_INTERESTS} audience interests are used as signals.`);
   return {
-    question: `Which cultural entities and taste tags co-occur with people connected to ${b.brand ?? b.name}${b.competitors.length ? ` and ${b.competitors.slice(0, 3).join(", ")}` : ""}${b.market ? ` in ${b.market}` : ""}?`,
+    question: `Which cultural entities and taste tags co-occur with people connected to ${b.brand ?? b.name}${b.competitors.length ? ` and ${b.competitors.slice(0, 3).join(", ")}` : ""}${interests.length ? `, or interested in ${interests.join(", ")},` : ""}${b.market ? ` in ${b.market}` : ""}?`,
     seedQueries: seeds,
+    interestQueries: interests,
     location: b.market,
     targets: [...new Set(targets)],
     includeTags: true,
@@ -123,6 +130,7 @@ async function runResearch(userId: string, runId: string) {
     let failures = 0;
     let hardFailures = 0; // network/timeout/5xx — a 403 on one entity type does not count
     const emptyTypes: string[] = [];
+    const unmatchedInterests: string[] = [];
     let firstError: QlooError | null = null;
     const record = async (call: Partial<QlooCall<unknown>> & { endpoint: string; params: Record<string, string> }) => withUser(userId, (tx) => recordSource(tx, runId, ws, provider, call));
     const guard = async <T,>(endpoint: string, params: Record<string, string>, fn: () => Promise<QlooCall<T>>): Promise<{ call: QlooCall<T>; sourceId: string } | null> => {
@@ -152,12 +160,25 @@ async function runResearch(userId: string, runId: string) {
       const top = res?.call.data[0];
       if (res && top) seeds.push({ entity: top, sourceId: res.sourceId, kind: s.kind, query: s.query });
     }
-    const seedIds = seeds.map((s) => s.entity.providerId);
-    if (!seedIds.length && !plan.location) {
+    for (const q of plan.interestQueries ?? []) {
+      const res = await guard("/v2/tags", { "filter.query": q }, () => client.searchTags(q, 3));
+      const top = res?.call.data.find((t) => !(t.type ?? "").startsWith("urn:tag:genre:")) ?? res?.call.data[0];
+      if (res && top) {
+        seeds.push({
+          entity: { providerId: top.providerId, name: top.name, type: "tag", affinity: null, popularity: top.popularity, tags: [], description: top.type ? `Qloo tag type: ${top.type}` : null, disambiguation: null, explainability: [] },
+          sourceId: res.sourceId, kind: "interest", query: q,
+        });
+      } else if (res) {
+        unmatchedInterests.push(q);
+      }
+    }
+    const seedIds = seeds.filter((s) => s.kind !== "interest").map((s) => s.entity.providerId);
+    const tagIds = seeds.filter((s) => s.kind === "interest").map((s) => s.entity.providerId);
+    if (!seedIds.length && !tagIds.length && !plan.location) {
       if (failures) throw firstError;
       await withUser(userId, async (tx) => {
         await tx`update research_runs set status = 'completed', completed_at = now(),
-          interpretation = ${tx.json({ summary: "No brand, competitor or market could be used as a research signal, so no provider query was made. Add a brand, competitors or a market to the brief and run research again.", findings: [], contradictions: [], missingInformation: ["A research signal (brand, competitors or market)."], followUpQuestions: [] })},
+          interpretation = ${tx.json({ summary: "No brand, competitor, audience interest or market could be used as a research signal, so no provider query was made. Add one to the brief and run research again.", findings: [], contradictions: [], missingInformation: ["A research signal (brand, competitors, audience interests or market)."], followUpQuestions: [] })},
           interpretation_generator = 'system' where id = ${runId}`;
         await setTask(tx, runId, "completed");
       });
@@ -172,20 +193,21 @@ async function runResearch(userId: string, runId: string) {
       const params = {
         filterType: target,
         signalEntities: seedIds,
+        signalTags: tagIds,
         signalLocationQuery: !isPlace ? plan.location ?? undefined : undefined,
         filterLocationQuery: isPlace ? plan.location ?? undefined : undefined,
         take: 8,
-        explainability: seedIds.length > 0,
+        explainability: seedIds.length + tagIds.length > 0,
         excludeEntities: seedIds,
       };
-      if (!seedIds.length && !isPlace && !params.signalLocationQuery) continue;
+      if (!seedIds.length && !tagIds.length && !isPlace && !params.signalLocationQuery) continue;
       const res = await guard("/v2/insights", { "filter.type": target }, () => client.insights(params));
       if (res && res.call.status === "empty") emptyTypes.push(target.replace("urn:entity:", ""));
       res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result" }));
     }
-    if (plan.includeTags && (seedIds.length || plan.location)) {
-      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalLocationQuery: plan.location ?? undefined, take: TAG_TAKE }));
-      res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:")).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
+    if (plan.includeTags && (seedIds.length || tagIds.length || plan.location)) {
+      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, take: TAG_TAKE }));
+      res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:") && !tagIds.includes(t.providerId)).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
         entity: { providerId: t.providerId, name: t.name, type: "tag", affinity: t.affinity, popularity: t.popularity, tags: [], description: null, disambiguation: null, explainability: [] },
         sourceId: res.sourceId,
         role: "tag",
@@ -221,9 +243,13 @@ async function runResearch(userId: string, runId: string) {
         idByProvider.set(s.entity.providerId, ent.id);
         const [ev] = await tx`
           insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_ref, retrieved_at, raw_metadata, entity_ids, is_demo, created_by, limitations)
-          values (${run.project_id}, ${ws}, ${runId}, 'provider_observation', ${`The brief’s ${s.kind} “${s.query}” was resolved to the provider entity “${s.entity.name}” (${s.entity.type}).`},
+          values (${run.project_id}, ${ws}, ${runId}, 'provider_observation', ${s.kind === "interest"
+              ? `The brief’s audience interest “${s.query}” was matched to the Qloo tag “${s.entity.name}” and used as a taste signal.`
+              : `The brief’s ${s.kind} “${s.query}” was resolved to the provider entity “${s.entity.name}” (${s.entity.type}).`},
             ${provider}, ${s.entity.providerId}, now(), ${tx.json({ source_id: s.sourceId, role: "seed" })}, ${[ent.id]}, ${isDemo}, ${userId},
-            'Entity resolution uses the provider’s top search match; check it refers to the intended brand.') returning id`;
+            ${s.kind === "interest"
+              ? "Interest matching uses the top /v2/tags result; check the tag reflects what the brief meant."
+              : "Entity resolution uses the provider’s top search match; check it refers to the intended brand."}) returning id`;
         obs.push({ id: ev.id, claim: "", entityName: s.entity.name, entityType: s.entity.type, affinity: null, role: "seed" });
       }
       for (const r of results) {
@@ -276,6 +302,9 @@ async function runResearch(userId: string, runId: string) {
       interpretation = templateInterpretation(brief!, observations, seedNames);
     }
 
+    if (unmatchedInterests.length) {
+      interpretation.missingInformation.push(`No Qloo tag matched these audience interests, so they were not used as signals: ${unmatchedInterests.join(", ")}. Try a broader or more common wording.`);
+    }
     if (emptyTypes.length) {
       interpretation.missingInformation.push(
         `Qloo returned no entities for: ${emptyTypes.join(", ")}. Qloo silently ignores parameters that are not valid for an entity type, so an empty result may reflect parameter support rather than an absence of cultural data.`,
@@ -319,7 +348,7 @@ function interpretationPrompt(b: BriefInput, obs: Observation[], plan: ResearchP
   const evidence = obs.map((o) => ({ id: o.id, role: o.role, entity: o.entityName, type: o.entityType, affinity: o.affinity }));
   return [
     "Interpret the cultural research below for the campaign brief. Findings of kind 'observation' must restate the data; 'interpretation' findings must be cautious and cite supporting evidence ids.",
-    tag("brief", JSON.stringify({ name: b.name, brand: b.brand, category: b.category, market: b.market, audience: b.audience, objective: b.objective, competitors: b.competitors })),
+    tag("brief", JSON.stringify({ name: b.name, brand: b.brand, category: b.category, market: b.market, audience: b.audience, objective: b.objective, competitors: b.competitors, interests: b.interests ?? [] })),
     tag("evidence", JSON.stringify({ question: plan.question, notes: plan.notes, observations: evidence })),
     "List contradictions only if the data contains them. List missing information that limits the conclusions (no public web research provider is configured).",
   ].join("\n\n");

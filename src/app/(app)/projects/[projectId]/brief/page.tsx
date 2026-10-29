@@ -38,7 +38,7 @@ export default async function BriefPage({ params, searchParams }: PageProps<"/pr
         initial={{
           brand: b.brand, product: b.product, category: b.category, market: b.market, audience: b.audience, objective: b.objective,
           existingPositioning: b.existingPositioning, brandGuidelines: b.brandGuidelines, budgetRange: b.budgetRange, timeframe: b.timeframe,
-          additionalContext: b.additionalContext, competitors: b.competitors, publicUrls: b.publicUrls,
+          additionalContext: b.additionalContext, competitors: b.competitors, interests: b.interests ?? [], publicUrls: b.publicUrls,
         }}
         documents={docs.map((d) => ({ id: d.id, fileName: d.file_name, size: d.size_bytes, status: d.extraction_status, stored: Boolean(d.storage_path), text: d.extracted_text, createdAt: new Date(d.created_at).toISOString() }))}
       />

@@ -1,3 +1,4 @@
+import { notifyResearchFinished } from "@/lib/email/notify";
 import { llmEnabled } from "@/lib/ai/enabled";
 import "server-only";
 import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
@@ -83,6 +84,14 @@ async function setTask(tx: Tx, runId: string, status: string, error?: string | n
  * Live runs never fall back to fixtures.
  */
 export async function executeRun(userId: string, runId: string) {
+  try {
+    await runResearch(userId, runId);
+  } finally {
+    await notifyResearchFinished(userId, runId).catch(() => undefined);
+  }
+}
+
+async function runResearch(userId: string, runId: string) {
   const run = await withUser(userId, async (tx) => {
     const [r] = await tx`update research_runs set status = 'running', started_at = now() where id = ${runId} and status = 'queued' returning *`;
     if (r) await setTask(tx, runId, "running");

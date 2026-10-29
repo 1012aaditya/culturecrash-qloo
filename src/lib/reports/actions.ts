@@ -2,9 +2,11 @@
 
 import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { withUser } from "@/lib/db";
 import { env } from "@/lib/env";
+import { notifyReportShared } from "@/lib/email/notify";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
@@ -89,6 +91,8 @@ export async function createShareLinkAction(reportVersionId: string, label: stri
     return true;
   });
   if (!ok) return { ok: false, error: "Report version not found." };
+  const sharer = ctx.profile.fullName || ctx.profile.email;
+  after(() => notifyReportShared(ctx.user.id, sharer, reportVersionId).catch(() => undefined));
   return { ok: true, data: { url: `${env().APP_BASE_URL}/reports/shared/${token}` } };
 }
 

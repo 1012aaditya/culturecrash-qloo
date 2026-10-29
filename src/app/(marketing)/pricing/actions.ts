@@ -2,7 +2,11 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { after } from "next/server";
 import { privilegedSql } from "@/lib/db";
+import { sendEmail } from "@/lib/email";
+import { pilotRequestEmail } from "@/lib/email/templates";
+import { env } from "@/lib/env";
 import { TEAM_SIZES } from "./team-sizes";
 
 export type PilotRequestState =
@@ -99,6 +103,12 @@ export async function requestPilotAction(_prev: PilotRequestState, form: FormDat
   } catch (error) {
     console.error("pilot request insert failed", error instanceof Error ? error.message : error);
     return { status: "error", message: "We couldn't save your request just now. Please try again in a moment.", values: raw, attempt: randomUUID() };
+  }
+
+  const notifyTo = env().PILOT_NOTIFY_EMAIL;
+  if (notifyTo) {
+    const msg = pilotRequestEmail({ to: notifyTo, name, email, company, teamSize: teamSize ?? null, message: message ?? null });
+    after(() => sendEmail(msg).then(() => undefined));
   }
 
   return {

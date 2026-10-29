@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CheckCircle2, CircleDashed, CircleSlash, Database, FlaskConical, Globe, KeyRound, Sparkles } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleSlash, Database, FlaskConical, Globe, KeyRound, Mail, Sparkles } from "lucide-react";
 import * as React from "react";
 import { IntegrationControls } from "@/components/settings/integration-controls";
 import { Badge } from "@/components/ui/badge";
@@ -133,6 +133,20 @@ export default async function IntegrationsPage() {
           details={[
             ["Status", "No web research provider is integrated in this build"],
             ["External sources", "added manually as evidence with URL and access date"],
+          ]}
+        />
+
+        <Card
+          className="lg:col-span-12"
+          icon={Mail}
+          title="Email delivery (Resend)"
+          state={s.email ? "configured" : "missing"}
+          envVars={["RESEND_API_KEY", "EMAIL_FROM", "PILOT_NOTIFY_EMAIL"]}
+          details={[
+            ["API key", masked(e.RESEND_API_KEY)],
+            ["Sender", e.EMAIL_FROM ?? "not configured"],
+            ["Sends", "team invitations; research finished and report shared (when the recipient opted in); weekly digest"],
+            ["Without a key", "nothing is emailed; invitations are recorded and the app says so"],
           ]}
         />
 

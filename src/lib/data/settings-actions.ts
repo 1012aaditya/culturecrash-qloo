@@ -3,12 +3,15 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { z } from "zod";
 import { localDeleteAccount, localSignIn, localUpdatePassword } from "@/lib/auth/local";
 import { getSessionUser } from "@/lib/auth/session";
 import { supabaseSignIn, supabaseUpdatePassword } from "@/lib/auth/supabase";
 import { privilegedSql, withUser } from "@/lib/db";
 import { env } from "@/lib/env";
+import { emailConfigured, sendEmail } from "@/lib/email";
+import { invitationEmail } from "@/lib/email/templates";
 import { assertCan, type Role } from "@/lib/permissions";
 import { logActivity } from "./activity";
 import { friendly, invalid, optText, type Result } from "./action-utils";
@@ -127,12 +130,19 @@ export async function inviteMemberAction(input: z.input<typeof inviteSchema>): P
     if (outcome === "already-member") return { ok: false, error: `${email} is already a member of this workspace.` };
     if (outcome === "already-invited") return { ok: false, error: `${email} already has a pending invitation.` };
     revalidatePath("/settings/team");
+    const mail = emailConfigured();
+    if (mail) {
+      const msg = invitationEmail({ to: email, workspace: ctx.workspace.name, inviter: ctx.profile.fullName || ctx.profile.email, role, added: outcome === "added" });
+      after(() => sendEmail(msg).then(() => undefined));
+    }
     return {
       ok: true,
       data: { outcome },
       message: outcome === "added"
-        ? `${email} already had a CultureCrash account and now has access as ${role}.`
-        : `Invitation recorded for ${email}. No email is sent from this build — share the sign-up link with them; they join as ${role} when they sign up with this address.`,
+        ? `${email} already had a CultureCrash account and now has access as ${role}.${mail ? " We emailed them." : ""}`
+        : mail
+          ? `Invitation emailed to ${email}. They join as ${role} when they sign up with this address.`
+          : `Invitation recorded for ${email}. Email isn’t configured on this server — share the sign-up link with them; they join as ${role} when they sign up with this address.`,
     };
   } catch (e) {
     return friendly(e);

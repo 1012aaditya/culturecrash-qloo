@@ -17,6 +17,10 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().min(8).optional(),
   LLM_MODEL: z.string().default("claude-opus-5-5"),
   CC_DEMO_MODE: z.enum(["enabled", "disabled"]).default("disabled"),
+  RESEND_API_KEY: z.string().min(8).optional(),
+  EMAIL_FROM: z.string().min(3).optional(),
+  PILOT_NOTIFY_EMAIL: z.string().email().optional(),
+  CRON_SECRET: z.string().min(16).optional(),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   VERCEL_ENV: z.string().optional(),
 });
@@ -60,6 +64,7 @@ export function integrationStatus() {
     llm: Boolean(e.ANTHROPIC_API_KEY),
     llmModel: e.LLM_MODEL,
     webResearch: false,
+    email: Boolean(e.RESEND_API_KEY && e.EMAIL_FROM),
     demoMode: demoModeAllowed(),
     storage: e.AUTH_MODE === "supabase" && Boolean(e.NEXT_PUBLIC_SUPABASE_URL),
   };

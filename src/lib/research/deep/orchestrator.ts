@@ -15,6 +15,8 @@ import { buildPlanV2, countryCode, llmPlanSchema, sanitizeLlmPlan } from "./plan
 import { exaSearch, tavilySearch } from "./providers/alt-web";
 import { braveSearch } from "./providers/brave";
 import { demoSearch } from "./providers/demo";
+import { googleTrendsSearch } from "./providers/google-trends";
+import { hackerNewsSearch } from "./providers/hacker-news";
 import { redditSearch } from "./providers/reddit";
 import { wikipediaSearch } from "./providers/wikipedia";
 import { youtubeSearch } from "./providers/youtube";
@@ -208,6 +210,13 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     await withUser(userId, async (tx) => {
       await ledger(tx, t.provider, "search", { ...call, count: call.data.length, questionKey: t.q.key, round });
       if (call.ok && info && info.cacheTtlHours > 0 && !isDemo) await cachePut(tx, ws, t.provider, key, call.data, info.cacheTtlHours);
+      if (call.ok && t.provider === "google_trends" && !isDemo) {
+        for (const hit of call.data.slice(0, 3)) {
+          const val = hit.metrics.search_interest ?? 100;
+          await tx`insert into trend_observations (workspace_id, project_id, run_id, topic, provider, metric, value, unit, geography, source_ref, method)
+            values (${ws}, ${projectId}, ${runId}, ${t.query.slice(0, 200)}, 'google_trends', 'search_momentum_index', ${val}, 'index', ${country ?? null}, ${hit.url ?? null}, 'google_suggest_velocity')`.catch(() => {});
+        }
+      }
     });
     if (!call.ok) {
       const msg = call.errorKind === "config" ? `${call.error} — check the API key or plan` : call.error ?? "failed";
@@ -225,6 +234,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       case "youtube": return youtubeSearch({ query, count: 5, regionCode: country, publishedAfter: freshness === "any" ? null : new Date(Date.now() - (freshness === "month" ? 31 : 366) * 86_400_000).toISOString(), apiKey: e.YOUTUBE_API_KEY! });
       case "reddit": return redditSearch({ query, count: 8, timeframe: freshness, clientId: e.REDDIT_CLIENT_ID!, clientSecret: e.REDDIT_CLIENT_SECRET! });
       case "wikipedia": return wikipediaSearch({ query, count: 3 });
+      case "google_trends": return googleTrendsSearch({ query, count: 4, country });
+      case "hacker_news": return hackerNewsSearch({ query, count: depth === "quick" ? 4 : 8 });
       default: return { ok: false, data: [], status: "error", httpStatus: null, durationMs: 0, error: `Unknown provider ${p}`, errorKind: "permanent", units: 0, costUsdEstimated: 0, costUsdActual: null, params: {}, raw: null, cached: false };
     }
   }

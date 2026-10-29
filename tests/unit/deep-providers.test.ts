@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { exaSearch, tavilySearch } from "@/lib/research/deep/providers/alt-web";
 import { braveSearch } from "@/lib/research/deep/providers/brave";
 import { classify, requestJson } from "@/lib/research/deep/providers/http";
+import { googleTrendsSearch } from "@/lib/research/deep/providers/google-trends";
+import { hackerNewsSearch } from "@/lib/research/deep/providers/hacker-news";
 import { redditSearch } from "@/lib/research/deep/providers/reddit";
 import { wikipediaSearch } from "@/lib/research/deep/providers/wikipedia";
 import { youtubeSearch } from "@/lib/research/deep/providers/youtube";
@@ -30,7 +32,7 @@ describe("provider HTTP helper", () => {
 describe("Brave adapter", () => {
   it("sends the key only in the header and normalises results without inventing fields", async () => {
     const fetcher = vi.fn(async () => json({ web: { results: [
-      { title: "Gen Z &amp; skincare", url: "https://news.test/a", description: "<strong>Short</strong> routines", page_age: "2026-09-01T00:00:00", profile: { name: "News Test" }, extra_snippets: ["more context"] },
+      { title: "Gen Z &amp; skincare", url: "https://news.test/a", description: "<strong>Short</strong> routines", page_age: "2026-09-01T00:00:00Z", profile: { name: "News Test" }, extra_snippets: ["more context"] },
       { title: "no url" },
     ] } }));
     const r = await braveSearch({ query: "gen z skincare", country: "IN", freshness: "year", apiKey: "secret-key", usdPerCall: 0.005, fetcher });
@@ -72,6 +74,56 @@ describe("Reddit adapter", () => {
     expect(String(fetcher.mock.calls[1][0])).toMatch(/^https:\/\/oauth\.reddit\.com\/search\?/);
     expect(r.data).toHaveLength(1);
     expect(r.data[0]).toMatchObject({ sourceType: "community_post", publisher: "r/x", metrics: { score: 40, comments: 12 } });
+  });
+});
+
+describe("Google Trends adapter", () => {
+  it("extracts search velocity index and rising queries without an API key", async () => {
+    const fetcher = vi.fn(async () => json([
+      "cottagecore",
+      ["cottagecore aesthetic", "cottagecore dress", "cottagecore decor"],
+      ["", "", ""],
+      [],
+      { "google:suggestrelevance": [1250, 1100, 950] }
+    ]));
+    const r = await googleTrendsSearch({ query: "cottagecore", country: "US", fetcher });
+    expect(r.ok).toBe(true);
+    expect(r.data.length).toBeGreaterThanOrEqual(2);
+    expect(r.data[0]).toMatchObject({
+      provider: "google_trends",
+      sourceType: "web_page",
+      publisher: "Google Trends",
+      metrics: { search_interest: 1250 },
+    });
+    expect(r.data[0].url).toContain("trends.google.com/trends/explore?q=cottagecore&geo=US");
+  });
+});
+
+describe("Hacker News adapter", () => {
+  it("extracts builder and tech community posts via open Algolia search API", async () => {
+    const fetcher = vi.fn(async () => json({
+      hits: [
+        {
+          title: "Show HN: Open Source Local LLM",
+          objectID: "12345",
+          url: "https://example.com/llm",
+          author: "builder",
+          points: 340,
+          num_comments: 88,
+          created_at: "2026-02-15T12:00:00Z"
+        }
+      ]
+    }));
+    const r = await hackerNewsSearch({ query: "local llm", fetcher });
+    expect(r.ok).toBe(true);
+    expect(r.data).toHaveLength(1);
+    expect(r.data[0]).toMatchObject({
+      provider: "hacker_news",
+      sourceType: "community_post",
+      title: "Show HN: Open Source Local LLM",
+      metrics: { score: 340, comments: 88 },
+      publisher: "Hacker News",
+    });
   });
 });
 

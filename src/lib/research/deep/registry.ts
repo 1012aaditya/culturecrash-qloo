@@ -58,6 +58,16 @@ export function providerRegistry(opts: { demo?: boolean } = {}): ProviderInfo[] 
       terms: "CC BY-SA 4.0 — attribution kept with excerpts.", verified: "contract_only",
     },
     {
+      key: "google_trends", label: "Google Trends & Search Velocity", capability: "trend_velocity", strengths: "Consumer search momentum, rising interest velocity, and breakout search queries",
+      configured: true, unavailableReason: null, costModel: "free (public search momentum signal)", cacheTtlHours: 12,
+      terms: "Public Google search momentum data; fair use.", verified: "live",
+    },
+    {
+      key: "hacker_news", label: "Hacker News (Algolia)", capability: "community", strengths: "Developer, AI, builder, and tech founder discussions and critical reception",
+      configured: true, unavailableReason: null, costModel: "free forever (open Algolia API)", cacheTtlHours: 6,
+      terms: "Hacker News Algolia Search API terms.", verified: "live",
+    },
+    {
       key: "brand_docs", label: "Client documents", capability: "brand_context", strengths: "Brief, brand guidelines and research uploaded to this campaign",
       configured: true, unavailableReason: null, costModel: "internal (no external cost)", cacheTtlHours: 0,
       terms: "Confidential; retrieval is restricted to this workspace and project.", verified: "live",
@@ -78,7 +88,7 @@ export const ROUTES: Record<Intent, Capability[]> = {
   community: ["community", "web_search"],
   creator: ["video", "web_search"],
   culture: ["web_search", "encyclopedia"],
-  trend: ["web_search", "community"],
+  trend: ["trend_velocity", "web_search", "community"],
   brand_context: ["brand_context"],
   audience: ["web_search", "community", "brand_context"],
   counterevidence: ["web_search", "community"],

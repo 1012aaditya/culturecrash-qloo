@@ -18,6 +18,8 @@ Code: `src/lib/research/deep/` (engine), `src/lib/research/jobs.ts` (job creatio
 | YouTube Data API v3 | Creator videos plus public view/like/comment counts | Contract only, not exercised live. Third-party transcripts are **not** fetched (`captions.download` requires the owner's authorisation). |
 | Reddit Data API (OAuth) | Community discussion | Contract only, not exercised live. Enabled only with OAuth credentials **and** `REDDIT_COMMERCIAL_ACCESS=approved`, because commercial use needs Reddit's approval. Unauthenticated `.json` scraping is deliberately not used. |
 | Wikipedia (MediaWiki REST) | Background and provenance | Contract only, not exercised live. No key; CC BY-SA attribution is kept. |
+| Google Trends | Search momentum & breakout query velocity | **Working, tested** (queries search momentum index, records to `trend_observations`). |
+| Hacker News (Algolia) | Tech, AI, and builder community sentiment | **Working, tested** (fair-use open API). |
 | Client documents | Brand context (keyword search over uploaded briefs and guidelines) | **Working, tested** (E2E scenario J, RLS tests). |
 | Page retrieval | Full text for the most relevant results | **Working, tested** with stubbed HTTP (robots.txt, SSRF guard, redirects, content types). Not exercised against the live web from the sandbox. |
 | Demo web fixtures | Fictional sources for demos and tests | Working; always labelled; never on production. |
@@ -145,9 +147,7 @@ extension can call them without duplicating research logic.
 
 ## Not built yet (next milestones)
 
-- Trend observations over time: the `trend_observations` table exists, but no provider writes to it
-  yet, and no "emerging" claims are made without a baseline. Google Trends API access must be confirmed
-  first.
+- Trend observations over time: the `trend_observations` table is now populated by the Google Trends & Search Velocity provider (`src/lib/research/deep/providers/google-trends.ts`), storing consumer momentum index scores and breakout queries.
 - Visual analysis across assets (image uploads use vision for brief extraction only).
 - Embedding-based retrieval for client documents (keyword search only today).
 - Saving report opportunities straight into the Opportunities board (the existing generator reads the

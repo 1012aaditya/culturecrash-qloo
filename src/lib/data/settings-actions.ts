@@ -395,3 +395,26 @@ export async function deleteWorkspaceAction(confirmName: string): Promise<Result
   (await cookies()).set(WORKSPACE_COOKIE, next.workspaceId, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
   redirect("/dashboard?workspace=deleted");
 }
+
+const limitsSchema = z.object({ budgetUsd: z.number().min(0).max(10_000), perUserDaily: z.number().int().min(1).max(200) });
+
+/** Owner-only: monthly research budget (estimated USD) and runs per person per day. */
+export async function updateResearchLimitsAction(input: z.input<typeof limitsSchema>): Promise<Result> {
+  const parsed = limitsSchema.safeParse(input);
+  if (!parsed.success) return invalid(parsed.error);
+  const ctx = await getCtx();
+  try {
+    assertCan(ctx.workspace.role, "workspace.delete");
+    const ws = ctx.workspace.workspaceId;
+    await withUser(ctx.user.id, async (tx) => {
+      const rows = await tx`update workspaces set research_budget_usd_monthly = ${parsed.data.budgetUsd}, research_runs_per_user_daily = ${parsed.data.perUserDaily} where id = ${ws} returning id`;
+      if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, verb: "configured", objectType: "workspace", objectId: ws,
+        summary: `set the research budget to $${parsed.data.budgetUsd}/month and ${parsed.data.perUserDaily} runs per person per day` });
+    });
+  } catch (e) {
+    return friendly(e);
+  }
+  revalidatePath("/settings/workspace");
+  return { ok: true };
+}

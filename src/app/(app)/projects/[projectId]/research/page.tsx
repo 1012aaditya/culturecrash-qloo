@@ -11,20 +11,24 @@ import { getProjectContext } from "@/lib/data/project-context";
 import { getResearchView } from "@/lib/data/research";
 import { firstName } from "@/lib/data/workspace";
 import { can } from "@/lib/permissions";
+import { providerRegistry } from "@/lib/research/deep/registry";
 import { buildPlan } from "@/lib/research/engine";
 
 export const metadata: Metadata = { title: "Cultural research" };
+// Research jobs run in after(): give them room to finish the bounded deep profile (≈ 270 s).
+export const maxDuration = 300;
 
 export default async function ResearchPage({ params, searchParams }: PageProps<"/projects/[projectId]/research">) {
   const { projectId } = await params;
   const sp = await searchParams;
   const { ctx, project, stages } = await getProjectContext(projectId);
   const view = await getResearchView(ctx, projectId, typeof sp.run === "string" ? sp.run : null);
-  const { brief, featured, oppCount } = await withUser(ctx.user.id, async (tx) => {
+  const { brief, featured, oppCount, webEnabled } = await withUser(ctx.user.id, async (tx) => {
     const [f] = await tx`select id, title, description, is_demo, generator, cardinality(evidence_ids) as n from opportunities
       where project_id = ${projectId} and status in ('saved','investigating','linked','new') order by (status = 'saved') desc, updated_at desc limit 1`;
     const [{ count }] = await tx`select count(*)::int from opportunities where project_id = ${projectId} and status <> 'dismissed'`;
-    return { brief: await loadBrief(tx, projectId), featured: f, oppCount: count as number };
+    const [web] = await tx`select enabled from integration_settings where workspace_id = ${ctx.workspace.workspaceId} and provider = 'web_research'`;
+    return { brief: await loadBrief(tx, projectId), featured: f, oppCount: count as number, webEnabled: web ? Boolean(web.enabled) : true };
   });
   const plan = buildPlan(brief!);
   const copilot = await loadConversation(projectId);
@@ -48,6 +52,9 @@ export default async function ResearchPage({ params, searchParams }: PageProps<"
       generatorLabel={view.run?.interpretationGenerator ? generatorLabel(view.run.interpretationGenerator) : null}
       copilot={copilot}
       user={{ name: firstName(ctx), workspace: ctx.workspace.name }}
+      deep={view.deep}
+      providers={providerRegistry({ demo: false }).map(({ key, label, capability, strengths, configured, unavailableReason, costModel, verified }) => ({ key, label, capability, strengths, configured, unavailableReason, costModel, verified }))}
+      webEnabled={webEnabled}
     />
   );
 }

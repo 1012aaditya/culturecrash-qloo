@@ -279,11 +279,13 @@ export async function getProfileSettings(ctx: Ctx) {
 export async function getWorkspaceSettings(ctx: Ctx) {
   const ws = ctx.workspace.workspaceId;
   return withUser(ctx.user.id, async (tx) => {
-    const [w] = await tx`select name, plan, is_demo, research_runs_daily_limit, data_retention_days, created_at from workspaces where id = ${ws}`;
+    const [w] = await tx`select name, plan, is_demo, research_runs_daily_limit, data_retention_days, created_at, research_budget_usd_monthly, research_runs_per_user_daily from workspaces where id = ${ws}`;
     const [{ today }] = await tx`select research_runs_today(${ws}) as today`;
+    const [{ spent }] = await tx`select research_spend_this_month(${ws}) as spent`;
     return {
       name: w.name as string, plan: w.plan as string, isDemo: w.is_demo as boolean, dailyLimit: w.research_runs_daily_limit as number,
       retentionDays: w.data_retention_days as number | null, createdAt: iso(w.created_at)!, runsToday: today as number,
+      budgetUsd: Number(w.research_budget_usd_monthly), perUserDaily: w.research_runs_per_user_daily as number, spentUsd: Number(spent),
     };
   });
 }

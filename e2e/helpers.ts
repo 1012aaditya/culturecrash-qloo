@@ -45,5 +45,8 @@ export async function fillBrief(page: Page) {
 export async function runDemoResearch(page: Page, projectId: string) {
   await page.goto(`/projects/${projectId}/research`);
   await page.getByRole("button", { name: /Demo run/ }).first().click();
+  // Demo runs are multi-source: the cited report opens first; the Qloo network is one click away.
+  await expect(page.getByRole("tab", { name: /sources/ })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: /Network view/ }).click();
   await expect(page.getByRole("button", { name: /affinity/ }).first()).toBeVisible({ timeout: 30_000 });
 }

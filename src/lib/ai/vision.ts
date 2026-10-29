@@ -27,15 +27,10 @@ export function normalizeImageMimeType(fileName: string, mimeType?: string): "im
  * Extracts visual aesthetics, subcultures, and audience taste tags from a moodboard
  * or creative asset image using Claude Vision.
  */
-export async function extractVisualAesthetics(bytes: Buffer, fileName: string, mimeType?: string): Promise<string> {
+/** Returns null when vision is unavailable or fails — never an error message posing as document text. */
+export async function extractVisualAesthetics(bytes: Buffer, fileName: string, mimeType?: string): Promise<string | null> {
   const e = env();
-  if (!e.ANTHROPIC_API_KEY) {
-    return [
-      `[Visual Moodboard: ${fileName}]`,
-      "No Anthropic API key is configured. Claude Vision could not run.",
-      "To extract cultural taste tags from visual assets, configure ANTHROPIC_API_KEY in your environment.",
-    ].join("\n\n");
-  }
+  if (!e.ANTHROPIC_API_KEY) return null;
 
   const client = new Anthropic({ apiKey: e.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 60_000 });
   const mediaType = normalizeImageMimeType(fileName, mimeType);
@@ -95,6 +90,7 @@ Be concise, sharp, and specific. Do not use generic filler.`;
     return textBlocks.join("\n\n").trim();
   } catch (err) {
     console.error("Claude Vision extraction error:", err);
-    return `[Visual Moodboard: ${fileName}]\nFailed to extract visual aesthetics via Vision model: ${err instanceof Error ? err.message : "Unknown error"}`;
+    console.error("vision extraction failed", err instanceof Error ? err.name : "unknown");
+    return null;
   }
 }

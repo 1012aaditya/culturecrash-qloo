@@ -25,7 +25,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/p
     const versions = await tx`select id, version, sections, snapshot, created_at, contains_demo_data from report_versions where report_id = ${reportId} order by version desc`;
     const links = await tx`select l.*, v.version, coalesce(p.full_name, p.email) as creator from shared_report_links l join report_versions v on v.id = l.report_version_id
       left join profiles p on p.id = l.created_by where v.report_id = ${reportId} order by l.created_at desc`;
-    const [latestRun] = await tx`select id from research_runs where project_id = ${projectId} and status = 'completed' order by created_at desc limit 1`;
+    const [latestRun] = await tx`select id from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
     return { r, versions, links, latestRunId: latestRun?.id ?? null };
   });
   if (!data) notFound();

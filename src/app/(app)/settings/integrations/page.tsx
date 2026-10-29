@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Surface } from "@/components/ui/surface";
 import { getCtx } from "@/lib/data/workspace";
 import { getIntegrationPrefs } from "@/lib/data/workspace-admin";
+import { providerRegistry } from "@/lib/research/deep/registry";
 import { env, integrationStatus, maskSecret } from "@/lib/env";
 import { can } from "@/lib/permissions";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -73,6 +74,7 @@ export default async function IntegrationsPage() {
   const s = integrationStatus();
   const e = env();
   const prefs = await getIntegrationPrefs(ctx);
+  const research = providerRegistry();
   const canManage = can(ctx.workspace.role, "integrations.manage");
   // Masked suffixes are diagnostics for admins only; full secrets never leave the server.
   const masked = (v: string | undefined) => (canManage ? maskSecret(v) ?? "—" : v ? "set (visible to admins)" : "—");
@@ -127,30 +129,14 @@ export default async function IntegrationsPage() {
         <Card
           className="lg:col-span-5"
           icon={Globe}
-          title="Multi-Source Cultural Intelligence"
-          state="configured"
-          envVars={["EXA_API_KEY", "YOUTUBE_API_KEY", "FIRECRAWL_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"]}
-          details={[
-            [
-              "Active engines",
-              [
-                s.exa ? "Exa.ai" : null,
-                s.youtube ? "YouTube" : null,
-                s.firecrawl ? "Firecrawl" : null,
-                s.tavily ? "Tavily" : s.brave ? "Brave" : null,
-                "Reddit (Free)",
-                "Wikipedia (Free)",
-                "Wikidata (Free)",
-                "News RSS (Free)",
-              ]
-                .filter(Boolean)
-                .join(" · "),
-            ],
-            ["Encyclopedic provenance", "Wikipedia + Wikidata Knowledge Graph (Zero-config)"],
-            ["Social & commentary", "Reddit consumer sentiment + YouTube cultural video essays"],
-            ["Audit trail", "Every article saved to evidence ledger with verified source URL"],
-          ]}
-        />
+          title="Web, video & community research"
+          state={research.some((p) => p.configured && p.key !== "wikipedia" && p.key !== "brand_docs") ? "configured" : "missing"}
+          envVars={["BRAVE_API_KEY", "YOUTUBE_API_KEY", "REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_COMMERCIAL_ACCESS"]}
+          details={research.filter((p) => p.key !== "brand_docs").map((p) => [p.label, p.configured ? `available · ${p.costModel}${p.verified === "contract_only" ? " · not yet verified live" : ""}` : (p.unavailableReason ?? "not configured")] as [string, string])}
+        >
+          <IntegrationControls provider="web_research" enabled={prefs.web_research.enabled} canManage={canManage} />
+          {changed(prefs.web_research)}
+        </Card>
 
         <Card
           className="lg:col-span-12"
@@ -195,7 +181,8 @@ export default async function IntegrationsPage() {
       </div>
       <p className="text-[12px] text-muted">
         Note: provider credentials come from the server configuration above. Turning Qloo off here blocks new live research runs in this workspace,
-        and the default location is used as the location signal when a brief has no market. Turning the LLM off makes every draft in this workspace
+        and the default location is used as the location signal when a brief has no market. Turning web research off keeps every research job to Qloo and
+        your own client documents — no brief details are sent to search, video or community providers. Turning the LLM off makes every draft in this workspace
         come from the labelled template engine, and no brief, evidence or document text is sent to the model provider.
       </p>
     </div>

@@ -81,7 +81,7 @@ export async function runCopilotTool(tx: Tx, projectId: string, name: string, ra
       };
     }
     case "get_entity": {
-      const [run] = await tx`select id from research_runs where project_id = ${projectId} and status = 'completed' order by created_at desc limit 1`;
+      const [run] = await tx`select id from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
       if (!run) return { result: { error: "No completed research run yet." }, evidenceIds: [] };
       const rows = await tx`
         select e.id, e.name, e.entity_type, e.role, e.affinity, e.popularity, e.tags, e.properties->>'description' as description,

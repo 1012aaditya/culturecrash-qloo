@@ -8,6 +8,7 @@ experiments and versioned client reports.
 - Product spec: `docs/MASTER_PROMPT.md` · visual reference: `docs/reference/culturecrash-research-canvas.webp`
 - Qloo verification status: **`docs/QLOO_INTEGRATION.md`** (key and endpoints verified live by the project owner)
 - Design system: `docs/DESIGN_SYSTEM.md`
+- Multi-source research engine (web, video, community, client documents, Qloo): **`docs/RESEARCH_ENGINE.md`**
 
 ## Stack
 
@@ -32,7 +33,9 @@ src/
   lib/auth           Supabase Auth (production) | local auth (dev/tests only, refused on Vercel prod)
   lib/data           data access + server actions per domain; permissions checked with assertCan()
   lib/providers/qloo adapter: client, normalisation, types, demo fixtures
-  lib/research       plan builder, background run engine (Next `after()`), start action
+  lib/research       jobs (limits, idempotency), Qloo stage (engine.ts), deep/ = multi-source research:
+                     planner, provider registry + adapters, page retrieval, dedupe, claims, quality,
+                     budget, cache, orchestrator, synthesis; REST API under app/api/research
   lib/ai             LLM adapter (Anthropic, schema-validated), prompts, template engine fallback
   lib/strategy       opportunities, directions (versioned), comparison, creative brief
   lib/experiments    experiments, variants, results
@@ -59,7 +62,13 @@ project. It then gives a schema-validated answer, citing only evidence ids a too
 made are shown under each answer. Any state-changing action it suggests is returned as a proposal that the
 user must click to run.
 
-**Research engine**: brief → plan (brand and up to 3 competitors resolved via `/search`, up to 4 audience
+**Research engine** (details in `docs/RESEARCH_ENGINE.md`): a job plans distinct research questions,
+routes each to the configured sources that can answer it (Brave web search, YouTube, Reddit via OAuth,
+Wikipedia, the client's own documents, and Qloo), retrieves full text for the most relevant pages,
+deduplicates syndicated copies, extracts cited claims, follows up on gaps, and stops on coverage,
+budget, time or diminishing returns. It then writes a report whose findings cite claims, with
+contradictions, hypotheses and limitations. Every call is in the cost ledger; partial results survive
+provider failures. The Qloo stage: brief → plan (brand and up to 3 competitors resolved via `/search`, up to 4 audience
 interests resolved to tags via `/v2/tags` and sent as `signal.interests.tags`, market as a location signal,
 entity types by category) → `/v2/insights` per type, plus taste tags → every request
 logged to `research_sources` → entities, relationships and `provider_observation` evidence →
@@ -132,7 +141,11 @@ policies because only the server writes to it.
 - **Scheduled jobs**: `vercel.json` registers two Vercel Cron jobs, `/api/cron/retention` (daily) and
   `/api/cron/weekly-digest` (Mondays). Set `CRON_SECRET`; Vercel sends it as a Bearer token and the route rejects
   anything else.
-- **Web research**: not implemented. The UI says so, and research is Qloo-only.
+- **Research sources**: `BRAVE_API_KEY` (primary web search; `TAVILY_API_KEY` / `EXA_API_KEY` as
+  alternates), `YOUTUBE_API_KEY`, `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` +
+  `REDDIT_COMMERCIAL_ACCESS=approved` (only once Reddit has approved commercial use). Wikipedia and
+  client documents need nothing. Check them with `npx tsx --env-file=.env.local scripts/research-smoke.ts`.
+  Workspaces can turn web research off in Settings → Integrations.
 - **Billing**: not configured. Plans are pilot-only and no payment flow exists.
 
 ## Deploy (Vercel)
@@ -148,7 +161,7 @@ runs. `npm run build` must pass; then apply migrations before the first deploy.
 npm run typecheck && npm run lint
 npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates, copilot loop
 TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–I against a running server (local auth + demo mode)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–J against a running server (local auth + demo mode)
 ```
 
 ## Status
@@ -162,7 +175,10 @@ See the final handoff in the pull request or session notes for full detail. Summ
   reachable from the build environment); the live Qloo API (network blocked — see above); the Anthropic
   LLM path (no key was provided).
 - **Implemented, untested against the real service**: Resend email delivery (no key in the build environment).
-- **Not implemented**: a public web research provider, payments, real-time collaboration.
+- **Implemented, not yet exercised live**: the Brave, YouTube, Reddit, Tavily, Exa and Wikipedia adapters
+  (no keys or network access in the build environment; see the status table in `docs/RESEARCH_ENGINE.md`).
+- **Not implemented**: trend time series, cross-asset visual analysis, embeddings, payments, real-time
+  co-editing.
 
 Presence: on any campaign page you see who else is there (avatars next to the breadcrumb), and a field a
 teammate is editing gets a coral outline with "<name> is editing". Each open page sends a heartbeat every

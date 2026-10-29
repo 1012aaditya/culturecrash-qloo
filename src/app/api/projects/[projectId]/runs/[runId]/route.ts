@@ -10,9 +10,13 @@ export async function GET(_: Request, { params }: RouteContext<"/api/projects/[p
   const { projectId, runId } = await params;
   if (!isUuid(projectId) || !isUuid(runId)) return NextResponse.json({ error: "not found" }, { status: 404 });
   const run = await withUser(user.id, async (tx) => {
-    const [r] = await tx`select r.id, r.status, r.mode, r.error_code, r.error_message, r.updated_at,
+    const [r] = await tx`select r.id, r.status, r.mode, r.depth, r.stage, r.error_code, r.error_message, r.updated_at, r.cancel_requested_at is not null as cancel_requested,
+      (r.usage->>'usdEstimated')::numeric as usd_estimated,
       (select count(*) from research_sources s where s.run_id = r.id)::int as calls,
-      (select count(*) from cultural_entities e where e.run_id = r.id)::int as entities
+      (select count(*) from research_sources s where s.run_id = r.id and s.status = 'error')::int as failed_calls,
+      (select count(*) from cultural_entities e where e.run_id = r.id)::int as entities,
+      (select count(*) from research_documents d where d.run_id = r.id and d.duplicate_of is null)::int as documents,
+      (select count(*) from evidence_items ev where ev.run_id = r.id and ev.claim_type in ('source_fact','source_opinion','observed_measurement'))::int as claims
       from research_runs r where r.id = ${runId} and r.project_id = ${projectId}`;
     return r;
   });

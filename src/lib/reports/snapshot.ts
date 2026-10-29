@@ -13,7 +13,7 @@ import { REPORT_SECTIONS, type ReportSectionKey, type ReportSnapshot } from "./t
  */
 export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportSectionKey[], title: string): Promise<ReportSnapshot> {
   const brief = (await loadBrief(tx, projectId))!;
-  const [run] = await tx`select * from research_runs where project_id = ${projectId} and status = 'completed' order by created_at desc limit 1`;
+  const [run] = await tx`select * from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
   const entities = run ? await tx`select name, entity_type, role, affinity, popularity from cultural_entities where run_id = ${run.id} and role <> 'seed' order by affinity desc nulls last` : [];
   const sources = run ? await tx`select endpoint, params, status, http_status, result_count, retrieved_at from research_sources where run_id = ${run.id} order by retrieved_at` : [];
   const evidence = await tx`select id, evidence_type, claim, source_provider, source_ref, source_url, retrieved_at, normalized_value, review_status, is_demo from evidence_items

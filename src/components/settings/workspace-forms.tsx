@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Select } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
-import { createWorkspaceAction, deleteWorkspaceAction, renameWorkspaceAction, updateRetentionAction } from "@/lib/data/settings-actions";
+import { createWorkspaceAction, deleteWorkspaceAction, renameWorkspaceAction, updateResearchLimitsAction, updateRetentionAction } from "@/lib/data/settings-actions";
 import { FormStatus } from "./form-status";
 
 export function RenameWorkspaceForm({ name, canManage }: { name: string; canManage: boolean }) {
@@ -141,5 +141,34 @@ export function DeleteWorkspace({ name, onlyWorkspace }: { name: string; onlyWor
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export function ResearchLimitsForm({ budgetUsd, perUserDaily, canManage }: { budgetUsd: number; perUserDaily: number; canManage: boolean }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [budget, setBudget] = React.useState(String(budgetUsd));
+  const [perUser, setPerUser] = React.useState(String(perUserDaily));
+  const [error, setError] = React.useState<string | null>(null);
+  const [pending, start] = React.useTransition();
+  return (
+    <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" onSubmit={(e) => {
+      e.preventDefault();
+      start(async () => {
+        const r = await updateResearchLimitsAction({ budgetUsd: Number(budget), perUserDaily: Number(perUser) });
+        if (!r.ok) return setError(r.error);
+        setError(null);
+        toast({ tone: "success", title: "Research limits updated" });
+        router.refresh();
+      });
+    }}>
+      <Field label="Monthly research budget (USD, estimated)" htmlFor="rb-budget" error={error}>
+        <Input id="rb-budget" type="number" min={0} max={10000} step="0.5" value={budget} onChange={(e) => setBudget(e.target.value)} disabled={!canManage} />
+      </Field>
+      <Field label="Research runs per person per day" htmlFor="rb-user">
+        <Input id="rb-user" type="number" min={1} max={200} value={perUser} onChange={(e) => setPerUser(e.target.value)} disabled={!canManage} />
+      </Field>
+      {canManage && <Button type="submit" variant="outline" disabled={pending} className="sm:mb-[22px]">{pending ? "Saving…" : "Save"}</Button>}
+    </form>
   );
 }

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ReadOnlyNote, SettingsSection } from "@/components/settings/section";
-import { CreateWorkspaceForm, DeleteWorkspace, RenameWorkspaceForm, RetentionForm } from "@/components/settings/workspace-forms";
+import { CreateWorkspaceForm, DeleteWorkspace, RenameWorkspaceForm, ResearchLimitsForm, RetentionForm } from "@/components/settings/workspace-forms";
 import { Badge } from "@/components/ui/badge";
 import { getCtx } from "@/lib/data/workspace";
 import { getWorkspaceSettings, PLAN_LIMITS } from "@/lib/data/workspace-admin";
@@ -44,6 +44,10 @@ export default async function WorkspaceSettingsPage() {
             <Link href="/help" className="text-ink underline underline-offset-2">Help &amp; feedback</Link>.
           </p>
         </div>
+      </SettingsSection>
+
+      <SettingsSection title="Research spend" description={<>Multi-source research stops before it would exceed the budget. Costs are <b>estimates</b> from configured per-request prices; providers rarely report actual charges. Spent this month: <b>${ws.spentUsd.toFixed(2)}</b> of ${ws.budgetUsd.toFixed(2)}.</>}>
+        <ResearchLimitsForm budgetUsd={ws.budgetUsd} perUserDaily={ws.perUserDaily} canManage={isOwner} />
       </SettingsSection>
 
       <SettingsSection title="Data retention" description="Owners can have older working data removed automatically. The cleanup runs once a day.">

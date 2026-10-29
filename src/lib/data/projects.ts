@@ -13,7 +13,7 @@ const summarySelect = (tx: Tx) => tx`
        from campaign_briefs b where b.project_id = p.id) as brief_filled,
     (select r.status from research_runs r where r.project_id = p.id order by r.created_at desc limit 1) as last_run_status,
     (select r.mode from research_runs r where r.project_id = p.id order by r.created_at desc limit 1) as last_run_mode,
-    exists (select 1 from research_runs r where r.project_id = p.id and r.status = 'completed') as has_completed_run,
+    exists (select 1 from research_runs r where r.project_id = p.id and r.status in ('completed', 'partially_completed')) as has_completed_run,
     (select count(*) from evidence_items e where e.project_id = p.id)::int as evidence_count,
     (select count(*) from opportunities o where o.project_id = p.id and o.status <> 'dismissed')::int as opportunity_count,
     (select count(*) from strategy_versions s where s.project_id = p.id)::int as strategy_count,

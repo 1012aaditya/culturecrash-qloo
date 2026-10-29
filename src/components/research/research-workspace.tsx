@@ -3,7 +3,7 @@
 import { Ago, When } from "@/components/ui/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ExternalLink, FlaskConical, History, Info, List, Loader2, Network, Play, RotateCw, Search, X } from "lucide-react";
+import { ArrowRight, ExternalLink, FileText, FlaskConical, History, Info, List, Loader2, Network, Play, RotateCw, Search, X } from "lucide-react";
 import * as React from "react";
 import { EntityImage } from "@/components/art/entity-image";
 import { ArtPlate, type PlateTheme } from "@/components/art/plate";
@@ -19,6 +19,9 @@ import { startResearchAction } from "@/lib/research/actions";
 import type { StageKey } from "@/lib/stages";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 import { CulturalNetwork, TYPE_LABEL, TYPE_THEME } from "./cultural-network";
+import { ResearchLauncher } from "./deep/research-launcher";
+import { ResearchProgress, ResearchReport } from "./deep/research-report";
+import type { DeepView, ProviderStatus } from "@/lib/research/deep/view-types";
 
 type Props = {
   project: { id: string; name: string; category: string | null; market: string | null; isDemo: boolean; description: string };
@@ -38,12 +41,15 @@ type Props = {
   llm: boolean;
   generatorLabel: string | null;
   copilot: { conversationId: string | null; messages: CopilotMessage[] };
+  deep: DeepView | null;
+  providers: ProviderStatus[];
+  webEnabled: boolean;
   user: { name: string; workspace: string };
 };
 
 function useRunWatcher(projectId: string, run: RunRow | null) {
   const router = useRouter();
-  const [live, setLive] = React.useState<{ status: string; calls: number } | null>(null);
+  const [live, setLive] = React.useState<{ status: string; calls: number; stage: string | null; documents: number; claims: number; failedCalls: number } | null>(null);
   React.useEffect(() => {
     if (!run || (run.status !== "queued" && run.status !== "running")) return;
     let stop = false;
@@ -52,8 +58,8 @@ function useRunWatcher(projectId: string, run: RunRow | null) {
         const res = await fetch(`/api/projects/${projectId}/runs/${run.id}`, { cache: "no-store" });
         if (res.ok) {
           const { run: r } = await res.json();
-          setLive({ status: r.status, calls: r.calls });
-          if (r.status === "completed" || r.status === "failed") {
+          setLive({ status: r.status, calls: r.calls, stage: r.stage, documents: r.documents, claims: r.claims, failedCalls: r.failed_calls });
+          if (!["queued", "running"].includes(r.status)) {
             router.refresh();
             return;
           }
@@ -74,7 +80,13 @@ export function ResearchWorkspace(p: Props) {
   const router = useRouter();
   const { toast } = useToast();
   const [selected, setSelected] = React.useState<string | null>(null);
-  const [view, setView] = React.useState<"network" | "list">("network");
+  const [view, setView] = React.useState<"report" | "network" | "list">(p.deep ? "report" : "network");
+  // Switching to a different run opens its report when it has one.
+  const [viewRun, setViewRun] = React.useState(p.run?.id ?? null);
+  if ((p.run?.id ?? null) !== viewRun) {
+    setViewRun(p.run?.id ?? null);
+    setView(p.deep ? "report" : "network");
+  }
   const [types, setTypes] = React.useState<Set<string>>(new Set());
   const [tierFilter, setTierFilter] = React.useState<"all" | "white_space" | "subcultural_orbit" | "consensus" | "competitor_stronghold">("all");
   const [query, setQuery] = React.useState("");
@@ -92,7 +104,8 @@ export function ResearchWorkspace(p: Props) {
     if (starting) return;
     keyRef.current[mode] ??= crypto.randomUUID();
     setStarting(mode);
-    const res = await startResearchAction({ projectId: p.project.id, mode, idempotencyKey: keyRef.current[mode] });
+    // Demo runs and retries use the multi-source pipeline (Qloo + web + documents) at the previous or standard depth.
+    const res = await startResearchAction({ projectId: p.project.id, mode, idempotencyKey: keyRef.current[mode], depth: p.run?.depth ?? "standard", question: p.deep?.question ?? null });
     setStarting(null);
     delete keyRef.current[mode];
     if (!res.ok) return toast({ tone: "error", title: "Research not started", description: res.error });
@@ -109,15 +122,21 @@ export function ResearchWorkspace(p: Props) {
 
   const runControls = p.canRun && (
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" onClick={() => start("live")} disabled={!!starting || runActive || !p.qlooConfigured} title={!p.qlooConfigured ? "Qloo is not configured on this server" : undefined}>
-        {starting === "live" ? <Loader2 className="animate-spin" /> : p.run ? <RotateCw /> : <Play />} {p.run ? "Run again" : "Start research"}
-      </Button>
+      <ResearchLauncher projectId={p.project.id} providers={p.providers} qlooConfigured={p.qlooConfigured} webEnabled={p.webEnabled} disabled={!!starting || runActive} label={p.run ? "Run again" : "Start research"} />
       {p.demoAllowed && (
         <Button size="sm" variant="outline" onClick={() => start("demo")} disabled={!!starting || runActive}>
           {starting === "demo" ? <Loader2 className="animate-spin" /> : <FlaskConical />} Demo run
         </Button>
       )}
     </div>
+  );
+
+  const failedNotice = p.run && (
+    <ErrorNotice className="max-w-lg bg-paper" title="This research run failed" body={<><p>{p.run.errorMessage}</p><p className="mt-2">No fixture data was substituted. {p.run.failedCalls > 0 && `${p.run.failedCalls} provider request(s) failed — see the run history for details.`}</p></>}>
+      {p.canRun && <Button size="sm" onClick={() => start("live")} disabled={!!starting || (!p.run.depth && !p.qlooConfigured)}><RotateCw /> Retry live research</Button>}
+      {p.canRun && p.demoAllowed && <Button size="sm" variant="outline" onClick={() => start("demo")} disabled={!!starting}><FlaskConical /> Run a separate demonstration</Button>}
+      <Button size="sm" variant="ghost" asChild><Link href={`/projects/${p.project.id}/research/history`}>Run history</Link></Button>
+    </ErrorNotice>
   );
 
   return (
@@ -152,6 +171,7 @@ export function ResearchWorkspace(p: Props) {
           </div>
           <div className="flex flex-col items-start gap-2 lg:items-end">
             <div className="flex rounded-full border border-line bg-white/80 p-1" role="group" aria-label="Canvas view">
+              {p.deep && <button onClick={() => setView("report")} aria-pressed={view === "report"} className={cn("flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px]", view === "report" ? "bg-violet text-white" : "text-muted hover:text-ink")}><FileText className="size-3.5" /> Report</button>}
               <button onClick={() => setView("network")} aria-pressed={view === "network"} className={cn("flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px]", view === "network" ? "bg-violet text-white" : "text-muted hover:text-ink")}><Network className="size-3.5" /> Network view</button>
               <button onClick={() => setView("list")} aria-pressed={view === "list"} className={cn("flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px]", view === "list" ? "bg-violet text-white" : "text-muted hover:text-ink")}><List className="size-3.5" /> List view</button>
             </div>
@@ -166,7 +186,7 @@ export function ResearchWorkspace(p: Props) {
           </div>
         </div>
 
-        {observations.length > 0 && (
+        {observations.length > 0 && view !== "report" && (
           <div className="relative z-10 flex flex-wrap items-center gap-2 px-6 md:px-8">
             <label className="flex h-9 items-center gap-2 rounded-full border border-line bg-white/85 px-3">
               <Search className="size-3.5 text-muted" />
@@ -225,6 +245,16 @@ export function ResearchWorkspace(p: Props) {
           </div>
         )}
 
+        {view === "report" && p.deep && p.run ? (
+          <div className="relative z-10 space-y-4 px-4 pb-6 sm:px-6 md:px-8">
+            {p.run.status === "failed" && failedNotice}
+            {runActive ? (
+              <ResearchProgress projectId={p.project.id} runId={p.run.id} stage={live?.stage ?? p.deep.stage} live={live} cancelRequested={p.deep.cancelRequested} canCancel={p.canRun} />
+            ) : (
+              <ResearchReport deep={p.deep} isDemo={isDemoRun} />
+            )}
+          </div>
+        ) : (
         <div className="relative h-[620px] shrink-0">
           {!p.run ? (
             <div className="flex h-full items-center justify-center p-8">
@@ -244,13 +274,7 @@ export function ResearchWorkspace(p: Props) {
               </div>
             </div>
           ) : p.run.status === "failed" ? (
-            <div className="flex h-full items-center justify-center p-8">
-              <ErrorNotice className="max-w-lg bg-paper" title="This research run failed" body={<><p>{p.run.errorMessage}</p><p className="mt-2">No fixture data was substituted. {p.run.failedCalls > 0 && `${p.run.failedCalls} provider request(s) failed — see the run history for details.`}</p></>}>
-                {p.canRun && <Button size="sm" onClick={() => start("live")} disabled={!!starting || !p.qlooConfigured}><RotateCw /> Retry live research</Button>}
-                {p.canRun && p.demoAllowed && <Button size="sm" variant="outline" onClick={() => start("demo")} disabled={!!starting}><FlaskConical /> Run a separate demonstration</Button>}
-                <Button size="sm" variant="ghost" asChild><Link href={`/projects/${p.project.id}/research/history`}>Run history</Link></Button>
-              </ErrorNotice>
-            </div>
+            <div className="flex h-full items-center justify-center p-8">{failedNotice}</div>
           ) : runActive ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center" role="status">
               <div className="relative size-40">
@@ -331,8 +355,9 @@ export function ResearchWorkspace(p: Props) {
             </div>
           )}
         </div>
+        )}
 
-        {p.run?.status === "completed" && (
+        {(p.run?.status === "completed" || p.run?.status === "partially_completed") && view !== "report" && (
           <dl className="relative z-10 grid grid-cols-3 gap-4 border-t border-line/70 px-6 py-5 md:px-8 lg:max-w-2xl lg:border-0">
             <div className="border-r border-line pr-4"><dd className="text-3xl font-light tracking-tight">{observations.filter((e) => e.role === "result").length}</dd><dt className="text-[12px] text-muted">Cultural entities</dt></div>
             <div className="border-r border-line pr-4"><dd className="text-3xl font-light tracking-tight">{observations.filter((e) => e.role === "tag").length}</dd><dt className="text-[12px] text-muted">Taste tags</dt></div>
@@ -362,8 +387,8 @@ export function ResearchWorkspace(p: Props) {
             ) : (
               <div className="rounded-[28px] border border-dashed border-line-strong bg-paper/60 p-5 text-[13px] text-muted">
                 <p className="cc-eyebrow text-[10px]">Opportunity</p>
-                <p className="mt-2">{p.run?.status === "completed" ? "Turn this research into opportunity hypotheses." : "Opportunities appear once research is complete."}</p>
-                {p.run?.status === "completed" && <Button asChild size="sm" variant="soft" className="mt-3"><Link href={`/projects/${p.project.id}/opportunities?generate=1`}>Generate opportunities</Link></Button>}
+                <p className="mt-2">{p.run?.status === "completed" || p.run?.status === "partially_completed" ? "Turn this research into opportunity hypotheses." : "Opportunities appear once research is complete."}</p>
+                {(p.run?.status === "completed" || p.run?.status === "partially_completed") && <Button asChild size="sm" variant="soft" className="mt-3"><Link href={`/projects/${p.project.id}/opportunities?generate=1`}>Generate opportunities</Link></Button>}
               </div>
             )}
             <RunOverview run={p.run} entities={p.entities} projectId={p.project.id} generatorLabel={p.generatorLabel} onSelect={setSelected} theme={p.theme} />
@@ -376,7 +401,7 @@ export function ResearchWorkspace(p: Props) {
 }
 
 function RunOverview({ run, entities, projectId, generatorLabel, onSelect, theme }: { run: RunRow | null; entities: EntityRow[]; projectId: string; generatorLabel: string | null; onSelect: (id: string) => void; theme: PlateTheme }) {
-  if (!run || run.status !== "completed") return null;
+  if (!run || (run.status !== "completed" && run.status !== "partially_completed")) return null;
   const it = run.interpretation;
   const top = entities.filter((e) => e.role === "result").sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0)).slice(0, 3);
   return (
@@ -415,14 +440,12 @@ function RunOverview({ run, entities, projectId, generatorLabel, onSelect, theme
       </section>
 
       {it?.culturalPulse && (
-        <section className="rounded-[28px] border border-cyan-500/30 bg-gradient-to-br from-cyan-950/5 via-paper to-violet/5 p-5 shadow-card">
+        <section className="rounded-[28px] border border-line bg-paper p-5 shadow-card">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="flex size-6 items-center justify-center rounded-full bg-cyan-600 text-[12px] text-white">⚡</span>
-              <h2 className="text-[14px] font-semibold text-ink">Live Cultural Pulse (2026)</h2>
-            </div>
-            <Badge tone="glass">Real-Time Zeitgeist</Badge>
+            <h2 className="text-[14px] font-semibold text-ink">Cultural pulse (earlier AI summary)</h2>
+            <Badge tone="outline">AI interpretation</Badge>
           </div>
+          <p className="mt-1 text-[11px] text-muted">Generated by an earlier version without source verification. Newer runs show a cited research report instead.</p>
           <p className="mt-2 text-[12px] leading-relaxed text-ink/90 font-medium">
             {it.culturalPulse.zeitgeistSummary}
           </p>

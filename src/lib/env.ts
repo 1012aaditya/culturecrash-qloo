@@ -19,18 +19,31 @@ const schema = z.object({
   SESSION_SECRET: opt(z.string().min(32)),
   QLOO_API_KEY: opt(z.string().min(8)),
   QLOO_API_URL: z.string().url().default("https://hackathon.api.qloo.com"),
+  // signal.demographics.age is only sent when enabled: its accepted values are not yet verified
+  // against Qloo's docs, and an invalid value could fail every insights call.
+  QLOO_AGE_SIGNAL: opt(z.enum(["enabled"])),
   ANTHROPIC_API_KEY: opt(z.string().min(8)),
   TAVILY_API_KEY: opt(z.string().min(8)),
   BRAVE_API_KEY: opt(z.string().min(8)),
   EXA_API_KEY: opt(z.string().min(8)),
   FIRECRAWL_API_KEY: opt(z.string().min(8)),
   YOUTUBE_API_KEY: opt(z.string().min(8)),
+  REDDIT_CLIENT_ID: opt(z.string().min(8)),
+  REDDIT_CLIENT_SECRET: opt(z.string().min(8)),
+  // Reddit requires approval for commercial use of its Data API; set to "approved" only once granted.
+  REDDIT_COMMERCIAL_ACCESS: opt(z.enum(["approved"])),
+  // Estimated prices per request (USD) — providers rarely return actual charges. Check your plan.
+  BRAVE_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
+  TAVILY_USD_PER_REQUEST: z.coerce.number().min(0).default(0.008),
+  EXA_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
   LLM_MODEL: z.string().default("claude-opus-5-5"),
+  // Smaller model for planning and claim extraction; the main model writes the synthesis.
+  LLM_MODEL_FAST: z.string().default("claude-haiku-5-5"),
   CC_DEMO_MODE: z.enum(["enabled", "disabled"]).default("disabled"),
   RESEND_API_KEY: opt(z.string().min(8)),
   EMAIL_FROM: opt(z.string().min(3)),
   PILOT_NOTIFY_EMAIL: opt(z.string().email()),
-  CRON_SECRET: opt(z.string().min(8)),
+  CRON_SECRET: opt(z.string().min(16)),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   VERCEL_ENV: opt(z.string()),
 });

@@ -10,7 +10,7 @@ export async function runWeeklyDigest() {
   const rows = await sql`
     select p.id as user_id, p.email, w.name as workspace,
       (select count(*)::int from activity_events a where a.workspace_id = w.id and a.created_at > now() - interval '7 days') as activity,
-      (select count(*)::int from research_runs r where r.workspace_id = w.id and r.status = 'completed' and r.completed_at > now() - interval '7 days') as runs,
+      (select count(*)::int from research_runs r where r.workspace_id = w.id and r.status in ('completed', 'partially_completed') and r.completed_at > now() - interval '7 days') as runs,
       (select count(*)::int from report_versions v join reports rp on rp.id = v.report_id where rp.workspace_id = w.id and v.created_at > now() - interval '7 days') as reports,
       (select count(*)::int from background_tasks t where t.workspace_id = w.id and t.status in ('queued','running','awaiting_review')) as open_tasks
     from profiles p

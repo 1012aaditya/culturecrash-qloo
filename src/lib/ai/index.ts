@@ -37,24 +37,25 @@ Rules you must always follow:
 - Write concise, professional British English suitable for a client-facing agency deliverable.`;
 
 /** Generates schema-validated JSON with the configured LLM. Throws LLMError; never persists unvalidated output. */
-export async function generateStructured<S extends z.ZodType>(opts: { schema: S; prompt: string; maxTokens?: number }): Promise<{ data: z.infer<S>; generator: string }> {
+export async function generateStructured<S extends z.ZodType>(opts: { schema: S; prompt: string; maxTokens?: number; model?: string; effort?: "low" | "medium" | "high" }): Promise<{ data: z.infer<S>; generator: string; usage: { tokensIn: number; tokensOut: number; model: string } }> {
   const e = env();
   if (!e.ANTHROPIC_API_KEY) throw new LLMError("No LLM provider is configured", "api");
   const client = new Anthropic({ apiKey: e.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 120_000 });
   try {
     const response = await client.messages.parse({
-      model: e.LLM_MODEL,
+      model: opts.model ?? e.LLM_MODEL,
       max_tokens: opts.maxTokens ?? 16000,
       system: SYSTEM_RULES,
       thinking: { type: "adaptive" },
-      output_config: { effort: "medium", format: zodOutputFormat(opts.schema) },
+      output_config: { effort: opts.effort ?? "medium", format: zodOutputFormat(opts.schema) },
       messages: [{ role: "user", content: opts.prompt }],
     });
     if (response.stop_reason === "refusal") throw new LLMError("The model declined this request", "refusal");
     if (!response.parsed_output) throw new LLMError("The model returned output that did not match the expected structure", "invalid_output");
     const validated = opts.schema.safeParse(response.parsed_output);
     if (!validated.success) throw new LLMError("The model output failed validation", "invalid_output");
-    return { data: validated.data, generator: `llm:${e.LLM_MODEL}` };
+    const model = opts.model ?? e.LLM_MODEL;
+    return { data: validated.data, generator: `llm:${model}`, usage: { tokensIn: response.usage.input_tokens, tokensOut: response.usage.output_tokens, model } };
   } catch (err) {
     if (err instanceof LLMError) throw err;
     if (err instanceof Anthropic.RateLimitError) throw new LLMError("The LLM provider is rate limiting requests. Try again shortly.", "rate_limited");

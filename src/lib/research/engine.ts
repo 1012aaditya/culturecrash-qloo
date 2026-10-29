@@ -1,10 +1,11 @@
 import { notifyResearchFinished } from "@/lib/email/notify";
 import { llmEnabled } from "@/lib/ai/enabled";
 import "server-only";
+import { env } from "@/lib/env";
+import { runDeepResearch, type AffinityOutcome } from "./deep/orchestrator";
 import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { researchInterpretationSchema, type ResearchInterpretation } from "@/lib/ai/schemas";
 import { templateInterpretation, type BriefInput, type Observation } from "@/lib/ai/template";
-import { generateCulturalPulse } from "./cultural-pulse";
 import { withUser, type Tx } from "@/lib/db";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { loadBrief } from "@/lib/data/briefs";
@@ -29,6 +30,8 @@ export type ResearchPlan = {
   interestQueries?: string[];
   location: string | null;
   ageCohort?: string | null;
+  /** Multi-source jobs only: skip the Qloo stage (turned off or not configured). */
+  skipQloo?: boolean;
   targets: EntityTypeUrn[];
   includeTags: boolean;
   notes: string[];
@@ -131,29 +134,58 @@ export async function executeRun(userId: string, runId: string) {
 
 async function runResearch(userId: string, runId: string) {
   const run = await withUser(userId, async (tx) => {
-    const [r] = await tx`update research_runs set status = 'running', started_at = now() where id = ${runId} and status = 'queued' returning *`;
+    const [r] = await tx`update research_runs set status = 'running', started_at = now(), stage = 'planning' where id = ${runId} and status = 'queued' returning *`;
     if (r) await setTask(tx, runId, "running");
     return r;
   });
   if (!run) return; // already picked up or not visible to this user
+  if (run.depth) {
+    // Multi-source research: Qloo runs as one embedded stage; the orchestrator owns the job's status.
+    try {
+      await runDeepResearch(userId, run, () => affinityStage(userId, run, true));
+    } catch (e) {
+      console.error("[research] deep run failed", runId, e instanceof Error ? e.message : e);
+      await withUser(userId, async (tx) => {
+        const [{ n }] = await tx`select count(*)::int as n from research_documents where run_id = ${runId}`;
+        await tx`update research_runs set status = ${n > 0 ? "partially_completed" : "failed"}, stage = 'done', stop_reason = 'error', completed_at = now(),
+          error_code = 'internal', error_message = 'The research job stopped unexpectedly. Sources collected before the error are kept.' where id = ${runId}`;
+        await setTask(tx, runId, n > 0 ? "completed" : "failed", "Research job stopped unexpectedly");
+      });
+    }
+    return;
+  }
+  await affinityStage(userId, run, false);
+}
+
+/**
+ * The Qloo cultural-affinity stage. Standalone (legacy runs) it owns the run's status; embedded
+ * in a multi-source job it only records its own results and returns an outcome, so a Qloo
+ * failure never discards web or document evidence.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a raw research_runs row, read field by field below
+async function affinityStage(userId: string, run: Record<string, any>, embedded: boolean): Promise<AffinityOutcome> {
+  const runId: string = run.id;
   const ws: string = run.workspace_id;
   const plan = run.plan as ResearchPlan;
   const isDemo = run.mode === "demo";
   const provider = isDemo ? "qloo-demo-fixture" : "qloo";
   const client: QlooLike = isDemo ? new DemoQlooClient() : qloo();
 
-  const fail = async (code: string, message: string) => {
+  const fail = async (code: string, message: string): Promise<AffinityOutcome> => {
+    if (embedded) return { ok: false, code, message };
     await withUser(userId, async (tx) => {
       await tx`update research_runs set status = 'failed', error_code = ${code}, error_message = ${message}, completed_at = now() where id = ${runId}`;
       await setTask(tx, runId, "failed", message);
       await trackEvent(tx, { workspaceId: ws, userId, event: "research_run_failed", projectId: run.project_id, metadata: { code, mode: run.mode } });
       await logActivity(tx, { workspaceId: ws, actorId: userId, projectId: run.project_id, verb: "failed", objectType: "research_run", objectId: runId, summary: `research run failed: ${message.slice(0, 120)}` });
     });
+    return { ok: false, code, message };
   };
 
+  if (embedded && plan.skipQloo) return { ok: false, skipped: true, code: "disabled", message: "Qloo is turned off for this workspace or not configured; cultural-affinity data was not used." };
   if (!isDemo && !(client as ReturnType<typeof qloo>).configured) {
-    await fail("missing_key", "Qloo is not configured on this server (QLOO_API_KEY is missing). No research was performed.");
-    return;
+    if (embedded) return { ok: false, skipped: true, code: "missing_key", message: "Qloo is not configured (QLOO_API_KEY is missing); cultural-affinity data was not used." };
+    return fail("missing_key", "Qloo is not configured on this server (QLOO_API_KEY is missing). No research was performed.");
   }
 
   try {
@@ -207,16 +239,17 @@ async function runResearch(userId: string, runId: string) {
     const tagIds = seeds.filter((s) => s.kind === "interest").map((s) => s.entity.providerId);
     if (!seedIds.length && !tagIds.length && !plan.location) {
       if (failures) throw firstError;
+      if (embedded) return { ok: false, skipped: true, code: "no_signal", message: "No brand, competitor, interest or market could be resolved in Qloo, so no affinity query was made." };
       await withUser(userId, async (tx) => {
         await tx`update research_runs set status = 'completed', completed_at = now(),
           interpretation = ${tx.json({ summary: "No brand, competitor, audience interest or market could be used as a research signal, so no provider query was made. Add one to the brief and run research again.", findings: [], contradictions: [], missingInformation: ["A research signal (brand, competitors, audience interests or market)."], followUpQuestions: [] })},
           interpretation_generator = 'system' where id = ${runId}`;
         await setTask(tx, runId, "completed");
       });
-      return;
+      return { ok: true, observations: 0, failures, summary: null };
     }
 
-    // 2. Insights per target type, plus taste tags.
+    const ageSignal = env().QLOO_AGE_SIGNAL === "enabled" ? plan.ageCohort ?? undefined : undefined;
     // 2. Insights per target type, plus taste tags.
     type Result = {
       entity: NormalizedEntity;
@@ -235,7 +268,7 @@ async function runResearch(userId: string, runId: string) {
         signalTags: tagIds,
         signalLocationQuery: !isPlace ? plan.location ?? undefined : undefined,
         filterLocationQuery: isPlace ? plan.location ?? undefined : undefined,
-        signalDemographicsAge: plan.ageCohort ?? undefined,
+        signalDemographicsAge: ageSignal,
         take: 12,
         explainability: seedIds.length + tagIds.length > 0,
         excludeEntities: seedIds,
@@ -246,7 +279,7 @@ async function runResearch(userId: string, runId: string) {
       res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result", hop: 1 }));
     }
     if (plan.includeTags && (seedIds.length || tagIds.length || plan.location)) {
-      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, signalDemographicsAge: plan.ageCohort ?? undefined, take: TAG_TAKE }));
+      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, signalDemographicsAge: ageSignal, take: TAG_TAKE }));
       res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:") && !tagIds.includes(t.providerId)).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
         entity: { providerId: t.providerId, name: t.name, type: "tag", affinity: t.affinity, popularity: t.popularity, tags: [], description: null, disambiguation: null, explainability: [] },
         sourceId: res.sourceId,
@@ -439,61 +472,6 @@ async function runResearch(userId: string, runId: string) {
       interpretation = templateInterpretation(brief!, observations, seedNames);
     }
 
-    // 4b. Live Web & Social Cultural Pulse Grounding (Option C)
-    const topEntities = results
-      .filter((r) => r.role === "result" && r.entity.type !== "tag")
-      .slice(0, 6)
-      .map((r) => r.entity.name);
-
-    const pulseRes = await generateCulturalPulse({
-      brief: brief!,
-      ageCohort: plan.ageCohort,
-      topEntities,
-      isDemo,
-    });
-    interpretation.culturalPulse = pulseRes.data;
-
-    // Persist cultural pulse findings into evidence_items
-    await withUser(userId, async (tx) => {
-      // 1. Zeitgeist summary
-      await tx`
-        insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
-        values (${run.project_id}, ${ws}, ${runId}, 'external_source',
-          ${`[2026 Cultural Zeitgeist] ${pulseRes.data.zeitgeistSummary}`},
-          ${pulseRes.generator}, ${tx.json({ pulse_type: "zeitgeist", details: pulseRes.data })}, ${isDemo}, ${userId}, 'verified',
-          'Live cultural zeitgeist analysis synthesized from contemporary platforms (TikTok, Substack, Reddit) and verified cultural movements.')`;
-
-      // 2. Micro-aesthetics
-      for (const a of pulseRes.data.microAesthetics) {
-        await tx`
-          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
-          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
-            ${`[Micro-Aesthetic: ${a.name}] (${a.platformOrigin}): ${a.description} Relevance: ${a.audienceRelevance}`},
-            ${pulseRes.generator}, ${tx.json({ pulse_type: "micro_aesthetic", aesthetic: a })}, ${isDemo}, ${userId}, 'verified',
-            'Emerging subcultural aesthetic movement.')`;
-      }
-
-      // 3. Cultural tensions
-      for (const t of pulseRes.data.culturalTensions) {
-        await tx`
-          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
-          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
-            ${`[Cultural Tension] ${t.tension} — Implication: ${t.implicationForBrand}`},
-            ${pulseRes.generator}, ${tx.json({ pulse_type: "cultural_tension", tension: t })}, ${isDemo}, ${userId}, 'verified',
-            'Contemporary category friction identified in active audience discourse.')`;
-      }
-
-      // 4. Live web research citations (verified real URLs)
-      for (const w of pulseRes.data.liveWebSources ?? []) {
-        await tx`
-          insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_url, raw_metadata, is_demo, created_by, review_status, limitations)
-          values (${run.project_id}, ${ws}, ${runId}, 'external_source',
-            ${`[Live Web · ${w.source}] ${w.title}: ${w.snippet}`},
-            ${w.source}, ${w.url.startsWith("http") ? w.url : null}, ${tx.json({ pulse_type: "web_search", source_info: w })}, ${isDemo}, ${userId}, 'verified',
-            'Real-time live web and news intelligence.')`;
-      }
-    });
-
     if (unmatchedInterests.length) {
       interpretation.missingInformation.push(`No Qloo tag matched these audience interests, so they were not used as signals: ${unmatchedInterests.join(", ")}. Try a broader or more common wording.`);
     }
@@ -508,6 +486,10 @@ async function runResearch(userId: string, runId: string) {
           values (${run.project_id}, ${ws}, ${runId}, 'ai_interpretation', ${f.statement}, ${generator}, ${tx.json({ supporting_evidence_ids: f.evidenceIds })}, ${isDemo}, ${userId}, 'needs_validation',
           'AI interpretation of provider observations. Review before using in client work.')`;
       }
+      if (embedded) {
+        await tx`update research_runs set interpretation = ${tx.json(interpretation as never)}, interpretation_generator = ${generator} where id = ${runId}`;
+        return;
+      }
       await tx`update research_runs set status = 'completed', completed_at = now(), interpretation = ${tx.json(interpretation as never)},
         interpretation_generator = ${generator}, error_message = ${failures ? `${failures} of ${attempted} provider requests failed; results are partial.` : null},
         error_code = ${failures ? "partial" : null} where id = ${runId}`;
@@ -516,10 +498,11 @@ async function runResearch(userId: string, runId: string) {
       await trackEvent(tx, { workspaceId: ws, userId, event: "research_run_completed", projectId: run.project_id, metadata: { mode: run.mode, results: observations.length, failures } });
       await logActivity(tx, { workspaceId: ws, actorId: userId, projectId: run.project_id, verb: "completed", objectType: "research_run", objectId: runId, summary: `completed ${isDemo ? "a demonstration" : "a live"} research run (${observations.length} observations)` });
     });
+    return { ok: true, observations: observations.length, failures, summary: interpretation.summary ?? null };
   } catch (e) {
     const err = e instanceof QlooError ? e : null;
-    console.error("[research] run failed", runId, err?.code ?? (e instanceof Error ? e.message : "unknown"));
-    await fail(err?.code ?? "internal", err ? humanQlooError(err) : "The research run failed unexpectedly. No partial results were kept as findings.");
+    console.error("[research] qloo stage failed", runId, err?.code ?? (e instanceof Error ? e.message : "unknown"));
+    return fail(err?.code ?? "internal", err ? humanQlooError(err) : "The research run failed unexpectedly. No partial results were kept as findings.");
   }
 }
 
@@ -542,6 +525,6 @@ function interpretationPrompt(b: BriefInput, obs: Observation[], plan: ResearchP
     "Interpret the cultural research below for the campaign brief. Findings of kind 'observation' must restate the data; 'interpretation' findings must be cautious and cite supporting evidence ids.",
     tag("brief", JSON.stringify({ name: b.name, brand: b.brand, category: b.category, market: b.market, audience: b.audience, objective: b.objective, competitors: b.competitors, interests: b.interests ?? [] })),
     tag("evidence", JSON.stringify({ question: plan.question, notes: plan.notes, observations: evidence })),
-    "List contradictions only if the data contains them. List missing information that limits the conclusions (no public web research provider is configured).",
+    "List contradictions only if the data contains them. List missing information that limits the conclusions.",
   ].join("\n\n");
 }

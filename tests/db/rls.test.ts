@@ -195,4 +195,31 @@ d("Row Level Security and workspace isolation", () => {
     // A project from another workspace can't be paired with your own workspace id.
     await denied(as(B.id, (tx) => tx`insert into presence (user_id, project_id, workspace_id, page) values (${B.id}, ${projectA}, ${B.ws}, 'brief')`));
   });
+
+  it("research documents, brand-document passages and the provider cache are workspace-isolated", async () => {
+    const [run] = await as(A.id, (tx) => tx`insert into research_runs (project_id, workspace_id, mode, provider, question, idempotency_key, depth) values (${projectA}, ${A.ws}, 'live', 'multi-source', 'q', ${"k-" + Date.now()}, 'quick') returning id`);
+    await as(A.id, (tx) => tx`insert into research_documents (run_id, project_id, workspace_id, provider, source_type, canonical_url, title, excerpt) values (${run.id}, ${projectA}, ${A.ws}, 'brave', 'web_page', 'https://a.test/x', 'A doc', 'confidential-ish excerpt')`);
+    const [doc] = await as(A.id, (tx) => tx`insert into brief_documents (project_id, workspace_id, file_name, mime_type, size_bytes, extracted_text, extraction_status) values (${projectA}, ${A.ws}, 'brand.txt', 'text/plain', 10, 'secret positioning', 'extracted') returning id`);
+    await as(A.id, (tx) => tx`insert into brand_document_chunks (document_id, project_id, workspace_id, idx, content) values (${doc.id}, ${projectA}, ${A.ws}, 0, 'Lumen positioning: calm rituals for Gen Z')`);
+    await as(A.id, (tx) => tx`insert into provider_cache (workspace_id, provider, cache_key, response, expires_at) values (${A.ws}, 'brave', 'k1', '[]'::jsonb, now() + interval '1 hour')`);
+    // Bob sees none of it — including via full-text search on Alice's project id.
+    expect(await as(B.id, (tx) => tx`select id from research_documents where run_id = ${run.id}`)).toHaveLength(0);
+    expect(await as(B.id, (tx) => tx`select id from brand_document_chunks where project_id = ${projectA} and tsv @@ websearch_to_tsquery('english', 'positioning')`)).toHaveLength(0);
+    expect(await as(B.id, (tx) => tx`select cache_key from provider_cache where workspace_id = ${A.ws}`)).toHaveLength(0);
+    expect(await as(A.id, (tx) => tx`select id from brand_document_chunks where project_id = ${projectA} and tsv @@ websearch_to_tsquery('english', 'positioning')`)).toHaveLength(1);
+    // Bob can't write into Alice's workspace, nor pair her project with his workspace.
+    await denied(as(B.id, (tx) => tx`insert into provider_cache (workspace_id, provider, cache_key, response, expires_at) values (${A.ws}, 'brave', 'poison', '[]'::jsonb, now() + interval '1 hour')`));
+    await denied(as(B.id, (tx) => tx`insert into research_documents (run_id, project_id, workspace_id, provider, source_type, title) values (${run.id}, ${projectA}, ${B.ws}, 'brave', 'web_page', 'x')`));
+    // Viewers can read but not write research data.
+    expect(await as(V.id, (tx) => tx`select id from research_documents where run_id = ${run.id}`)).toHaveLength(1);
+    await denied(as(V.id, (tx) => tx`insert into provider_cache (workspace_id, provider, cache_key, response, expires_at) values (${A.ws}, 'brave', 'v', '[]'::jsonb, now() + interval '1 hour')`));
+  });
+
+  it("research spend and per-user counts only answer for workspaces you belong to", async () => {
+    const [run] = await as(A.id, (tx) => tx`select id from research_runs where workspace_id = ${A.ws} limit 1`);
+    await as(A.id, (tx) => tx`insert into research_sources (run_id, workspace_id, provider, endpoint, status, cost_usd_estimated) values (${run.id}, ${A.ws}, 'brave', 'search', 'ok', 0.005)`);
+    expect(Number((await as(A.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBeCloseTo(0.005);
+    expect(Number((await as(B.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBe(0);
+    expect((await as(B.id, (tx) => tx`select research_runs_today_by_user(${A.ws}, ${A.id}) as n`))[0].n).toBe(0);
+  });
 });

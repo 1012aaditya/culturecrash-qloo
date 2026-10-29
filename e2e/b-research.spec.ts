@@ -6,19 +6,21 @@ test("Scenario B (live) — a live Qloo run either returns provider data or fail
   const projectId = await createCampaign(page, "Scenario B live");
   await fillBrief(page);
   await page.goto(`/projects/${projectId}/research`);
-  const start = page.getByRole("button", { name: /Start research/ }).first();
-  test.skip(await start.isDisabled(), "QLOO_API_KEY not configured on the server under test");
-  await start.click();
-  const outcome = page.getByText("This research run failed").or(page.getByRole("button", { name: /affinity/ }).first());
-  await expect(outcome).toBeVisible({ timeout: 80_000 });
+  // The research form: question, depth, timeframe and source availability.
+  await page.getByRole("button", { name: /Start research/ }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: /Quick/ }).click();
+  await dialog.getByRole("button", { name: "Start research" }).click();
+  // Live runs either produce a report from real sources or fail honestly — never fixtures.
+  const outcome = page.getByText("This research run failed").or(page.getByRole("tab", { name: /sources/ }));
+  await expect(outcome.first()).toBeVisible({ timeout: 80_000 });
   if (await page.getByText("This research run failed").isVisible()) {
     await expect(page.getByText(/No fixture data was substituted/)).toBeVisible();
     await expect(page.getByRole("button", { name: /Retry live research/ })).toBeVisible();
     await page.goto(`/projects/${projectId}/research/history`);
     await expect(page.getByText(/failed/).first()).toBeVisible();
   } else {
-    await page.getByRole("button", { name: /affinity/ }).first().click();
-    await expect(page.getByText("Observed data · Qloo")).toBeVisible();
+    await expect(page.getByText("Demonstration data")).toHaveCount(0);
   }
 });
 

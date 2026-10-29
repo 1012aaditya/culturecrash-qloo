@@ -7,6 +7,7 @@ import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { briefExtractionSchema, type BriefExtraction } from "@/lib/ai/schemas";
 import { templateBriefExtraction } from "@/lib/ai/template";
 import { withUser } from "@/lib/db";
+import { ensureChunks } from "@/lib/research/deep/brand-docs";
 import { env } from "@/lib/env";
 import { logActivity, trackEvent } from "./activity";
 import { BRIEF_CORE_FIELDS, isUuid } from "./projects";
@@ -106,7 +107,9 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
   let status: "extracted" | "unsupported" | "failed" = "unsupported";
   try {
     if (isImage) {
-      extracted = await extractVisualAesthetics(bytes, file.name, file.type);
+      // Images go to the vision model only when this workspace allows LLM use; otherwise the file is kept without text.
+      extracted = (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) ? await extractVisualAesthetics(bytes, file.name, file.type) : null;
+      if (extracted === null) status = "unsupported";
     } else if (kind === "pdf") {
       const { extractText, getDocumentProxy } = await import("unpdf");
       const pdf = await getDocumentProxy(new Uint8Array(bytes));
@@ -118,8 +121,10 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
     } else {
       extracted = bytes.toString("utf8");
     }
-    extracted = extracted.replace(/\u0000/g, "").replace(/[ \t]+\n/g, "\n").trim().slice(0, 60_000);
-    status = extracted ? "extracted" : "failed";
+    if (extracted !== null) {
+      extracted = extracted.replace(/\u0000/g, "").replace(/[ \t]+\n/g, "\n").trim().slice(0, 60_000);
+      status = extracted ? "extracted" : "failed";
+    }
   } catch {
     status = "failed";
     extracted = null;
@@ -144,6 +149,8 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
     if (!p) return null;
     const [doc] = await tx`insert into brief_documents (project_id, workspace_id, file_name, mime_type, size_bytes, storage_path, extracted_text, extraction_status, created_by)
       values (${projectId}, ${ctx.workspace.workspaceId}, ${file.name.slice(0, 200)}, ${file.type || kind}, ${file.size}, ${storagePath}, ${extracted}, ${status}, ${ctx.user.id}) returning id`;
+    // Index the text for research retrieval straight away (keyword passages, this project only).
+    if (status === "extracted") await ensureChunks(tx, projectId);
     await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "uploaded", objectType: "document", objectId: doc.id, summary: `uploaded “${file.name.slice(0, 80)}” to the brief` });
     return doc.id as string;
   });

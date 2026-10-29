@@ -42,7 +42,7 @@ export function Field({
   optional?: boolean;
 }) {
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col gap-1.5", className)} data-presence-field={htmlFor}>
       <div className="flex items-baseline justify-between gap-2">
         <Label htmlFor={htmlFor}>{label}</Label>
         {optional && <span className="text-[11px] text-faint">Optional</span>}

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { StageNav } from "@/components/nav/stage-nav";
+import { ProjectPresence } from "@/components/projects/project-presence";
 import { DemoBadge } from "@/components/states";
 import { getProjectContext } from "@/lib/data/project-context";
 
@@ -18,6 +19,7 @@ export default async function ProjectLayout({ children, params }: LayoutProps<"/
         </nav>
         {project.isDemo && <DemoBadge className="ml-2" />}
         {project.status === "archived" && <span className="ml-2 rounded-full bg-ink/5 px-2 py-0.5">Archived</span>}
+        <ProjectPresence projectId={project.id} />
       </div>
       <StageNav projectId={project.id} stages={stages} />
       <div className="mt-6">{children}</div>

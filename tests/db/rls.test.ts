@@ -184,4 +184,15 @@ d("Row Level Security and workspace isolation", () => {
     expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "" }))).result).toMatchObject({ error: "Invalid input" });
     expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "drop_tables", {}))).result).toMatchObject({ error: "Unknown tool drop_tables" });
   });
+
+  it("presence is visible to workspace members only and can't be forged", async () => {
+    await as(A.id, (tx) => tx`insert into presence (user_id, project_id, workspace_id, page, field) values (${A.id}, ${projectA}, ${A.ws}, 'brief', 'audience')`);
+    expect(await as(V.id, (tx) => tx`select field from presence where project_id = ${projectA}`)).toHaveLength(1);
+    expect(await as(B.id, (tx) => tx`select field from presence where project_id = ${projectA}`)).toHaveLength(0);
+    // Bob can't announce himself in Alice's project, nor write a row for someone else.
+    await denied(as(B.id, (tx) => tx`insert into presence (user_id, project_id, workspace_id, page) values (${B.id}, ${projectA}, ${A.ws}, 'brief')`));
+    await denied(as(V.id, (tx) => tx`insert into presence (user_id, project_id, workspace_id, page) values (${A.id}, ${projectA}, ${A.ws}, 'brief')`));
+    // A project from another workspace can't be paired with your own workspace id.
+    await denied(as(B.id, (tx) => tx`insert into presence (user_id, project_id, workspace_id, page) values (${B.id}, ${projectA}, ${B.ws}, 'brief')`));
+  });
 });

@@ -33,6 +33,7 @@ export async function runRetention() {
         and t.finished_at < now() - make_interval(days => w.data_retention_days)
       returning t.id`;
     const pilots = await tx`delete from pilot_requests where created_at < now() - interval '12 months' returning id`;
+    await tx`delete from presence where updated_at < now() - interval '1 hour'`;
     const links = await tx`delete from shared_report_links where expires_at is not null and expires_at < now() - interval '30 days' returning id`;
     return {
       rawResponsesCleared: raw.length, conversationsDeleted: conv.length, activityDeleted: activity.length,

@@ -148,7 +148,7 @@ runs. `npm run build` must pass; then apply migrations before the first deploy.
 npm run typecheck && npm run lint
 npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates, copilot loop
 TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–H against a running server (local auth + demo mode)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–I against a running server (local auth + demo mode)
 ```
 
 ## Status
@@ -163,6 +163,12 @@ See the final handoff in the pull request or session notes for full detail. Summ
   LLM path (no key was provided).
 - **Implemented, untested against the real service**: Resend email delivery (no key in the build environment).
 - **Not implemented**: a public web research provider, payments, real-time collaboration.
+
+Presence: on any campaign page you see who else is there (avatars next to the breadcrumb), and a field a
+teammate is editing gets a coral outline with "<name> is editing". Each open page sends a heartbeat every
+5 s (and when you move to another field) to `/api/projects/[id]/presence`, which returns everyone seen in the
+last 30 s. The `presence` table is under RLS (members only, own row only). Edits are not merged live; the
+brief's revision check still prevents overwrites.
 
 Notifications: the command-bar bell shows in-app notifications (research finished or failed, a report shared
 from your campaign, being added to a workspace) with an unread count. It polls every 30 s while the tab is

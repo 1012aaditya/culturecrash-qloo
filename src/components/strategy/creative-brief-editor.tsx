@@ -47,7 +47,7 @@ function Section({ index, sectionKey, label, value, briefId, revision, canEdit, 
   });
 
   return (
-    <li className="grid gap-4 py-7 md:grid-cols-[200px_1fr]">
+    <li className="grid gap-4 py-7 md:grid-cols-[200px_1fr]" data-presence-field={`cb-${sectionKey}`}>
       <div>
         <p className="font-mono text-[11px] text-faint">{String(index).padStart(2, "0")}</p>
         <h2 className="cc-display mt-1 text-2xl">{label}</h2>

@@ -176,3 +176,28 @@ body {
   .cc-no-print { display: none !important; }
   body { background: #fff; }
 }
+
+/* Presence: a field a teammate is editing (set by ProjectPresence) */
+[data-peer-editing] {
+  position: relative;
+  border-radius: 14px;
+  box-shadow: 0 0 0 2px var(--cc-paper), 0 0 0 4px rgba(242, 154, 139, 0.75);
+  transition: box-shadow 0.3s ease;
+}
+[data-peer-editing]::after {
+  content: attr(data-peer-editing) " is editing";
+  position: absolute;
+  top: -11px;
+  right: 10px;
+  z-index: 5;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--cc-coral);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  animation: cc-fade-up 0.25s ease-out both;
+  pointer-events: none;
+}

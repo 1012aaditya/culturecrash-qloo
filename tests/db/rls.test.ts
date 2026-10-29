@@ -47,7 +47,11 @@ d("Row Level Security and workspace isolation", () => {
     url.pathname = `/${DB}`;
     sql = postgres(url.toString(), { max: 4, onnotice: () => {}, prepare: false });
     await sql.unsafe(readFileSync("db/local/000_supabase_shim.sql", "utf8"));
-    for (const f of readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort()) await sql.unsafe(readFileSync(`supabase/migrations/${f}`, "utf8"));
+    for (const f of readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort()) {
+      const text = readFileSync(`supabase/migrations/${f}`, "utf8");
+      if (/storage\.(buckets|objects)/.test(text)) continue; // Supabase Storage is not present in plain Postgres
+      await sql.unsafe(text);
+    }
     A = await user("alice@a.test");
     B = await user("bob@b.test");
     V = await user("vera@a.test");

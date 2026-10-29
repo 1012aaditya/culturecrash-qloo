@@ -32,8 +32,14 @@ async function main() {
   await sql`revoke all on public._cc_migrations from public`;
   if (args.has("--local")) await apply("db/local/000_supabase_shim.sql", "local shim");
   const dir = "supabase/migrations";
+  const hasStorage = (await sql`select 1 from pg_namespace where nspname = 'storage'`).length > 0;
   for (const f of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
-    await apply(path.join(dir, f), "migration");
+    const file = path.join(dir, f);
+    if (!hasStorage && /storage\.(buckets|objects)/.test(readFileSync(file, "utf8"))) {
+      console.log(`skipped (no Supabase Storage schema): ${f}`);
+      continue;
+    }
+    await apply(file, "migration");
   }
   if (args.has("--seed")) await apply("supabase/seed.sql", "seed");
   await sql.end();

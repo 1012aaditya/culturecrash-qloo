@@ -83,6 +83,20 @@ With `CC_DEMO_MODE=enabled` you can run labelled demonstration research and open
 dashboard. Without `QLOO_API_KEY`, live research is disabled and the app says so. Without
 `ANTHROPIC_API_KEY`, drafts come from the template engine.
 
+## Supabase project (provisioned)
+
+Project `culturecrash` (ref `hmkdnzpiopxmzcbyqfqh`, region ap-south-1) was created through the Supabase
+connector. Every migration in `supabase/migrations/` has been applied, including the private
+`brief-documents` bucket with workspace-scoped policies. Signup triggers and cross-workspace isolation were
+smoke-tested there inside a rolled-back transaction. The security advisor's remaining notices are
+intentional: authenticated RPC helpers, the anon-callable `get_shared_report`, and `pilot_requests` having no
+policies because only the server writes to it.
+
+- `NEXT_PUBLIC_SUPABASE_URL=https://hmkdnzpiopxmzcbyqfqh.supabase.co`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` = the project's publishable key (Dashboard → Project Settings → API Keys)
+- `DATABASE_URL` = Dashboard → Connect → Transaction pooler (port 6543), with the database password you set or reset
+- Auth → URL Configuration: Site URL = your deployed `APP_BASE_URL`; add `APP_BASE_URL/auth/callback` as a redirect URL
+
 ## Configure Supabase (production)
 
 1. Create a project. Under **Auth → URL configuration**, set the Site URL to `APP_BASE_URL` and add

@@ -1,10 +1,9 @@
 "use client";
 
-import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Bell, Building2, Check, ChevronDown, CircleHelp, Download, FolderOpen, LayoutGrid, LogOut, Menu as MenuIcon, Plus, Search, Settings, Share2, Users, X,
+  Building2, Check, ChevronDown, CircleHelp, Download, FolderOpen, LayoutGrid, LogOut, Menu as MenuIcon, Plus, Search, Settings, Share2, Users, X,
 } from "lucide-react";
 import * as React from "react";
 import { signOutAction } from "@/app/(auth)/actions";
@@ -12,8 +11,9 @@ import { switchWorkspaceAction } from "@/app/(app)/actions";
 import { LogoMark } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
+import { NotificationBell } from "./notification-bell";
 import { CommandPalette, useCommandPalette } from "./command-palette";
 import type { ShellData } from "./types";
 
@@ -35,7 +35,6 @@ export function CommandBar({ data }: { data: ShellData }) {
     setMobileOpen(false);
   }
   const current = data.projects.find((p) => p.id === projectId) ?? null;
-  const running = data.tasks.filter((t) => t.status === "running" || t.status === "queued").length;
 
   return (
     <>
@@ -106,31 +105,7 @@ export function CommandBar({ data }: { data: ShellData }) {
               </Button>
             )}
 
-            <Menu>
-              <MenuTrigger asChild>
-                <button className="relative inline-flex size-10 items-center justify-center rounded-full hover:bg-ink/5" aria-label={`Notifications${running ? `, ${running} running` : ""}`}>
-                  <Bell className="size-[18px]" />
-                  {running > 0 && <span className="absolute right-2 top-2 size-2 rounded-full bg-violet ring-2 ring-white" />}
-                </button>
-              </MenuTrigger>
-              <MenuContent className="w-80">
-                <MenuLabel>Background tasks</MenuLabel>
-                {data.tasks.length === 0 && <p className="px-2.5 py-3 text-[13px] text-muted">Nothing running. Research runs and generations appear here.</p>}
-                {data.tasks.slice(0, 5).map((t) => (
-                  <MenuItem key={t.id} asChild>
-                    <Link href={t.href ?? "/tasks"} className="!items-start">
-                      <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", t.status === "failed" ? "bg-danger" : t.status === "completed" ? "bg-success" : "bg-violet cc-animate-pulse")} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{t.label}</span>
-                        <span className="text-[11px] text-muted">{t.status.replace("_", " ")} · <Ago value={t.updatedAt} /></span>
-                      </span>
-                    </Link>
-                  </MenuItem>
-                ))}
-                <MenuSeparator />
-                <MenuItem asChild><Link href="/tasks">Open task center</Link></MenuItem>
-              </MenuContent>
-            </Menu>
+            <NotificationBell initial={data.notifications} tasks={data.tasks} />
 
             <Menu>
               <MenuTrigger asChild>

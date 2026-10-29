@@ -14,6 +14,7 @@ import { emailConfigured, sendEmail } from "@/lib/email";
 import { invitationEmail } from "@/lib/email/templates";
 import { assertCan, type Role } from "@/lib/permissions";
 import { logActivity } from "./activity";
+import { createNotification } from "./notifications";
 import { friendly, invalid, optText, type Result } from "./action-utils";
 import { isUuid } from "./projects";
 import { getCtx, WORKSPACE_COOKIE } from "./workspace";
@@ -121,6 +122,13 @@ export async function inviteMemberAction(input: z.input<typeof inviteSchema>): P
       const [pending] = await tx`select id from workspace_invitations where workspace_id = ${ws} and lower(email) = ${email} and accepted_at is null and revoked_at is null`;
       if (pending) return "already-invited" as const;
       const [r] = await tx`select public.invite_member(${ws}, ${email}, ${role}::public.workspace_role) as outcome`;
+      if (r.outcome === "added") {
+        const [target] = await tx`select p.id from profiles p join workspace_members m on m.user_id = p.id and m.workspace_id = ${ws} where lower(p.email) = ${email}`;
+        if (target) await createNotification(tx, {
+          workspaceId: ws, userId: target.id, actorId: ctx.user.id, kind: "member_added",
+          title: `You were added to ${ctx.workspace.name}`, body: `${ctx.profile.fullName || ctx.profile.email} gave you ${role} access.`, href: "/dashboard",
+        });
+      }
       await logActivity(tx, {
         workspaceId: ws, actorId: ctx.user.id, verb: r.outcome === "added" ? "added" : "invited", objectType: "member", objectId: null,
         summary: r.outcome === "added" ? `added ${email} as ${role}` : `invited ${email} as ${role}`,

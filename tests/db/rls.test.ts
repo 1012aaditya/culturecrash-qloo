@@ -152,4 +152,22 @@ d("Row Level Security and workspace isolation", () => {
   it("pilot requests are not readable by app users", async () => {
     await denied(as(A.id, (tx) => tx`select * from pilot_requests`));
   });
+
+  it("notifications are private, only sent to fellow members, and only read_at can change", async () => {
+    // No RETURNING: the sender has no SELECT on the recipient's row.
+    await as(A.id, (tx) => tx`insert into notifications (workspace_id, user_id, actor_id, kind, title, href)
+      values (${A.ws}, ${V.id}, ${A.id}, 'report_shared', 'Shared', '/dashboard')`);
+    const [n] = await as(V.id, (tx) => tx`select id from notifications where title = 'Shared'`);
+    // Bob is not in Alice's workspace: cannot be notified there, and cannot notify into it.
+    await denied(as(A.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title) values (${A.ws}, ${B.id}, 'report_shared', 'x')`));
+    await denied(as(B.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title) values (${A.ws}, ${V.id}, 'report_shared', 'x')`));
+    // Actor cannot be forged.
+    await denied(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, actor_id, kind, title) values (${A.ws}, ${A.id}, ${B.id}, 'report_shared', 'x')`));
+    // Only the recipient sees it; the sender cannot read it back.
+    expect(await as(V.id, (tx) => tx`select id from notifications where id = ${n.id}`)).toHaveLength(1);
+    expect(await as(A.id, (tx) => tx`select id from notifications where id = ${n.id}`)).toHaveLength(0);
+    expect(await as(V.id, (tx) => tx`update notifications set read_at = now() where id = ${n.id} returning id`)).toHaveLength(1);
+    await expect(as(V.id, (tx) => tx`update notifications set title = 'changed' where id = ${n.id}`)).rejects.toThrow(/immutable except read_at/);
+    await expect(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title, href) values (${A.ws}, ${V.id}, 'report_shared', 'x', 'https://evil.test')`)).rejects.toThrow(/check constraint/);
+  });
 });

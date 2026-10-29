@@ -1,5 +1,6 @@
 import "server-only";
 import { withUser } from "@/lib/db";
+import { createNotification } from "@/lib/data/notifications";
 import { sendEmail } from "./index";
 import { reportSharedEmail, researchFinishedEmail } from "./templates";
 
@@ -10,10 +11,19 @@ const wants = (prefs: Prefs, key: string) => prefs?.[key] === true;
 export async function notifyResearchFinished(userId: string, runId: string) {
   const row = await withUser(userId, async (tx) => {
     const [r] = await tx`
-      select r.status, r.mode, r.error_message, r.project_id, p.name as project, pr.email, pr.notification_prefs,
+      select r.status, r.mode, r.error_message, r.project_id, r.workspace_id, p.name as project, pr.email, pr.notification_prefs,
         (select count(*)::int from cultural_entities e where e.run_id = r.id and e.role <> 'seed') as entities
       from research_runs r join projects p on p.id = r.project_id join profiles pr on pr.id = ${userId}
       where r.id = ${runId}`;
+    if (r && ["completed", "failed"].includes(r.status)) {
+      const ok = r.status === "completed";
+      await createNotification(tx, {
+        workspaceId: r.workspace_id, userId, actorId: null, kind: ok ? "research_completed" : "research_failed",
+        title: ok ? `Research finished · ${r.project}` : `Research failed · ${r.project}`,
+        body: ok ? `${r.entities} entities and taste tags${r.mode === "demo" ? " (demonstration data)" : ""}.` : (r.error_message ?? "The run did not complete."),
+        href: `/projects/${r.project_id}/research?run=${runId}`,
+      });
+    }
     return r;
   });
   if (!row || !["completed", "failed"].includes(row.status) || !row.email || !wants(row.notification_prefs, "research_completed")) return;
@@ -26,10 +36,17 @@ export async function notifyResearchFinished(userId: string, runId: string) {
 export async function notifyReportShared(sharerId: string, sharerName: string, reportVersionId: string) {
   const row = await withUser(sharerId, async (tx) => {
     const [r] = await tx`
-      select r.title, p.id as project_id, p.name as project, p.owner_id, o.email, o.notification_prefs
+      select r.title, r.workspace_id, p.id as project_id, p.name as project, p.owner_id, o.email, o.notification_prefs
       from report_versions v join reports r on r.id = v.report_id join projects p on p.id = r.project_id
       left join profiles o on o.id = p.owner_id
       where v.id = ${reportVersionId}`;
+    if (r?.owner_id && r.owner_id !== sharerId) {
+      const [member] = await tx`select 1 from workspace_members where workspace_id = ${r.workspace_id} and user_id = ${r.owner_id}`;
+      if (member) await createNotification(tx, {
+        workspaceId: r.workspace_id, userId: r.owner_id, actorId: sharerId, kind: "report_shared",
+        title: `${sharerName} shared “${r.title}”`, body: `A read-only link was created in ${r.project}.`, href: `/projects/${r.project_id}/reports`,
+      });
+    }
     return r;
   });
   if (!row || !row.owner_id || row.owner_id === sharerId || !row.email || !wants(row.notification_prefs, "report_shared")) return;

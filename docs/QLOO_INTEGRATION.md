@@ -14,12 +14,13 @@ taste tags were then confirmed live too:
   The real category is in `subtype` (the adapter reads it first).
 - `filter.type=urn:tag` with `signal.location.query=India` → `results.tags[]` with `tag_id`, `name`,
   `subtype`, `popularity` and `query.affinity`; `query.localities.signal` shows India resolved to a locality.
-  Without a tag-type filter it returned generic genre tags ("Actor", "Hotel"), so the engine now sends
-  `filter.tag.types` with taste-oriented tag types and drops `urn:tag:genre:*` results as a safeguard.
+  Without a tag-type filter it led with generic genre tags ("Actor", "Hotel").
 - `filter.type=urn:entity:place&filter.location.query=India` → real Indian places.
 
-Still to confirm: `query.affinity` on entity results (the output was truncated before it) and whether
-`filter.tag.types` is honoured.
+Confirmed afterwards: entity results carry `query.affinity` (e.g. 0.96) and
+`query.explainability["signal.interests.entities"][] = {entity_id, score}`, exactly what the adapter parses.
+`filter.tag.types=urn:tag:lifestyle:qloo,urn:tag:interest_adjacency:qloo` returned **zero** tags, so the
+engine no longer sends it: it requests 40 tags and drops `urn:tag:genre:*` client-side (max 12 kept).
 
 `QLOO_API_KEY` is present in the build environment, but the environment's network policy blocks
 `hackathon.api.qloo.com`, `api.qloo.com`, `staging.api.qloo.com` and `docs.qloo.com` (the egress proxy

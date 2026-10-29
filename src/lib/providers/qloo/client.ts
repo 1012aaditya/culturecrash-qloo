@@ -136,7 +136,7 @@ export class QlooClient {
 }
 
 function insightParams(p: InsightsParams): Record<string, string> {
-  const params: Record<string, string> = { "filter.type": p.filterType, take: String(Math.max(1, Math.min(p.take ?? 8, 25))) };
+  const params: Record<string, string> = { "filter.type": p.filterType, take: String(Math.max(1, Math.min(p.take ?? 8, 50))) };
   if (p.signalEntities?.length) params["signal.interests.entities"] = p.signalEntities.join(",");
   if (p.signalLocationQuery) params["signal.location.query"] = p.signalLocationQuery;
   if (p.filterLocationQuery) params["filter.location.query"] = p.filterLocationQuery;

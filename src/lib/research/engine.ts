@@ -11,13 +11,12 @@ export const AFFINITY_LIMITATION =
   "Affinity is a correlation in taste between people connected to the signal and this entity. It does not indicate purchase intent, campaign effectiveness, audience representativeness or causation.";
 
 /**
- * Without a tag-type filter, live urn:tag insights return generic genre tags ("Actor", "Hotel").
- * These taste-oriented tag types were observed on live brand entities.
+ * Live finding (2026-10-29): unfiltered urn:tag insights lead with generic genre tags ("Actor", "Hotel"),
+ * and filter.tag.types with *:qloo tag types returned zero tags. So we request a wider set and drop
+ * urn:tag:genre:* client-side, keeping only taste-descriptive tags.
  */
-export const TASTE_TAG_TYPES = [
-  "urn:tag:lifestyle:qloo", "urn:tag:interest_adjacency:qloo", "urn:tag:core_value:qloo",
-  "urn:tag:cultural_relevance:qloo", "urn:tag:customer_segment:qloo", "urn:tag:emotional_tone:qloo",
-];
+const TAG_TAKE = 40;
+const MAX_TASTE_TAGS = 12;
 
 export type ResearchPlan = {
   question: string;
@@ -174,8 +173,8 @@ export async function executeRun(userId: string, runId: string) {
       res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result" }));
     }
     if (plan.includeTags && (seedIds.length || plan.location)) {
-      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalLocationQuery: plan.location ?? undefined, take: 10, filterTagTypes: TASTE_TAG_TYPES }));
-      res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:")).forEach((t) => results.push({
+      const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalLocationQuery: plan.location ?? undefined, take: TAG_TAKE }));
+      res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:")).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
         entity: { providerId: t.providerId, name: t.name, type: "tag", affinity: t.affinity, popularity: t.popularity, tags: [], description: null, disambiguation: null, explainability: [] },
         sourceId: res.sourceId,
         role: "tag",

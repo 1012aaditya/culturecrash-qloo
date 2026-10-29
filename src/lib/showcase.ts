@@ -7,7 +7,7 @@ import type { ReportSnapshot } from "@/lib/reports/types";
 
 const at = "2026-10-01T10:00:00.000Z";
 const e = (id: string, name: string, type: string, role: EntityRow["role"], affinity: number | null): EntityRow => ({
-  id, providerId: `demo-${id}`, name, type, role, affinity, popularity: null, tags: [], description: "Fictional demonstration entity.", retrievedAt: at, sourceId: null, evidenceId: null,
+  id, providerId: `demo-${id}`, name, type, role, affinity, popularity: null, tags: [], description: "Fictional demonstration entity.", retrievedAt: at, sourceId: null, evidenceId: null, imageUrl: null, profileOf: null,
 });
 
 export const showcaseEntities: EntityRow[] = [

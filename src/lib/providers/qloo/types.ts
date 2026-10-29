@@ -73,6 +73,10 @@ export type NormalizedEntity = {
   description: string | null;
   disambiguation: string | null;
   explainability: { entityId: string; score: number }[];
+  /** properties.image.url when Qloo supplies one (https only). */
+  imageUrl?: string | null;
+  /** Typed tags from the entity profile (e.g. a brand's lifestyle or audience tags). */
+  profileTags?: { providerId: string; name: string; type: string | null }[];
 };
 
 export type NormalizedTag = { providerId: string; name: string; type: string | null; affinity: number | null; popularity: number | null };

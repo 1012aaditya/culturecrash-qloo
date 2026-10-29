@@ -40,6 +40,18 @@ export function extractList(payload: unknown, key: "entities" | "tags"): unknown
   return null;
 }
 
+/** Only https URLs are kept; anything else is dropped rather than rendered. */
+export function imageUrlFrom(props: Record<string, unknown>): string | null {
+  const img = props.image;
+  const url = typeof img === "string" ? img : img && typeof img === "object" ? (img as Record<string, unknown>).url : null;
+  if (typeof url !== "string") return null;
+  try {
+    return new URL(url).protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeEntity(raw: unknown): NormalizedEntity | null {
   const parsed = rawEntitySchema.safeParse(raw);
   if (!parsed.success) return null;
@@ -61,6 +73,11 @@ export function normalizeEntity(raw: unknown): NormalizedEntity | null {
     description: description ? description.slice(0, 600) : null,
     disambiguation: e.disambiguation ?? null,
     explainability: parseExplainability(e.query?.explainability),
+    imageUrl: imageUrlFrom(props),
+    profileTags: (e.tags ?? [])
+      .filter((t): t is Exclude<typeof t, string> => typeof t !== "string")
+      .map((t) => ({ providerId: String(t.tag_id ?? t.id ?? ""), name: (t.name ?? "").trim(), type: t.type ?? null }))
+      .filter((t) => t.providerId && t.name),
   };
 }
 

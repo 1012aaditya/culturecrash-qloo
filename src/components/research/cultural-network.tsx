@@ -2,7 +2,8 @@
 
 import { LocateFixed, Minus, Plus } from "lucide-react";
 import * as React from "react";
-import { ArtPlate, type PlateTheme } from "@/components/art/plate";
+import { EntityImage } from "@/components/art/entity-image";
+import type { PlateTheme } from "@/components/art/plate";
 import type { EntityRow, RelRow } from "@/lib/data/research";
 import { cn } from "@/lib/utils";
 
@@ -189,7 +190,7 @@ export function CulturalNetwork({
                 )}
                 style={{ left: n.x - 50, top: n.y - 62, width: 100, height: 124 }}
               >
-                <ArtPlate theme={TYPE_THEME[n.type] ?? theme} seed={n.providerId} rounded={false} className="absolute inset-0" />
+                <EntityImage src={n.imageUrl} theme={TYPE_THEME[n.type] ?? theme} seed={n.providerId} rounded={false} className="absolute inset-0" />
                 <span className="absolute inset-x-2 bottom-2">
                   <span className="block truncate text-[12px] font-semibold leading-tight">{n.name}</span>
                   <span className="block text-[10px] text-white/75">{n.affinity !== null ? `affinity ${n.affinity.toFixed(2)}` : n.type}</span>

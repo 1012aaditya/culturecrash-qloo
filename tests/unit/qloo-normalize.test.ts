@@ -40,4 +40,16 @@ describe("Qloo response normalisation", () => {
     expect(shortType("urn:entity:tv_show")).toBe("tv_show");
     expect(shortType(undefined)).toBe("entity");
   });
+
+  it("keeps https image URLs and typed profile tags, dropping anything else", () => {
+    const e = normalizeEntity({
+      entity_id: "B1", name: "Example Brand", types: ["urn:entity:brand"],
+      properties: { image: { url: "https://images.example.test/b1.jpg" } },
+      tags: [{ tag_id: "urn:tag:lifestyle:qloo:calm", name: "Calm Living", type: "urn:tag:lifestyle:qloo" }, { name: "no id" }, "plain"],
+    });
+    expect(e?.imageUrl).toBe("https://images.example.test/b1.jpg");
+    expect(e?.profileTags).toEqual([{ providerId: "urn:tag:lifestyle:qloo:calm", name: "Calm Living", type: "urn:tag:lifestyle:qloo" }]);
+    expect(normalizeEntity({ entity_id: "B2", name: "X", properties: { image: { url: "javascript:alert(1)" } } })?.imageUrl).toBeNull();
+    expect(normalizeEntity({ entity_id: "B3", name: "Y", properties: { image: "http://insecure.test/a.jpg" } })?.imageUrl).toBeNull();
+  });
 });

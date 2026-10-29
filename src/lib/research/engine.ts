@@ -17,6 +17,7 @@ export const AFFINITY_LIMITATION =
  */
 const TAG_TAKE = 40;
 const MAX_TASTE_TAGS = 12;
+const MAX_PROFILE_TAGS = 8;
 
 export type ResearchPlan = {
   question: string;
@@ -154,7 +155,7 @@ export async function executeRun(userId: string, runId: string) {
     }
 
     // 2. Insights per target type, plus taste tags.
-    type Result = { entity: NormalizedEntity; sourceId: string; role: "result" | "tag" };
+    type Result = { entity: NormalizedEntity; sourceId: string; role: "result" | "tag"; profileOf?: string };
     const results: Result[] = [];
     for (const target of plan.targets) {
       const isPlace = target === "urn:entity:place" || target === "urn:entity:destination";
@@ -181,6 +182,20 @@ export async function executeRun(userId: string, runId: string) {
       }));
     }
 
+    // Tags on the brand's own Qloo profile (from the /search response already logged).
+    const brandSeed = seeds.find((s) => s.kind === "brand");
+    if (brandSeed) {
+      (brandSeed.entity.profileTags ?? [])
+        .filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:"))
+        .slice(0, MAX_PROFILE_TAGS)
+        .forEach((t) => results.push({
+          entity: { providerId: t.providerId, name: t.name, type: "tag", affinity: null, popularity: null, tags: [], description: t.type ? `Profile tag type: ${t.type}` : null, disambiguation: null, explainability: [] },
+          sourceId: brandSeed.sourceId,
+          role: "tag",
+          profileOf: brandSeed.entity.name,
+        }));
+    }
+
     if (attempted > 0 && failures === attempted) throw firstError ?? new QlooError("All provider requests failed", "network");
 
     // 3. Persist entities, relationships and provider observations.
@@ -191,7 +206,7 @@ export async function executeRun(userId: string, runId: string) {
       for (const s of seeds) {
         const [ent] = await tx`
           insert into cultural_entities (run_id, project_id, workspace_id, source_id, provider_entity_id, name, entity_type, role, affinity, popularity, tags, properties)
-          values (${runId}, ${run.project_id}, ${ws}, ${s.sourceId}, ${s.entity.providerId}, ${s.entity.name}, ${s.entity.type}, 'seed', null, ${s.entity.popularity}, ${tx.json(s.entity.tags)}, ${tx.json({ query: s.query, kind: s.kind, description: s.entity.description })})
+          values (${runId}, ${run.project_id}, ${ws}, ${s.sourceId}, ${s.entity.providerId}, ${s.entity.name}, ${s.entity.type}, 'seed', null, ${s.entity.popularity}, ${tx.json(s.entity.tags)}, ${tx.json({ query: s.query, kind: s.kind, description: s.entity.description, image_url: s.entity.imageUrl ?? null })})
           on conflict (run_id, provider_entity_id, role) do update set name = excluded.name returning id`;
         idByProvider.set(s.entity.providerId, ent.id);
         const [ev] = await tx`
@@ -205,7 +220,7 @@ export async function executeRun(userId: string, runId: string) {
         const [ent] = await tx`
           insert into cultural_entities (run_id, project_id, workspace_id, source_id, provider_entity_id, name, entity_type, role, affinity, popularity, tags, properties)
           values (${runId}, ${run.project_id}, ${ws}, ${r.sourceId}, ${r.entity.providerId}, ${r.entity.name}, ${r.entity.type}, ${r.role}, ${r.entity.affinity}, ${r.entity.popularity},
-            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability })})
+            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability, image_url: r.entity.imageUrl ?? null, profile_of: r.profileOf ?? null })})
           on conflict (run_id, provider_entity_id, role) do nothing returning id`;
         if (!ent) continue;
         for (const ex of r.entity.explainability) {
@@ -213,13 +228,16 @@ export async function executeRun(userId: string, runId: string) {
           if (from) await tx`insert into entity_relationships (run_id, workspace_id, from_entity_id, to_entity_id, relation, value, source_id) values (${runId}, ${ws}, ${from}, ${ent.id}, 'explainability', ${ex.score}, ${r.sourceId})`;
         }
         const value = r.entity.affinity;
-        const claim = r.role === "tag"
+        const claim = r.profileOf
+          ? `Qloo’s profile for “${r.profileOf}” carries the tag “${r.entity.name}”.`
+          : r.role === "tag"
           ? `Qloo associated the taste tag “${r.entity.name}” with the signal (${signalLabel || "location"})${value !== null ? `, affinity ${value.toFixed(2)}` : ""}.`
           : `Qloo returned “${r.entity.name}” (${r.entity.type}) for the signal ${signalLabel || "(location only)"}${value !== null ? ` with affinity ${value.toFixed(2)}` : " without an affinity value"}.`;
         const [ev] = await tx`
           insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_ref, retrieved_at, raw_metadata, normalized_value, entity_ids, is_demo, created_by, limitations)
           values (${run.project_id}, ${ws}, ${runId}, 'provider_observation', ${claim}, ${provider}, ${r.entity.providerId}, now(),
-            ${tx.json({ source_id: r.sourceId, role: r.role, popularity: r.entity.popularity })}, ${value}, ${[ent.id]}, ${isDemo}, ${userId}, ${AFFINITY_LIMITATION}) returning id`;
+            ${tx.json({ source_id: r.sourceId, role: r.role, popularity: r.entity.popularity, profile_of: r.profileOf ?? null })}, ${value}, ${[ent.id]}, ${isDemo}, ${userId},
+            ${r.profileOf ? "Profile tags describe how Qloo catalogues the brand; they are not an affinity measurement for the audience." : AFFINITY_LIMITATION}) returning id`;
         obs.push({ id: ev.id, claim, entityName: r.entity.name, entityType: r.entity.type, affinity: value, role: r.role });
       }
       return obs;

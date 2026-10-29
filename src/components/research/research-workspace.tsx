@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, ExternalLink, FlaskConical, History, Info, List, Loader2, Network, Play, RotateCw, Search, X } from "lucide-react";
 import * as React from "react";
+import { EntityImage } from "@/components/art/entity-image";
 import { ArtPlate, type PlateTheme } from "@/components/art/plate";
 import { CopilotPanel } from "@/components/copilot/copilot-panel";
 import { StageRail, type StageInfo } from "@/components/nav/stage-nav";
@@ -341,14 +342,14 @@ function RunOverview({ run, entities, projectId, generatorLabel, onSelect, theme
             {top.map((e) => (
               <li key={e.id}>
                 <button onClick={() => onSelect(e.id)} className="group w-full text-left">
-                  <ArtPlate theme={TYPE_THEME[e.type] ?? theme} seed={e.providerId} className="aspect-[4/5] w-full" />
+                  <EntityImage src={e.imageUrl} theme={TYPE_THEME[e.type] ?? theme} seed={e.providerId} className="aspect-[4/5] w-full" />
                   <p className="mt-1.5 line-clamp-2 text-[11px] font-medium leading-tight group-hover:text-violet">{e.name}</p>
                   <p className="text-[10px] text-muted">{e.type} · {e.affinity?.toFixed(2) ?? "—"}</p>
                 </button>
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-[10px] text-faint">Images are illustrative; values come from the provider.</p>
+          <p className="mt-2 text-[10px] text-faint">Photos come from Qloo where available; otherwise the artwork is illustrative. Values come from the provider.</p>
         </section>
       )}
     </>
@@ -367,10 +368,12 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
         <div>
           <p className="cc-eyebrow text-[10px] text-muted">{e.role === "seed" ? "Signal entity (from brief)" : e.role === "tag" ? "Taste tag" : `Entity · ${e.type}`}</p>
           <h2 className="cc-display mt-1 text-3xl">{e.name}</h2>
+          {e.profileOf && <p className="mt-1 text-[12px] text-muted">From Qloo’s profile of {e.profileOf}</p>}
         </div>
         <button onClick={onClose} className="rounded-full p-1.5 hover:bg-ink/5" aria-label="Close details"><X className="size-4" /></button>
       </div>
       {run.mode === "demo" && <DemoBadge className="mt-2" />}
+      {e.imageUrl && <EntityImage src={e.imageUrl} alt={e.name} theme="culture" seed={e.providerId} className="mt-4 aspect-[16/10] w-full" />}
       <div className="mt-4 rounded-cc-sm border border-line p-3">
         <p className="cc-eyebrow text-[9px] text-muted">Observed data · {run.mode === "demo" ? "demonstration fixture" : "Qloo"}</p>
         <dl className="mt-2 grid grid-cols-2 gap-y-2 text-[12px]">
@@ -383,7 +386,9 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
         {e.description && <p className="mt-2 text-[12px] text-muted">{e.description}</p>}
       </div>
       <p className="mt-3 text-[12px] leading-relaxed text-muted">
-        {e.role === "seed"
+        {e.profileOf
+          ? "Profile tags show how Qloo catalogues the brand itself. They describe the brand, not the audience’s affinity."
+          : e.role === "seed"
           ? "This entity was resolved from the brief and used as an input signal. Check that the provider matched the intended brand."
           : "Affinity is a relative measure of how strongly this entity correlates with the taste of people connected to the research signal. It does not show purchase intent, campaign effectiveness or causation."}
       </p>

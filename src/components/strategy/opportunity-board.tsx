@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { Bookmark, Eye, Link2, Search, X } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -120,7 +121,7 @@ export function OpportunityBoard({ projectId, opportunities, evidence, direction
                 <Link href={`/projects/${projectId}/evidence/${e.id}`} className="flex flex-col gap-2 px-5 py-3.5 hover:bg-ivory/70 md:flex-row md:items-center">
                   <Badge tone={EVIDENCE_LABEL[e.type]?.tone ?? "neutral"} className="w-fit shrink-0">{EVIDENCE_LABEL[e.type]?.label ?? e.type}</Badge>
                   <span className="min-w-0 flex-1 text-[13px]">{e.claim}</span>
-                  <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted">{e.isDemo && <DemoBadge label="Demo" />}{e.review.replace("_", " ")} · {timeAgo(e.createdAt)}</span>
+                  <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted">{e.isDemo && <DemoBadge label="Demo" />}{e.review.replace("_", " ")} · <Ago value={e.createdAt} /></span>
                 </Link>
               </li>
             ))}

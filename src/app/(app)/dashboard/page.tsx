@@ -32,7 +32,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-[1520px] px-4 pb-24 pt-8 sm:px-8">
-      <section className="grid gap-6 lg:grid-cols-[1fr_1.35fr]">
+      <section className="grid gap-6 lg:grid-cols-[1fr_1.35fr] [&>*]:min-w-0">
         <div className="flex flex-col justify-between gap-8 py-4">
           <div>
             <p className="cc-eyebrow text-muted">{ctx.workspace.name}</p>
@@ -82,7 +82,7 @@ export default async function DashboardPage() {
         )}
       </section>
 
-      <section className="mt-10 grid gap-5 lg:grid-cols-12">
+      <section className="mt-10 grid gap-5 lg:grid-cols-12 [&>*]:min-w-0">
         <div className="lg:col-span-7">
           <SectionTitle eyebrow="Recent work" title="Projects" action={<Link href="/projects" className="text-[13px] text-muted hover:text-ink">All projects →</Link>} />
           {rest.length === 0 ? (
@@ -144,7 +144,7 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      <section className="mt-5 grid gap-5 lg:grid-cols-12">
+      <section className="mt-5 grid gap-5 lg:grid-cols-12 [&>*]:min-w-0">
         <Surface className="p-5 lg:col-span-5">
           <SectionTitle eyebrow="Interpret" title="Recent opportunities" />
           {d.opportunities.length === 0 ? (

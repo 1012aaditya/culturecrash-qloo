@@ -86,7 +86,7 @@ export function ArtPlate({
         </defs>
         <rect width="200" height="260" fill={`url(#${id}-bg)`} />
         <rect width="200" height="260" fill={`url(#${id}-glow)`} />
-        <Motif theme={theme} id={id} r={r} colors={{ deep, mid, warm, light }} />
+        <Motif theme={theme} id={id} seed={hashString(`motif:${theme}:${seed}`)} colors={{ deep, mid, warm, light }} />
       </svg>
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-transparent" />
     </div>
@@ -95,7 +95,9 @@ export function ArtPlate({
 
 type C = { deep: string; mid: string; warm: string; light: string };
 
-function Motif({ theme, id, r, colors }: { theme: PlateTheme; id: string; r: () => number; colors: C }) {
+function Motif({ theme, id, seed, colors }: { theme: PlateTheme; id: string; seed: number; colors: C }) {
+  // Pure: a fresh generator per render, so repeated renders produce identical output.
+  const r = rand(seed);
   switch (theme) {
     case "beauty":
     case "youth":

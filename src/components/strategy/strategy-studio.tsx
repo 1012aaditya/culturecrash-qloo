@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { CheckCircle2, GitCompare, History, Loader2, PencilLine, Sparkles, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -93,7 +94,7 @@ function Territory({ d, projectId, canEdit, llm, className, wide, theme, generat
             <summary className="cursor-pointer text-[12px] font-medium">Evidence trail ({d.evidence.length}){d.evidence.length === 0 && " — no supporting observations; treat as exploratory"}</summary>
             <ul className="mt-2 space-y-1">{d.evidence.map((e) => <li key={e.id}><Link className="text-[12px] text-ink/80 hover:text-violet" href={`/projects/${projectId}/evidence/${e.id}`}>• {e.claim}</Link></li>)}</ul>
           </details>
-          <p className="text-[11px] text-faint">{generatorLabel} · revision {d.revision}{d.revisionNote ? ` · ${d.revisionNote.slice(0, 90)}` : ""} · {timeAgo(d.createdAt)}</p>
+          <p className="text-[11px] text-faint">{generatorLabel} · revision {d.revision}{d.revisionNote ? ` · ${d.revisionNote.slice(0, 90)}` : ""} · <Ago value={d.createdAt} /></p>
           <div className="flex flex-wrap gap-2 border-t border-line pt-4">
             {canEdit && !selected && <Button size="sm" onClick={() => setDialog("select")}><CheckCircle2 /> Select direction</Button>}
             {canEdit && <Button size="sm" variant="outline" onClick={() => setDialog("edit")}><PencilLine /> Edit</Button>}

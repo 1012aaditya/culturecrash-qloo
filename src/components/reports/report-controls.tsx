@@ -1,5 +1,6 @@
 "use client";
 
+import { When } from "@/components/ui/time";
 import { Copy, FileText, Link2, Loader2, Plus, Share2, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -107,7 +108,7 @@ export function ShareDialog({ reportVersionId, version, links, canShare, default
                   const expired = l.expiresAt && new Date(l.expiresAt) <= new Date();
                   return (
                     <li key={l.id} className="flex items-center gap-3 py-2">
-                      <span className="min-w-0 flex-1"><b className="font-medium">{l.label ?? "Untitled link"}</b> · v{l.version} · by {l.createdBy}<br /><span className="text-muted">{l.expiresAt ? `expires ${formatDateTime(l.expiresAt)}` : "no expiry"} · viewed {l.accessCount}×{l.lastAccessedAt ? `, last ${formatDateTime(l.lastAccessedAt)}` : ""}</span></span>
+                      <span className="min-w-0 flex-1"><b className="font-medium">{l.label ?? "Untitled link"}</b> · v{l.version} · by {l.createdBy}<br /><span className="text-muted">{l.expiresAt ? `expires $<When value={l.expiresAt} />` : "no expiry"} · viewed {l.accessCount}×{l.lastAccessedAt ? `, last $<When value={l.lastAccessedAt} />` : ""}</span></span>
                       {l.revokedAt ? <Badge tone="neutral">revoked</Badge> : expired ? <Badge tone="neutral">expired</Badge> : (
                         <Button size="sm" variant="ghost" onClick={() => start(async () => { const r = await revokeShareLinkAction(l.id); if (!r.ok) toast({ tone: "error", title: r.error }); else { toast({ tone: "success", title: "Link revoked" }); router.refresh(); } })}><Trash2 /> Revoke</Button>
                       )}

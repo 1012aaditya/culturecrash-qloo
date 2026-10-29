@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { LayoutGrid, List, Plus, Search, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
@@ -157,7 +158,7 @@ export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, use
                     {p.category && <p className="mt-1 text-[13px] text-white/70">{p.category}</p>}
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/15 pt-3 text-[11px] text-white/65">
                       <StageDots states={states} dark />
-                      <span>{runLabel(p) ?? "No research yet"} · {timeAgo(p.updatedAt)}</span>
+                      <span>{runLabel(p) ?? "No research yet"} · <Ago value={p.updatedAt} /></span>
                     </div>
                   </div>
                 </div>
@@ -182,7 +183,7 @@ export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, use
                   <td className="px-4 py-3"><StageDots states={stageStates(p)} /></td>
                   <td className="px-4 py-3 text-muted">{runLabel(p) ?? "—"}{p.isDemo && <DemoBadge className="ml-2" label="Demo" />}</td>
                   <td className="px-4 py-3 text-muted">{p.ownerId === userId ? "You" : p.ownerName ?? "—"}</td>
-                  <td className="px-4 py-3 text-muted">{timeAgo(p.updatedAt)}</td>
+                  <td className="px-4 py-3 text-muted"><Ago value={p.updatedAt} /></td>
                   <td className="px-2"><ProjectActions project={p} canEdit={canEdit} canDelete={canDeleteAny || p.ownerId === userId} /></td>
                 </tr>
               ))}

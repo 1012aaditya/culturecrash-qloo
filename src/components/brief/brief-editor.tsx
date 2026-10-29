@@ -1,5 +1,6 @@
 "use client";
 
+import { When } from "@/components/ui/time";
 import Link from "next/link";
 import { AlertCircle, CheckCircle2, CloudOff, FileText, Loader2, Sparkles, Trash2, Upload, Wand2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -143,7 +144,7 @@ export function BriefEditor({
   }
 
   const statusChip = {
-    idle: <span className="text-muted">Saved {formatDateTime(savedAt)}</span>,
+    idle: <span className="text-muted">Saved <When value={savedAt} /></span>,
     dirty: <span className="text-muted">Unsaved changes…</span>,
     saving: <span className="inline-flex items-center gap-1.5 text-muted"><Loader2 className="size-3.5 animate-spin" /> Saving</span>,
     saved: <span className="inline-flex items-center gap-1.5 text-success"><CheckCircle2 className="size-3.5" /> Saved</span>,

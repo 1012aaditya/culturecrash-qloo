@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -121,7 +122,7 @@ export function CommandBar({ data }: { data: ShellData }) {
                       <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", t.status === "failed" ? "bg-danger" : t.status === "completed" ? "bg-success" : "bg-violet cc-animate-pulse")} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">{t.label}</span>
-                        <span className="text-[11px] text-muted">{t.status.replace("_", " ")} · {timeAgo(t.updatedAt)}</span>
+                        <span className="text-[11px] text-muted">{t.status.replace("_", " ")} · <Ago value={t.updatedAt} /></span>
                       </span>
                     </Link>
                   </MenuItem>

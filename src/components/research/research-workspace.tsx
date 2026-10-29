@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago, When } from "@/components/ui/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, ExternalLink, FlaskConical, History, Info, List, Loader2, Network, Play, RotateCw, Search, X } from "lucide-react";
@@ -156,7 +157,7 @@ export function ResearchWorkspace(p: Props) {
             {p.run && (
               <p className="flex flex-wrap items-center gap-2 text-[11px] text-muted" role="status" aria-live="polite">
                 {isDemoRun && <DemoBadge />}
-                {runActive ? <span className="inline-flex items-center gap-1.5 text-violet"><Loader2 className="size-3 animate-spin" /> {live?.status ?? p.run.status} · {live?.calls ?? p.run.callCount} provider requests</span> : <span>Run {p.run.status} · {timeAgo(p.run.completedAt ?? p.run.createdAt)}</span>}
+                {runActive ? <span className="inline-flex items-center gap-1.5 text-violet"><Loader2 className="size-3 animate-spin" /> {live?.status ?? p.run.status} · {live?.calls ?? p.run.callCount} provider requests</span> : <span>Run {p.run.status} · <Ago value={p.run.completedAt ?? p.run.createdAt} /></span>}
                 {p.runs.length > 1 && <Link href={`/projects/${p.project.id}/research/history`} className="underline-offset-2 hover:underline">{p.runs.length} runs</Link>}
               </p>
             )}
@@ -376,7 +377,7 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
           <dt className="text-muted">Affinity</dt><dd className="text-right font-medium tabular-nums">{e.affinity?.toFixed(3) ?? "not returned"}</dd>
           <dt className="text-muted">Popularity</dt><dd className="text-right tabular-nums">{e.popularity?.toFixed(3) ?? "not returned"}</dd>
           <dt className="text-muted">Provider ID</dt><dd className="truncate text-right font-mono text-[10px]" title={e.providerId}>{e.providerId}</dd>
-          <dt className="text-muted">Retrieved</dt><dd className="text-right">{formatDateTime(e.retrievedAt)}</dd>
+          <dt className="text-muted">Retrieved</dt><dd className="text-right"><When value={e.retrievedAt} /></dd>
         </dl>
         {e.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{e.tags.map((t) => <Badge key={t} tone="outline">{t}</Badge>)}</div>}
         {e.description && <p className="mt-2 text-[12px] text-muted">{e.description}</p>}
@@ -390,7 +391,7 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
         <div className="mt-3 text-[11px] text-muted">
           <p className="font-medium text-ink">Source</p>
           <p className="mt-0.5 font-mono">{source.endpoint} · {Object.entries(source.params).map(([k, v]) => `${k}=${v}`).join(" & ").slice(0, 160)}</p>
-          <p>HTTP {source.httpStatus ?? "—"} · {source.resultCount} results · {formatDateTime(source.retrievedAt)}</p>
+          <p>HTTP {source.httpStatus ?? "—"} · {source.resultCount} results · <When value={source.retrievedAt} /></p>
         </div>
       )}
       {related.length > 0 && (

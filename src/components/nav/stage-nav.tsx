@@ -25,10 +25,11 @@ const tabs: Record<StageKey, { href: string; label: string }[]> = {
 export function StageNav({ projectId, stages }: { projectId: string; stages: Record<StageKey, StageInfo> }) {
   const pathname = usePathname();
   const active = stageForPath(pathname);
-  if (/\/research$/.test(pathname)) return null;
+  // The research canvas has its own immersive vertical rail on wide screens.
+  const research = /\/research$/.test(pathname);
   const sub = pathname.split(`/projects/${projectId}/`)[1] ?? "";
   return (
-    <div className="cc-no-print space-y-3">
+    <div className={cn("cc-no-print space-y-3", research && "xl:hidden")}>
       <nav aria-label="Campaign workflow" className="cc-glass-dark flex gap-1 overflow-x-auto rounded-full p-1.5 text-white">
         {STAGES.map((s) => {
           const Icon = icons[s.key];

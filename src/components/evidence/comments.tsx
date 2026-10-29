@@ -1,5 +1,6 @@
 "use client";
 
+import { Ago } from "@/components/ui/time";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import { addCommentAction } from "@/lib/data/evidence-actions";
@@ -23,7 +24,7 @@ export function Comments({ projectId, targetType, targetId, comments, canComment
         {comments.map((c) => (
           <li key={c.id} className="flex gap-2.5 text-[13px]">
             <Avatar name={c.author} className="size-7 text-[10px]" />
-            <div><p><b className="font-medium">{c.author}</b> <span className="text-[11px] text-faint">{timeAgo(c.createdAt)}</span></p><p className="whitespace-pre-wrap text-muted">{c.body}</p></div>
+            <div><p><b className="font-medium">{c.author}</b> <span className="text-[11px] text-faint"><Ago value={c.createdAt} /></span></p><p className="whitespace-pre-wrap text-muted">{c.body}</p></div>
           </li>
         ))}
       </ul>

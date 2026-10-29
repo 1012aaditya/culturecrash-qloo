@@ -153,6 +153,13 @@ function parseEntities(body: unknown): NormalizedEntity[] {
 function safeMessage(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
+  // Documented shape: {"errors":[{"message":"…","path":"signal.interests.entities"}]}
+  if (Array.isArray(o.errors)) {
+    const msgs = o.errors
+      .map((e) => (e && typeof e === "object" ? [String((e as Record<string, unknown>).message ?? ""), (e as Record<string, unknown>).path ? `(${String((e as Record<string, unknown>).path)})` : ""].join(" ").trim() : ""))
+      .filter(Boolean);
+    if (msgs.length) return msgs.join("; ").replace(/\s+/g, " ").slice(0, 240);
+  }
   for (const k of ["error", "message", "detail"]) {
     const v = o[k];
     if (typeof v === "string") return v.replace(/\s+/g, " ").slice(0, 160);

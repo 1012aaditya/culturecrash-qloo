@@ -1,6 +1,14 @@
 # Qloo integration — status and verification
 
-## Status: implemented, **not yet verified against the live API**
+## Status: key verified live; `/search` confirmed; insights pending
+
+On 2026-10-29 the project owner ran `/search` from their own machine with the hackathon key against
+`https://hackathon.api.qloo.com`. It returned a valid entity, so **the key and base URL work**. Observed
+shape: `{"results":[{ "name", "entity_id", "types":["urn:entity:brand"], "popularity", "disambiguation",
+"properties":{ "short_description", "description", "akas", "image":{"url"}, … }, "tags":[{ "name",
+"tag_id", "type" }] }]}`. The adapter normalises this shape (covered by unit tests with invented values).
+Qloo errors arrive as `{"errors":[{"message","path"}]}` and are now surfaced verbatim. `/v2/insights` and
+taste tags still need one live call each.
 
 `QLOO_API_KEY` is present in the build environment, but the environment's network policy blocks
 `hackathon.api.qloo.com`, `api.qloo.com`, `staging.api.qloo.com` and `docs.qloo.com` (the egress proxy

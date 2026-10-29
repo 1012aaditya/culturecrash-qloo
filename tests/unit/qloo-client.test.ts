@@ -92,3 +92,23 @@ describe("QlooClient — hackathon guide error cases", () => {
     expect(ENTITY_TYPES).not.toContain("urn:entity:videogame" as never);
   });
 });
+
+describe("QlooClient — shapes observed from the live hackathon API", () => {
+  // Same structure as a real /search response (values invented; Qloo data is not committed).
+  const searchShape = { results: [{ name: "Example Beauty", entity_id: "11111111-2222-3333-4444-555555555555", types: ["urn:entity:brand"], popularity: 0.98, disambiguation: "",
+    properties: { short_description: "A beauty retailer.", akas: [{ language: "fr", value: "Exemple" }], image: { url: "https://images.example/x.jpg" } },
+    tags: [{ name: "Skincare", tag_id: "urn:tag:keyword:qloo:skincare", type: "urn:tag:keyword:qloo" }] }] };
+
+  it("normalises a live-shaped /search response (results array, types[] instead of type)", async () => {
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", vi.fn(async () => json(200, searchShape)), noSleep);
+    const call = await c.search("Example", ["urn:entity:brand"], 2);
+    expect(call.status).toBe("ok");
+    expect(call.data[0]).toMatchObject({ providerId: "11111111-2222-3333-4444-555555555555", name: "Example Beauty", type: "brand", popularity: 0.98, affinity: null, description: "A beauty retailer.", tags: ["Skincare"] });
+  });
+
+  it("surfaces the documented {errors:[{message,path}]} error shape", async () => {
+    const body = { errors: [{ message: "the signal.interests.entities parameter contains invalid entity ids", path: "signal.interests.entities" }] };
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", vi.fn(async () => json(400, body)), noSleep);
+    await expect(c.insights({ filterType: "urn:entity:artist", signalEntities: ["bad"] })).rejects.toThrow(/contains invalid entity ids \(signal.interests.entities\)/);
+  });
+});

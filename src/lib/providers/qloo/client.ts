@@ -72,6 +72,12 @@ export class QlooClient {
         }
         // Search answers 404 for "no results"; treat it as empty.
         if (res.status === 404 && path === "/search") return { status: 404, body: { results: [] }, durationMs };
+        if (res.status === 401) {
+          throw new QlooError("Qloo rejected the API key (401). Hackathon keys only work against https://hackathon.api.qloo.com — check QLOO_API_URL and QLOO_API_KEY.", "unauthorized", 401);
+        }
+        if (res.status === 403) {
+          throw new QlooError(`Qloo denied this request (403)${safeMessage(body) ? `: ${safeMessage(body)}` : ""}. The entity type is likely not enabled for this key.`, "forbidden_type", 403);
+        }
         if (!res.ok) {
           const msg = safeMessage(body);
           throw new QlooError(`Qloo returned HTTP ${res.status}${msg ? `: ${msg}` : ""}`, "http", res.status);

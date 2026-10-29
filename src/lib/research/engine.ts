@@ -29,7 +29,7 @@ export function buildPlan(b: BriefInput): ResearchPlan {
   const targets: EntityTypeUrn[] = ["urn:entity:brand", "urn:entity:artist", "urn:entity:tv_show", "urn:entity:podcast"];
   if (b.market) targets.push("urn:entity:place");
   if (/travel|hotel|tourism|hospitality/.test(cat)) targets.push("urn:entity:destination");
-  if (/game|gaming|esport/.test(cat)) targets.push("urn:entity:videogame");
+  if (/game|gaming|esport/.test(cat)) targets.push("urn:entity:video_game");
   if (/book|publish|education/.test(cat)) targets.push("urn:entity:book");
   const notes = [
     "The audience description is used for interpretation only; Qloo signals are built from resolved entities and location.",
@@ -102,10 +102,12 @@ export async function executeRun(userId: string, runId: string) {
   try {
     let attempted = 0;
     let failures = 0;
+    let hardFailures = 0; // network/timeout/5xx — a 403 on one entity type does not count
+    const emptyTypes: string[] = [];
     let firstError: QlooError | null = null;
     const record = async (call: Partial<QlooCall<unknown>> & { endpoint: string; params: Record<string, string> }) => withUser(userId, (tx) => recordSource(tx, runId, ws, provider, call));
     const guard = async <T,>(endpoint: string, params: Record<string, string>, fn: () => Promise<QlooCall<T>>): Promise<{ call: QlooCall<T>; sourceId: string } | null> => {
-      if (failures >= 3 && failures === attempted) throw firstError ?? new QlooError("Provider unreachable", "network");
+      if (hardFailures >= 3 && failures === attempted) throw firstError ?? new QlooError("Provider unreachable", "network");
       attempted++;
       try {
         const call = await fn();
@@ -113,7 +115,12 @@ export async function executeRun(userId: string, runId: string) {
       } catch (e) {
         failures++;
         const err = e instanceof QlooError ? e : new QlooError("Unexpected provider error", "network");
+        if (err.code === "unauthorized" || err.code === "missing_key") {
+          await record({ endpoint, params, status: "error", httpStatus: err.httpStatus, error: `${err.code}: ${err.message}`, raw: null, data: [] as never });
+          throw err; // a bad key or base URL fails every call: stop immediately
+        }
         firstError ??= err;
+        if (err.code !== "forbidden_type") hardFailures++;
         await record({ endpoint, params, status: "error", httpStatus: err.httpStatus, error: `${err.code}: ${err.message}`, raw: null, data: [] as never });
         return null;
       }
@@ -154,6 +161,7 @@ export async function executeRun(userId: string, runId: string) {
       };
       if (!seedIds.length && !isPlace && !params.signalLocationQuery) continue;
       const res = await guard("/v2/insights", { "filter.type": target }, () => client.insights(params));
+      if (res && res.call.status === "empty") emptyTypes.push(target.replace("urn:entity:", ""));
       res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result" }));
     }
     if (plan.includeTags && (seedIds.length || plan.location)) {
@@ -232,6 +240,11 @@ export async function executeRun(userId: string, runId: string) {
       interpretation = templateInterpretation(brief!, observations, seedNames);
     }
 
+    if (emptyTypes.length) {
+      interpretation.missingInformation.push(
+        `Qloo returned no entities for: ${emptyTypes.join(", ")}. Qloo silently ignores parameters that are not valid for an entity type, so an empty result may reflect parameter support rather than an absence of cultural data.`,
+      );
+    }
     await withUser(userId, async (tx) => {
       for (const f of interpretation.findings.filter((f) => f.kind === "interpretation")) {
         await tx`insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
@@ -256,6 +269,8 @@ export async function executeRun(userId: string, runId: string) {
 export function humanQlooError(e: QlooError) {
   switch (e.code) {
     case "missing_key": return "Qloo is not configured on this server (QLOO_API_KEY is missing).";
+    case "unauthorized": return "Qloo rejected the API key (401). Hackathon keys only work with QLOO_API_URL=https://hackathon.api.qloo.com.";
+    case "forbidden_type": return "Qloo denied access to the requested entity types (403) for this key.";
     case "rate_limited": return "Qloo’s rate limit was reached after bounded retries. Wait a minute and retry.";
     case "timeout": return "Qloo did not respond in time after bounded retries. Retry shortly.";
     case "network": return "The server could not reach the Qloo API. Check outbound network access to the Qloo host and retry.";

@@ -74,3 +74,21 @@ describe("QlooClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("QlooClient — hackathon guide error cases", () => {
+  it("maps 401 to an actionable base-URL/key error without retrying", async () => {
+    const fetcher = vi.fn(async () => json(401, { error: "No API key found in request" }));
+    const c = new QlooClient("k-12345678", "https://api.qloo.com", fetcher, noSleep);
+    await expect(c.insights({ filterType: "urn:entity:movie", signalEntities: ["s"] })).rejects.toMatchObject({ code: "unauthorized" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("maps 403 to an entity-type permission error", async () => {
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", vi.fn(async () => json(403, { error: "You do not have permission to access urn:entity:video_game" })), noSleep);
+    await expect(c.insights({ filterType: "urn:entity:video_game", signalEntities: ["s"] })).rejects.toMatchObject({ code: "forbidden_type", httpStatus: 403 });
+  });
+  it("uses the documented video_game URN", async () => {
+    const { ENTITY_TYPES } = await import("@/lib/providers/qloo/types");
+    expect(ENTITY_TYPES).toContain("urn:entity:video_game");
+    expect(ENTITY_TYPES).not.toContain("urn:entity:videogame" as never);
+  });
+});

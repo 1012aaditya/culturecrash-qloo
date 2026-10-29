@@ -18,7 +18,7 @@ export const ENTITY_TYPES = [
   "urn:entity:tv_show",
   "urn:entity:book",
   "urn:entity:podcast",
-  "urn:entity:videogame",
+  "urn:entity:video_game",
   "urn:entity:place",
   "urn:entity:destination",
   "urn:entity:person",
@@ -92,7 +92,7 @@ export type QlooCall<T> = {
 export class QlooError extends Error {
   constructor(
     message: string,
-    readonly code: "missing_key" | "network" | "timeout" | "http" | "rate_limited" | "invalid_response",
+    readonly code: "missing_key" | "unauthorized" | "forbidden_type" | "network" | "timeout" | "http" | "rate_limited" | "invalid_response",
     readonly httpStatus: number | null = null,
   ) {
     super(message);

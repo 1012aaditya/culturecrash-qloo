@@ -13,12 +13,12 @@ const CY = H / 2 + 10;
 
 export const TYPE_THEME: Record<string, PlateTheme> = {
   artist: "music", place: "travel", destination: "travel", brand: "beauty", tv_show: "culture", movie: "culture",
-  podcast: "youth", book: "architecture", videogame: "youth", person: "fashion",
+  podcast: "youth", book: "architecture", video_game: "youth", person: "fashion",
 };
 
 export const TYPE_LABEL: Record<string, string> = {
   brand: "Brands", artist: "Music", tv_show: "TV", movie: "Film", podcast: "Podcasts", place: "Places", destination: "Destinations",
-  book: "Books", videogame: "Games", person: "People", tag: "Taste tags",
+  book: "Books", video_game: "Games", person: "People", tag: "Taste tags",
 };
 
 type Positioned = EntityRow & { x: number; y: number; card: boolean };

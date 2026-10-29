@@ -10,7 +10,7 @@ test("Scenario G — owner sets retention and deletes a workspace", async ({ pag
 
   // Retention is saved.
   await page.selectOption("#ws-retention", "90");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save retention" }).click();
   await expect(page.getByText("Retention updated")).toBeVisible();
   await page.reload();
   await expect(page.locator("#ws-retention")).toHaveValue("90");

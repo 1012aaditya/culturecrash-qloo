@@ -97,7 +97,7 @@ export function RetentionForm({ days, canManage }: { days: number | null; canMan
           {RETENTION.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </Select>
       </Field>
-      {canManage && <Button type="submit" variant="outline" disabled={pending || value === (days ? String(days) : "")} className="sm:mb-[22px]">{pending ? "Saving…" : "Save"}</Button>}
+      {canManage && <Button type="submit" variant="outline" aria-label="Save retention" disabled={pending || value === (days ? String(days) : "")} className="sm:mb-[22px]">{pending ? "Saving…" : "Save"}</Button>}
     </form>
   );
 }
@@ -168,7 +168,7 @@ export function ResearchLimitsForm({ budgetUsd, perUserDaily, canManage }: { bud
       <Field label="Research runs per person per day" htmlFor="rb-user">
         <Input id="rb-user" type="number" min={1} max={200} value={perUser} onChange={(e) => setPerUser(e.target.value)} disabled={!canManage} />
       </Field>
-      {canManage && <Button type="submit" variant="outline" disabled={pending} className="sm:mb-[22px]">{pending ? "Saving…" : "Save"}</Button>}
+      {canManage && <Button type="submit" variant="outline" aria-label="Save research limits" disabled={pending} className="sm:mb-[22px]">{pending ? "Saving…" : "Save"}</Button>}
     </form>
   );
 }

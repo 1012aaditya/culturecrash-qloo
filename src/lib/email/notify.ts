@@ -11,24 +11,26 @@ const wants = (prefs: Prefs, key: string) => prefs?.[key] === true;
 export async function notifyResearchFinished(userId: string, runId: string) {
   const row = await withUser(userId, async (tx) => {
     const [r] = await tx`
-      select r.status, r.mode, r.error_message, r.project_id, r.workspace_id, p.name as project, pr.email, pr.notification_prefs,
+      select r.status, r.mode, r.depth, r.error_message, r.project_id, r.workspace_id, p.name as project, pr.email, pr.notification_prefs,
+        (r.usage->>'documents')::int as documents, (r.usage->>'claims')::int as claims,
         (select count(*)::int from cultural_entities e where e.run_id = r.id and e.role <> 'seed') as entities
       from research_runs r join projects p on p.id = r.project_id join profiles pr on pr.id = ${userId}
       where r.id = ${runId}`;
-    if (r && ["completed", "failed"].includes(r.status)) {
-      const ok = r.status === "completed";
+    if (r && ["completed", "partially_completed", "failed"].includes(r.status)) {
+      const ok = r.status !== "failed";
       await createNotification(tx, {
         workspaceId: r.workspace_id, userId, actorId: null, kind: ok ? "research_completed" : "research_failed",
         title: ok ? `Research finished · ${r.project}` : `Research failed · ${r.project}`,
-        body: ok ? `${r.entities} entities and taste tags${r.mode === "demo" ? " (demonstration data)" : ""}.` : (r.error_message ?? "The run did not complete."),
+        body: !ok ? (r.error_message ?? "The run did not complete.")
+          : `${r.depth ? `${r.documents ?? 0} sources, ${r.claims ?? 0} cited claims` : `${r.entities} entities and taste tags`}${r.status === "partially_completed" ? " — partial report" : ""}${r.mode === "demo" ? " (demonstration data)" : ""}.`,
         href: `/projects/${r.project_id}/research?run=${runId}`,
       });
     }
     return r;
   });
-  if (!row || !["completed", "failed"].includes(row.status) || !row.email || !wants(row.notification_prefs, "research_completed")) return;
+  if (!row || !["completed", "partially_completed", "failed"].includes(row.status) || !row.email || !wants(row.notification_prefs, "research_completed")) return;
   await sendEmail(researchFinishedEmail({
-    to: row.email, project: row.project, projectId: row.project_id, runId, ok: row.status === "completed",
+    to: row.email, project: row.project, projectId: row.project_id, runId, ok: row.status !== "failed",
     entities: row.entities, error: row.error_message, demo: row.mode === "demo",
   }));
 }

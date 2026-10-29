@@ -112,3 +112,20 @@ describe("QlooClient — shapes observed from the live hackathon API", () => {
     await expect(c.insights({ filterType: "urn:entity:artist", signalEntities: ["bad"] })).rejects.toThrow(/contains invalid entity ids \(signal.interests.entities\)/);
   });
 });
+
+describe("QlooClient — live /v2/insights shapes", () => {
+  it("prefers subtype over the generic type 'urn:entity' on insights entities", async () => {
+    const body = { success: true, results: { entities: [{ name: "Example Artist", entity_id: "A-1", type: "urn:entity", subtype: "urn:entity:artist", properties: {}, query: { affinity: 0.91 } }] } };
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", vi.fn(async () => json(200, body)), noSleep);
+    const call = await c.insights({ filterType: "urn:entity:artist", signalEntities: ["s"] });
+    expect(call.data[0]).toMatchObject({ type: "artist", affinity: 0.91 });
+  });
+  it("parses tag insights and sends filter.tag.types", async () => {
+    const body = { success: true, results: { tags: [{ tag_id: "urn:tag:lifestyle:qloo:self_care_routine", name: "Self-Care Routine", subtype: "urn:tag:lifestyle:qloo", popularity: 0.9, query: { affinity: 0.97 } }] } };
+    const fetcher = vi.fn(async () => json(200, body));
+    const c = new QlooClient("k-12345678", "https://hackathon.api.qloo.com", fetcher, noSleep);
+    const call = await c.tagInsights({ signalEntities: ["s"], signalLocationQuery: "India", filterTagTypes: ["urn:tag:lifestyle:qloo"] });
+    expect(new URL((fetcher.mock.calls[0] as unknown as [string])[0]).searchParams.get("filter.tag.types")).toBe("urn:tag:lifestyle:qloo");
+    expect(call.data[0]).toMatchObject({ name: "Self-Care Routine", type: "urn:tag:lifestyle:qloo", affinity: 0.97 });
+  });
+});

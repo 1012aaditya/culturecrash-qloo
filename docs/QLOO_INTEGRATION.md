@@ -1,6 +1,6 @@
 # Qloo integration — status and verification
 
-## Status: key verified live; `/search` confirmed; insights pending
+## Status: key, `/search`, `/v2/insights` (entities, tags, location) verified live
 
 On 2026-10-29 the project owner ran `/search` from their own machine with the hackathon key against
 `https://hackathon.api.qloo.com`. It returned a valid entity, so **the key and base URL work**. Observed
@@ -8,7 +8,18 @@ shape: `{"results":[{ "name", "entity_id", "types":["urn:entity:brand"], "popula
 "properties":{ "short_description", "description", "akas", "image":{"url"}, … }, "tags":[{ "name",
 "tag_id", "type" }] }]}`. The adapter normalises this shape (covered by unit tests with invented values).
 Qloo errors arrive as `{"errors":[{"message","path"}]}` and are now surfaced verbatim. `/v2/insights` and
-taste tags still need one live call each.
+taste tags were then confirmed live too:
+- `/v2/insights?filter.type=urn:entity:artist&signal.interests.entities=…&feature.explainability=true` →
+  `{"success":true,"results":{"entities":[{ "name","entity_id","type":"urn:entity","subtype":"urn:entity:artist","properties":{…} … }]}}`.
+  The real category is in `subtype` (the adapter reads it first).
+- `filter.type=urn:tag` with `signal.location.query=India` → `results.tags[]` with `tag_id`, `name`,
+  `subtype`, `popularity` and `query.affinity`; `query.localities.signal` shows India resolved to a locality.
+  Without a tag-type filter it returned generic genre tags ("Actor", "Hotel"), so the engine now sends
+  `filter.tag.types` with taste-oriented tag types and drops `urn:tag:genre:*` results as a safeguard.
+- `filter.type=urn:entity:place&filter.location.query=India` → real Indian places.
+
+Still to confirm: `query.affinity` on entity results (the output was truncated before it) and whether
+`filter.tag.types` is honoured.
 
 `QLOO_API_KEY` is present in the build environment, but the environment's network policy blocks
 `hackathon.api.qloo.com`, `api.qloo.com`, `staging.api.qloo.com` and `docs.qloo.com` (the egress proxy

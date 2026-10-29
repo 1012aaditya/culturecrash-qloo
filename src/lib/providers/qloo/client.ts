@@ -11,6 +11,8 @@ export type InsightsParams = {
   filterType: EntityTypeUrn | "urn:tag" | "urn:demographics";
   signalEntities?: string[];
   signalLocationQuery?: string;
+  /** Restrict urn:tag insights to these tag types (e.g. urn:tag:lifestyle:qloo). */
+  filterTagTypes?: string[];
   signalDemographicsAge?: string;
   filterLocationQuery?: string;
   take?: number;
@@ -141,6 +143,7 @@ function insightParams(p: InsightsParams): Record<string, string> {
   if (p.signalDemographicsAge) params["signal.demographics.age"] = p.signalDemographicsAge;
   if (p.excludeEntities?.length) params["filter.exclude.entities"] = p.excludeEntities.join(",");
   if (p.explainability) params["feature.explainability"] = "true";
+  if (p.filterTagTypes?.length) params["filter.tag.types"] = p.filterTagTypes.join(",");
   return params;
 }
 

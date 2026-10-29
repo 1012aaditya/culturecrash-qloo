@@ -1,8 +1,9 @@
 "use server";
 
+import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { generateStructured, llmConfigured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
+import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
 import { latestCompletedRun, readObservations } from "@/lib/ai/context";
 import {
   comparisonSchema, creativeBriefSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, sectionRevisionSchema, strategySchema,
@@ -65,7 +66,7 @@ export async function generateOpportunitiesAction(projectId: string): Promise<Re
 
   let out = templateOpportunities(input.brief, input.obs);
   let generator = input.run.mode === "demo" ? "demo-template" : TEMPLATE_GENERATOR;
-  if (input.run.mode === "live" && llmConfigured()) {
+  if (input.run.mode === "live" && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
       const r = await generateStructured({
         schema: opportunitiesSchema,
@@ -133,7 +134,7 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
   const demo = input.run?.mode === "demo";
   let directions: DirectionContent[];
   let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
-  if (!demo && llmConfigured()) {
+  if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
       const r = await generateStructured({
         schema: strategySchema,
@@ -212,7 +213,7 @@ export async function reviseDirectionAction(directionId: string, instruction: st
   if (!isUuid(directionId) || text.length < 4 || text.length > 1000) return { ok: false, error: "Describe the revision in 4–1000 characters." };
   const ctx = await authorize("strategy.edit");
   if (!isCtx(ctx)) return ctx;
-  if (!llmConfigured()) return { ok: false, error: "Targeted AI revisions need an LLM provider (ANTHROPIC_API_KEY). You can still edit every field directly and a new version will be saved." };
+  if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE} You can still edit every field directly and a new version will be saved.` };
   const ctxData = await withUser(ctx.user.id, async (tx) => {
     const [d] = await tx`select * from strategy_directions where id = ${directionId}`;
     if (!d) return null;
@@ -264,7 +265,7 @@ export async function compareDirectionsAction(projectId: string, versionId: stri
   }));
   const dirs = data.dirs.map((d) => ({ name: d.name as string, content: d.content as DirectionContent, evidenceCount: (d.evidence_ids as string[]).length }));
   if (!dirs.length) return { ok: false, error: "No directions in this version." };
-  if (!llmConfigured()) return { ok: true, data: { ...templateComparison(dirs, data.brief), generator: TEMPLATE_GENERATOR } };
+  if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: true, data: { ...templateComparison(dirs, data.brief), generator: TEMPLATE_GENERATOR } };
   try {
     const r = await generateStructured({
       schema: comparisonSchema,
@@ -295,7 +296,7 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
   const direction = input.d.content as DirectionContent;
   let content: CreativeBriefContent = templateCreativeBrief(input.brief, direction);
   let generator = input.d.is_demo ? "demo-template" : TEMPLATE_GENERATOR;
-  if (!input.d.is_demo && llmConfigured()) {
+  if (!input.d.is_demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
       const r = await generateStructured({
         schema: creativeBriefSchema,
@@ -340,7 +341,7 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
   if (!isUuid(briefId) || !sectionKey.safeParse(key).success || instruction.trim().length < 4) return { ok: false, error: "Describe the change you want." };
   const ctx = await authorize("strategy.edit");
   if (!isCtx(ctx)) return ctx;
-  if (!llmConfigured()) return { ok: false, error: "AI section revisions need an LLM provider. Edit the section directly instead." };
+  if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE} Edit the section directly instead.` };
   const cb = await withUser(ctx.user.id, async (tx) => (await tx`select content, project_id from creative_briefs where id = ${briefId}`)[0]);
   if (!cb) return { ok: false, error: "Creative brief not found." };
   try {

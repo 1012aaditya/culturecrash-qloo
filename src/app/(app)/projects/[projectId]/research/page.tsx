@@ -1,7 +1,8 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import { themeForCategory } from "@/components/art/plate";
 import { ResearchWorkspace } from "@/components/research/research-workspace";
-import { generatorLabel, llmConfigured } from "@/lib/ai";
+import { generatorLabel } from "@/lib/ai";
 import { loadConversation } from "@/lib/ai/copilot-actions";
 import { withUser } from "@/lib/db";
 import { demoModeAllowed, env } from "@/lib/env";
@@ -43,7 +44,7 @@ export default async function ResearchPage({ params, searchParams }: PageProps<"
       canRun={can(ctx.workspace.role, "research.run")}
       demoAllowed={demoModeAllowed()}
       qlooConfigured={Boolean(env().QLOO_API_KEY)}
-      llm={llmConfigured()}
+      llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)}
       generatorLabel={view.run?.interpretationGenerator ? generatorLabel(view.run.interpretationGenerator) : null}
       copilot={copilot}
       user={{ name: firstName(ctx), workspace: ctx.workspace.name }}

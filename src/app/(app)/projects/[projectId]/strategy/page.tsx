@@ -1,3 +1,4 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
@@ -6,7 +7,7 @@ import { EmptyState } from "@/components/states";
 import { GenerateButton } from "@/components/strategy/generate-button";
 import { CompareLink, StrategyStudio } from "@/components/strategy/strategy-studio";
 import { Button } from "@/components/ui/button";
-import { generatorLabel, llmConfigured } from "@/lib/ai";
+import { generatorLabel } from "@/lib/ai";
 import { getProjectContext } from "@/lib/data/project-context";
 import { getStrategy } from "@/lib/data/strategy";
 import { can } from "@/lib/permissions";
@@ -21,7 +22,7 @@ export default async function StrategyPage({ params, searchParams }: PageProps<"
   const { ctx, project } = await getProjectContext(projectId);
   const s = await getStrategy(ctx, projectId, typeof sp.version === "string" ? Number(sp.version) : null);
   const canEdit = can(ctx.workspace.role, "strategy.edit");
-  const llm = llmConfigured();
+  const llm = await llmEnabled(ctx.user.id, ctx.workspace.workspaceId);
   return (
     <div>
       <div className="mb-10 grid gap-6 md:grid-cols-[1.25fr_1fr] md:items-end">

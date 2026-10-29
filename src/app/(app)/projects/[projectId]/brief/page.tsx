@@ -1,6 +1,6 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import { BriefEditor } from "@/components/brief/brief-editor";
-import { llmConfigured } from "@/lib/ai";
 import { withUser } from "@/lib/db";
 import { loadBrief, validateBrief } from "@/lib/data/briefs";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -33,7 +33,7 @@ export default async function BriefPage({ params, searchParams }: PageProps<"/pr
         revision={b.revision}
         updatedAt={b.updatedAt}
         canEdit={can(ctx.workspace.role, "brief.edit") && project.status !== "archived"}
-        llm={llmConfigured()}
+        llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)}
         issues={validateBrief(b)}
         initial={{
           brand: b.brand, product: b.product, category: b.category, market: b.market, audience: b.audience, objective: b.objective,

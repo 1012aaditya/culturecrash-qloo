@@ -117,7 +117,7 @@ export default async function IntegrationsPage() {
           details={[
             ["Model", s.llmModel],
             ["API key", masked(e.ANTHROPIC_API_KEY)],
-            ["Without a key", "labelled template drafts, no model calls"],
+            ["Without a key, or switched off", "labelled template drafts, no model calls"],
           ]}
         >
           <IntegrationControls provider="llm" enabled={prefs.llm.enabled} canManage={canManage} />
@@ -165,7 +165,8 @@ export default async function IntegrationsPage() {
       </div>
       <p className="text-[12px] text-muted">
         Note: provider credentials come from the server configuration above. Turning Qloo off here blocks new live research runs in this workspace,
-        and the default location is used as the location signal when a brief has no market. The LLM and web-research switches are recorded but not yet enforced.
+        and the default location is used as the location signal when a brief has no market. Turning the LLM off makes every draft in this workspace
+        come from the labelled template engine, and no brief, evidence or document text is sent to the model provider.
       </p>
     </div>
   );

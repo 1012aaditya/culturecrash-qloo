@@ -1,11 +1,12 @@
 "use server";
 
+import { llmEnabled } from "@/lib/ai/enabled";
 import { z } from "zod";
 import { withUser } from "@/lib/db";
 import { loadBrief } from "@/lib/data/briefs";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
-import { generateStructured, llmConfigured, tag, TEMPLATE_GENERATOR } from "./index";
+import { generateStructured, tag, TEMPLATE_GENERATOR } from "./index";
 import { readObservations } from "./context";
 import { copilotAnswerSchema, type CopilotAnswer } from "./schemas";
 import { templateCopilot } from "./template";
@@ -40,7 +41,7 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
 
   let answer: CopilotAnswer;
   let generator = TEMPLATE_GENERATOR;
-  if (llmConfigured()) {
+  if (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) {
     try {
       const out = await generateStructured({
         schema: copilotAnswerSchema,

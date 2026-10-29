@@ -1,3 +1,4 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
@@ -5,7 +6,7 @@ import { DemoBadge, EmptyState } from "@/components/states";
 import { CreativeBriefEditor } from "@/components/strategy/creative-brief-editor";
 import { GenerateButton } from "@/components/strategy/generate-button";
 import { Button } from "@/components/ui/button";
-import { generatorLabel, llmConfigured } from "@/lib/ai";
+import { generatorLabel } from "@/lib/ai";
 import { withUser } from "@/lib/db";
 import { loadCreativeBrief } from "@/lib/data/creative";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -50,7 +51,7 @@ export default async function CreativeBriefPage({ params }: PageProps<"/projects
         </div>
       </header>
       <div className="mt-8 rounded-[32px] border border-line bg-paper px-6 md:px-12">
-        <CreativeBriefEditor briefId={cb.id} content={cb.content} revision={cb.revision} canEdit={canEdit} llm={llmConfigured()} />
+        <CreativeBriefEditor briefId={cb.id} content={cb.content} revision={cb.revision} canEdit={canEdit} llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)} />
       </div>
       <section className="mt-8 rounded-[32px] border border-line bg-paper p-8">
         <h2 className="cc-display text-3xl">Supporting evidence</h2>

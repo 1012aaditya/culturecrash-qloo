@@ -1,5 +1,6 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import "server-only";
-import { generateStructured, llmConfigured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
+import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { researchInterpretationSchema, type ResearchInterpretation } from "@/lib/ai/schemas";
 import { templateInterpretation, type BriefInput, type Observation } from "@/lib/ai/template";
 import { withUser, type Tx } from "@/lib/db";
@@ -251,7 +252,7 @@ export async function executeRun(userId: string, runId: string) {
     if (isDemo) {
       interpretation = templateInterpretation(brief!, observations, seedNames);
       generator = "demo-template";
-    } else if (llmConfigured() && observations.some((o) => o.role !== "seed")) {
+    } else if ((await llmEnabled(userId, ws)) && observations.some((o) => o.role !== "seed")) {
       try {
         const out = await generateStructured({ schema: researchInterpretationSchema, prompt: interpretationPrompt(brief!, observations, plan) });
         const valid = new Set(observations.map((o) => o.id));

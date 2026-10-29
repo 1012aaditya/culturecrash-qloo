@@ -1,8 +1,9 @@
 "use server";
 
+import { llmEnabled } from "@/lib/ai/enabled";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { generateStructured, llmConfigured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
+import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { briefExtractionSchema, type BriefExtraction } from "@/lib/ai/schemas";
 import { templateBriefExtraction } from "@/lib/ai/template";
 import { withUser } from "@/lib/db";
@@ -158,7 +159,7 @@ export async function proposeBriefFieldsAction(projectId: string, sourceText: st
   if (textIn.length < 20) return { ok: false, error: "Paste at least a few sentences of brief text." };
   const ctx = await getCtx();
   assertCan(ctx.workspace.role, "brief.edit");
-  if (!llmConfigured()) return { ok: true, proposal: templateBriefExtraction(textIn), generator: TEMPLATE_GENERATOR };
+  if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: true, proposal: templateBriefExtraction(textIn), generator: TEMPLATE_GENERATOR };
   try {
     const out = await generateStructured({
       schema: briefExtractionSchema,

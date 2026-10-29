@@ -1,7 +1,8 @@
+import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import { EmptyState } from "@/components/states";
 import { ComparisonMatrix, RevisionDiff } from "@/components/strategy/compare-view";
-import { llmConfigured, TEMPLATE_GENERATOR } from "@/lib/ai";
+import { TEMPLATE_GENERATOR } from "@/lib/ai";
 import type { DirectionContent } from "@/lib/ai/schemas";
 import { templateComparison } from "@/lib/ai/template";
 import { withUser } from "@/lib/db";
@@ -49,7 +50,7 @@ export default async function ComparePage({ params, searchParams }: PageProps<"/
       ) : (
         <div>
           <h2 className="mb-4 text-[15px] font-semibold">Version {s.current.version}: directions across dimensions</h2>
-          <ComparisonMatrix projectId={projectId} versionId={s.current.id} names={dirs.map((d) => d.name)} initial={templateComparison(dirs, extra.brief)} initialGenerator={TEMPLATE_GENERATOR} llm={llmConfigured()} />
+          <ComparisonMatrix projectId={projectId} versionId={s.current.id} names={dirs.map((d) => d.name)} initial={templateComparison(dirs, extra.brief)} initialGenerator={TEMPLATE_GENERATOR} llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)} />
         </div>
       )}
     </div>

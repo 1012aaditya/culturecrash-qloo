@@ -8,6 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runCopilotTool } from "@/lib/ai/copilot-tools";
 
 const admin = process.env.TEST_DATABASE_ADMIN_URL;
 const d = admin ? describe : describe.skip;
@@ -169,5 +170,18 @@ d("Row Level Security and workspace isolation", () => {
     expect(await as(V.id, (tx) => tx`update notifications set read_at = now() where id = ${n.id} returning id`)).toHaveLength(1);
     await expect(as(V.id, (tx) => tx`update notifications set title = 'changed' where id = ${n.id}`)).rejects.toThrow(/immutable except read_at/);
     await expect(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title, href) values (${A.ws}, ${V.id}, 'report_shared', 'x', 'https://evil.test')`)).rejects.toThrow(/check constraint/);
+  });
+
+  it("copilot tools only see what the caller can see", async () => {
+    await as(A.id, (tx) => tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim) values (${projectA}, ${A.ws}, 'hypothesis', 'Gen Z loves vinyl listening bars')`);
+    const own = await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
+    expect(own.evidenceIds).toHaveLength(1);
+    // Bob passes Alice's project id directly: RLS returns nothing.
+    const other = await as(B.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
+    expect(other.evidenceIds).toHaveLength(0);
+    expect(await as(B.id, (tx) => runCopilotTool(tx, projectA, "list_opportunities", {}))).toMatchObject({ result: [] });
+    // Bad input and unknown tools are rejected without querying.
+    expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "" }))).result).toMatchObject({ error: "Invalid input" });
+    expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "drop_tables", {}))).result).toMatchObject({ error: "Unknown tool drop_tables" });
   });
 });

@@ -6,12 +6,13 @@ import { withUser } from "@/lib/db";
 import { loadBrief } from "@/lib/data/briefs";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
-import { generateStructured, tag, TEMPLATE_GENERATOR } from "./index";
+import { runCopilotAgent, type AgentStep } from "./copilot-agent";
+import { tag, TEMPLATE_GENERATOR } from "./index";
 import { readObservations } from "./context";
-import { copilotAnswerSchema, type CopilotAnswer } from "./schemas";
+import type { CopilotAnswer } from "./schemas";
 import { templateCopilot } from "./template";
 
-export type CopilotMessage = { id: string; role: "user" | "assistant"; content: string; generator: string | null; cited: string[]; action: CopilotAnswer["proposedAction"] | null; createdAt: string };
+export type CopilotMessage = { id: string; role: "user" | "assistant"; content: string; generator: string | null; cited: string[]; action: CopilotAnswer["proposedAction"] | null; steps: AgentStep[]; createdAt: string };
 export type CopilotResult = { ok: true; conversationId: string; message: CopilotMessage } | { ok: false; error: string };
 
 const input = z.object({ projectId: z.string().refine(isUuid), conversationId: z.string().refine(isUuid).nullable(), question: z.string().trim().min(2).max(2000) });
@@ -41,21 +42,24 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
 
   let answer: CopilotAnswer;
   let generator = TEMPLATE_GENERATOR;
+  let steps: AgentStep[] = [];
   if (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) {
     try {
-      const out = await generateStructured({
-        schema: copilotAnswerSchema,
-        maxTokens: 6000,
-        prompt: [
-          "Answer the strategist's question about this campaign using only the supplied context. Cite evidence ids you rely on. If the context cannot answer it, say what is missing. You may propose ONE follow-up action; it will only run if the user confirms.",
-          tag("brief", JSON.stringify({ name: gathered.brief.name, brand: gathered.brief.brand, category: gathered.brief.category, market: gathered.brief.market, audience: gathered.brief.audience, objective: gathered.brief.objective })),
-          tag("evidence", JSON.stringify({ observations: gathered.observations.map((o) => ({ id: o.id, entity: o.entityName, type: o.entityType, affinity: o.affinity, role: o.role })), directions: gathered.dirs, opportunities: gathered.opps })),
-          tag("user_request", JSON.stringify({ previous: gathered.history, question })),
+      // A compact starting context; the agent looks up anything else it needs with its read-only tools.
+      const top = gathered.observations.slice(0, 20);
+      const out = await runCopilotAgent({
+        userId: ctx.user.id,
+        projectId,
+        context: [
+          tag("brief", JSON.stringify({ name: gathered.brief.name, brand: gathered.brief.brand, category: gathered.brief.category, market: gathered.brief.market, audience: gathered.brief.audience, objective: gathered.brief.objective, competitors: gathered.brief.competitors, interests: gathered.brief.interests ?? [] })),
+          tag("evidence", JSON.stringify({ topObservations: top.map((o) => ({ id: o.id, entity: o.entityName, type: o.entityType, affinity: o.affinity, role: o.role })), totalObservations: gathered.observations.length, directions: gathered.dirs.map((d) => d.name), opportunities: gathered.opps })),
         ].join("\n\n"),
+        question: tag("user_request", JSON.stringify({ previous: gathered.history, question })),
       });
-      const valid = new Set(gathered.observations.map((o) => o.id));
-      answer = { ...out.data, citedEvidenceIds: out.data.citedEvidenceIds.filter((id) => valid.has(id)) };
+      const valid = new Set([...top.map((o) => o.id), ...out.seenEvidenceIds]);
+      answer = { ...out.answer, citedEvidenceIds: out.answer.citedEvidenceIds.filter((id) => valid.has(id)) };
       generator = out.generator;
+      steps = out.steps;
     } catch {
       return { ok: false, error: "The assistant could not answer right now (LLM request failed). Nothing was saved." };
     }
@@ -75,12 +79,12 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
     }
     await tx`insert into conversation_messages (conversation_id, workspace_id, role, content) values (${conversationId}, ${ws}, 'user', ${question})`;
     const [m] = await tx`insert into conversation_messages (conversation_id, workspace_id, role, content, tool_calls, generator)
-      values (${conversationId}, ${ws}, 'assistant', ${answer.answer}, ${tx.json({ cited: answer.citedEvidenceIds, action: answer.proposedAction } as never)}, ${generator}) returning id, created_at`;
+      values (${conversationId}, ${ws}, 'assistant', ${answer.answer}, ${tx.json({ cited: answer.citedEvidenceIds, action: answer.proposedAction, steps } as never)}, ${generator}) returning id, created_at`;
     await tx`update conversations set updated_at = now() where id = ${conversationId}`;
     return {
       ok: true as const,
       conversationId: conversationId!,
-      message: { id: m.id, role: "assistant" as const, content: answer.answer, generator, cited: answer.citedEvidenceIds, action: answer.proposedAction.type === "none" ? null : answer.proposedAction, createdAt: new Date(m.created_at).toISOString() },
+      message: { id: m.id, role: "assistant" as const, content: answer.answer, generator, cited: answer.citedEvidenceIds, action: answer.proposedAction.type === "none" ? null : answer.proposedAction, steps, createdAt: new Date(m.created_at).toISOString() },
     };
   });
 }
@@ -94,7 +98,7 @@ export async function loadConversation(projectId: string): Promise<{ conversatio
     const rows = await tx`select id, role, content, generator, tool_calls, created_at from conversation_messages where conversation_id = ${c.id} order by created_at desc limit 20`;
     return {
       conversationId: c.id,
-      messages: rows.reverse().map((r) => ({ id: r.id, role: r.role, content: r.content, generator: r.generator, cited: r.tool_calls?.cited ?? [], action: r.tool_calls?.action?.type && r.tool_calls.action.type !== "none" ? r.tool_calls.action : null, createdAt: new Date(r.created_at).toISOString() })),
+      messages: rows.reverse().map((r) => ({ id: r.id, role: r.role, content: r.content, generator: r.generator, cited: r.tool_calls?.cited ?? [], action: r.tool_calls?.action?.type && r.tool_calls.action.type !== "none" ? r.tool_calls.action : null, steps: Array.isArray(r.tool_calls?.steps) ? r.tool_calls.steps : [], createdAt: new Date(r.created_at).toISOString() })),
     };
   });
 }

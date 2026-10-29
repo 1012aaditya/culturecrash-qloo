@@ -40,7 +40,7 @@ export function CopilotPanel({
     setPending(true);
     setError(null);
     setValue("");
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: question, generator: null, cited: [], action: null, createdAt: new Date().toISOString() }]);
+    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: question, generator: null, cited: [], action: null, steps: [], createdAt: new Date().toISOString() }]);
     const res = await askCopilotAction({ projectId, conversationId, question });
     setPending(false);
     if (!res.ok) {
@@ -57,7 +57,7 @@ export function CopilotPanel({
         <span className="flex size-9 items-center justify-center rounded-full bg-ink text-white"><Sparkles className="size-4" /></span>
         <div>
           <h2 className="text-[14px] font-semibold">Ask CultureCrash</h2>
-          <p className="text-[12px] text-muted">{llm ? "Grounded in this project’s brief and saved evidence." : "No LLM configured — answers come from stored records only."}</p>
+          <p className="text-[12px] text-muted">{llm ? "Looks up this project’s evidence, entities, strategy and experiments before answering." : "No LLM configured — answers come from stored records only."}</p>
         </div>
       </div>
 
@@ -65,6 +65,14 @@ export function CopilotPanel({
         <div ref={listRef} className={cn("mt-3 space-y-3 overflow-y-auto pr-1", compact ? "max-h-56" : "max-h-[420px]")} aria-live="polite">
           {messages.map((m) => (
             <div key={m.id} className={cn("rounded-cc-sm px-3 py-2 text-[13px] leading-relaxed", m.role === "user" ? "ml-8 bg-ink text-white" : "mr-4 bg-ivory")}>
+              {m.role === "assistant" && m.steps.length > 0 && (
+                <details className="mb-1.5 text-[11px] text-muted">
+                  <summary className="cursor-pointer select-none">{m.steps.length} lookup{m.steps.length === 1 ? "" : "s"} before answering</summary>
+                  <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+                    {m.steps.map((s, i) => <li key={i} className={cn(!s.ok && "text-danger")}>{s.label}{s.ok ? "" : " (no result)"}</li>)}
+                  </ol>
+                </details>
+              )}
               <p className="whitespace-pre-wrap">{m.content}</p>
               {m.role === "assistant" && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
@@ -79,7 +87,7 @@ export function CopilotPanel({
               )}
             </div>
           ))}
-          {pending && <p className="flex items-center gap-2 text-[12px] text-muted"><Loader2 className="size-3.5 animate-spin" /> Reading project evidence…</p>}
+          {pending && <p className="flex items-center gap-2 text-[12px] text-muted"><Loader2 className="size-3.5 animate-spin" /> {llm ? "Looking things up in this project…" : "Reading project evidence…"}</p>}
         </div>
       )}
       {error && <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p>}

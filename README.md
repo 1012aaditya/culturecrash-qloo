@@ -52,11 +52,16 @@ used at all.
 before anything is saved. Evidence ids the model cites are filtered against stored ids, and brief,
 document and provider text is wrapped in tags and treated as untrusted. With no `ANTHROPIC_API_KEY`, a
 deterministic **template engine** writes drafts only from the brief and stored evidence; they are labelled
-"Template draft (no LLM configured)". The copilot runs approved read tools server-side under RLS. Any
-state-changing action it suggests is returned as a proposal that the user must click to run.
+"Template draft (no LLM configured)". The copilot (`lib/ai/copilot-agent.ts`) is a multi-step tool-use loop: it
+can call up to five rounds of six read-only tools (search evidence, look up an entity, list opportunities, read the
+strategy, list experiments, list research runs). Each runs under the user's RLS and is scoped to the
+project. It then gives a schema-validated answer, citing only evidence ids a tool returned. The lookups it
+made are shown under each answer. Any state-changing action it suggests is returned as a proposal that the
+user must click to run.
 
-**Research engine**: brief → plan (brand and up to 3 competitors resolved via `/search`, market as a
-location signal, entity types by category) → `/v2/insights` per type, plus taste tags → every request
+**Research engine**: brief → plan (brand and up to 3 competitors resolved via `/search`, up to 4 audience
+interests resolved to tags via `/v2/tags` and sent as `signal.interests.tags`, market as a location signal,
+entity types by category) → `/v2/insights` per type, plus taste tags → every request
 logged to `research_sources` → entities, relationships and `provider_observation` evidence →
 interpretation. The brand's own Qloo profile tags are saved as labelled observations, and entity photos
 (`properties.image.url`, https only) are shown over the generative artwork, which stays as the fallback. Runs are idempotent (a client key plus the active-run check), rate-limited per workspace
@@ -141,9 +146,9 @@ runs. `npm run build` must pass; then apply migrations before the first deploy.
 
 ```bash
 npm run typecheck && npm run lint
-npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates
+npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates, copilot loop
 TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–G against a running server (local auth + demo mode)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–H against a running server (local auth + demo mode)
 ```
 
 ## Status
@@ -158,6 +163,10 @@ See the final handoff in the pull request or session notes for full detail. Summ
   LLM path (no key was provided).
 - **Implemented, untested against the real service**: Resend email delivery (no key in the build environment).
 - **Not implemented**: a public web research provider, payments, real-time collaboration.
+
+Notifications: the command-bar bell shows in-app notifications (research finished or failed, a report shared
+from your campaign, being added to a workspace) with an unread count. It polls every 30 s while the tab is
+visible; opening a notification from another workspace switches to it.
 
 Workspace data: owners can set a retention period (30 days to 1 year) for raw provider responses, copilot
 conversations, activity history and finished tasks, and can delete a whole workspace (stored brief files are

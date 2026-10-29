@@ -67,10 +67,14 @@ export default async function EvidencePage({ params }: PageProps<"/projects/[pro
             <h2 className="text-[14px] font-semibold">Underlying provider response</h2>
             <p className="mt-1 text-[12px] text-muted">Request: <span className="font-mono">{source.endpoint}</span> · HTTP {source.http_status ?? "—"} · {source.result_count} results · {formatDateTime(source.retrieved_at)}. The API key is never stored.</p>
             <pre className="mt-3 max-h-[260px] overflow-auto rounded-cc-sm bg-ink p-3 font-mono text-[11px] text-white/85">{JSON.stringify(source.params, null, 2)}</pre>
-            <details className="mt-3">
-              <summary className="cursor-pointer text-[12px] font-medium">Raw response JSON</summary>
-              <pre className="mt-2 max-h-[420px] overflow-auto rounded-cc-sm bg-ink p-3 font-mono text-[11px] text-white/85">{JSON.stringify(source.raw_response, null, 2)}</pre>
-            </details>
+            {source.raw_response === null ? (
+              <p className="mt-3 text-[12px] text-muted">The raw response is no longer stored (removed by this workspace’s data-retention setting, or the request failed). The request record above is kept for provenance.</p>
+            ) : (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-[12px] font-medium">Raw response JSON</summary>
+                <pre className="mt-2 max-h-[420px] overflow-auto rounded-cc-sm bg-ink p-3 font-mono text-[11px] text-white/85">{JSON.stringify(source.raw_response, null, 2)}</pre>
+              </details>
+            )}
           </Surface>
         )}
       </div>

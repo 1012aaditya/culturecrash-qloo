@@ -6,7 +6,7 @@ brief, cultural research (Qloo), evidence, opportunities, three positioning dire
 experiments and versioned client reports.
 
 - Product spec: `docs/MASTER_PROMPT.md` · visual reference: `docs/reference/culturecrash-research-canvas.webp`
-- Qloo verification status: **`docs/QLOO_INTEGRATION.md`** (implemented, not yet verified live — see below)
+- Qloo verification status: **`docs/QLOO_INTEGRATION.md`** (key and endpoints verified live by the project owner)
 - Design system: `docs/DESIGN_SYSTEM.md`
 
 ## Stack
@@ -58,7 +58,8 @@ state-changing action it suggests is returned as a proposal that the user must c
 **Research engine**: brief → plan (brand and up to 3 competitors resolved via `/search`, market as a
 location signal, entity types by category) → `/v2/insights` per type, plus taste tags → every request
 logged to `research_sources` → entities, relationships and `provider_observation` evidence →
-interpretation. Runs are idempotent (a client key plus the active-run check), rate-limited per workspace
+interpretation. The brand's own Qloo profile tags are saved as labelled observations, and entity photos
+(`properties.image.url`, https only) are shown over the generative artwork, which stays as the fallback. Runs are idempotent (a client key plus the active-run check), rate-limited per workspace
 per day, execute in the background and are polled by the canvas. When every call fails the run fails, and
 it never falls back to fixtures.
 
@@ -119,6 +120,13 @@ policies because only the server writes to it.
 - **Qloo**: `QLOO_API_KEY` and `QLOO_API_URL` (hackathon keys use `https://hackathon.api.qloo.com`). Then
   run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`.
 - **LLM**: `ANTHROPIC_API_KEY`; `LLM_MODEL` defaults to `claude-opus-5-5`.
+- **Email** (optional): `RESEND_API_KEY`, `EMAIL_FROM` (a sender on a domain verified in Resend) and
+  `PILOT_NOTIFY_EMAIL` (where /pricing pilot requests are forwarded). Sends team invitations, plus "research
+  finished", "report shared" and the weekly digest to people who switched those on in Settings → Notifications.
+  Without a key nothing is sent and the app says so.
+- **Scheduled jobs**: `vercel.json` registers two Vercel Cron jobs, `/api/cron/retention` (daily) and
+  `/api/cron/weekly-digest` (Mondays). Set `CRON_SECRET`; Vercel sends it as a Bearer token and the route rejects
+  anything else.
 - **Web research**: not implemented. The UI says so, and research is Qloo-only.
 - **Billing**: not configured. Plans are pilot-only and no payment flow exists.
 
@@ -133,9 +141,9 @@ runs. `npm run build` must pass; then apply migrations before the first deploy.
 
 ```bash
 npm run typecheck && npm run lint
-npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions
+npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates
 TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–F against a running server (local auth + demo mode)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–G against a running server (local auth + demo mode)
 ```
 
 ## Status
@@ -148,5 +156,10 @@ See the final handoff in the pull request or session notes for full detail. Summ
 - **Implemented, untested against the real service**: Supabase Auth and Storage (no Supabase project was
   reachable from the build environment); the live Qloo API (network blocked — see above); the Anthropic
   LLM path (no key was provided).
-- **Not implemented**: a public web research provider, payments, email delivery for invitations and
-  notifications, real-time collaboration.
+- **Implemented, untested against the real service**: Resend email delivery (no key in the build environment).
+- **Not implemented**: a public web research provider, payments, real-time collaboration.
+
+Workspace data: owners can set a retention period (30 days to 1 year) for raw provider responses, copilot
+conversations, activity history and finished tasks, and can delete a whole workspace (stored brief files are
+removed from Storage first). Turning the LLM off for a workspace in Settings → Integrations makes every draft
+come from the labelled template engine.

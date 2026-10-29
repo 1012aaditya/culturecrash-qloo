@@ -80,8 +80,9 @@ const sections: LegalSection[] = [
       <>
         <p>
           Workspace content is kept while your workspace is active. You can delete projects and their contents from
-          within the product. Workspace owners can ask us to delete an entire workspace; we aim to complete deletion
-          from active systems within 30 days, with backups expiring on their normal cycle.
+          within the product. Owners can set an automatic retention period for working data (raw provider responses,
+          copilot conversations, activity history) and can delete an entire workspace from its settings; deletion
+          from active systems is immediate, with backups expiring on their normal cycle.
         </p>
         <p>Pilot requests are kept for up to 12 months unless you ask us to delete them sooner.</p>
       </>

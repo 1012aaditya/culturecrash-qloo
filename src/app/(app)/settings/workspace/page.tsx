@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ReadOnlyNote, SettingsSection } from "@/components/settings/section";
-import { CreateWorkspaceForm, RenameWorkspaceForm } from "@/components/settings/workspace-forms";
+import { CreateWorkspaceForm, DeleteWorkspace, RenameWorkspaceForm, RetentionForm } from "@/components/settings/workspace-forms";
 import { Badge } from "@/components/ui/badge";
 import { getCtx } from "@/lib/data/workspace";
 import { getWorkspaceSettings, PLAN_LIMITS } from "@/lib/data/workspace-admin";
@@ -14,6 +14,7 @@ export default async function WorkspaceSettingsPage() {
   const ctx = await getCtx();
   const ws = await getWorkspaceSettings(ctx);
   const canManage = can(ctx.workspace.role, "workspace.manage");
+  const isOwner = can(ctx.workspace.role, "workspace.delete");
   const plan = PLAN_LIMITS[ws.plan] ?? PLAN_LIMITS.pilot;
   const pct = ws.dailyLimit > 0 ? Math.min(100, Math.round((ws.runsToday / ws.dailyLimit) * 100)) : 100;
   return (
@@ -42,13 +43,23 @@ export default async function WorkspaceSettingsPage() {
             {plan.name} plan · published limit {plan.runsPerDay} runs/day. To change this workspace’s limit, contact us through{" "}
             <Link href="/help" className="text-ink underline underline-offset-2">Help &amp; feedback</Link>.
           </p>
-          <p className="mt-1 text-[12px] text-muted">Data retention: {ws.retentionDays ? `${ws.retentionDays} days` : "kept until deleted"}.</p>
         </div>
+      </SettingsSection>
+
+      <SettingsSection title="Data retention" description="Owners can have older working data removed automatically. The cleanup runs once a day.">
+        <RetentionForm days={ws.retentionDays} canManage={isOwner} />
+        {!isOwner && <ReadOnlyNote>Only owners can change retention. Current setting: {ws.retentionDays ? `${ws.retentionDays} days` : "kept until deleted"}.</ReadOnlyNote>}
       </SettingsSection>
 
       <SettingsSection title="Another workspace" description="Create a separate workspace for a different team or agency. Clients, campaigns and research never cross workspace boundaries.">
         <CreateWorkspaceForm />
       </SettingsSection>
+
+      {isOwner && (
+        <SettingsSection title="Delete workspace" description="Permanently removes this workspace and everything in it for every member.">
+          <DeleteWorkspace name={ws.name} onlyWorkspace={ctx.memberships.length < 2} />
+        </SettingsSection>
+      )}
     </div>
   );
 }

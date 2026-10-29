@@ -54,3 +54,8 @@ export function pilotRequestEmail(o: { to: string; name: string; email: string; 
     [`Name: ${o.name}`, `Email: ${o.email}`, `Company: ${o.company}`, `Team size: ${o.teamSize ?? "not given"}`, `Message: ${o.message ?? "—"}`],
     undefined, o.email);
 }
+
+export function weeklyDigestEmail(o: { to: string; workspaces: { name: string; activity: number; runs: number; reports: number; openTasks: number }[] }): Email {
+  const lines = o.workspaces.map((w) => `${w.name}: ${w.activity} updates, ${w.runs} research runs completed, ${w.reports} report versions, ${w.openTasks} open tasks.`);
+  return build(o.to, "Your CultureCrash week", "This week in your workspaces", lines, { label: "Open your dashboard", href: appUrl("/dashboard") });
+}

@@ -64,6 +64,12 @@ Still to check against the *Entity Type Parameter Guide* (available-parameters-b
 `signal.location.query`, `filter.location.query` and `filter.exclude.entities` are valid for every type the
 app queries.
 
+### Also used from the `/search` response
+- `properties.image.url` → shown as the entity photo (https only; the generative plate is the fallback).
+- The resolved brand's `tags[]` (`tag_id`, `name`, `type`) → up to 8 non-genre tags saved as provider
+  observations labelled "from Qloo's profile of <brand>". They describe how Qloo catalogues the brand,
+  not audience affinity, and the evidence limitation says so.
+
 ## What the adapter assumes
 
 | Item | Value | Source |

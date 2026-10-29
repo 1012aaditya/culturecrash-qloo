@@ -51,6 +51,6 @@ Motion: line drawing for network edges, a slow float for hero nodes, fade-up for
 `ReportDocument` (one renderer for the viewer, the shared view and the showcase),
 `EmptyState`/`ErrorNotice`/`DemoBadge`/`PageHeader`, `Button`/`Field`/`Badge`/`Surface`/`Dialog`/`Menu`/`Toaster`.
 
-Imagery note: the build environment could not reach remote photo hosts, so every image is generated
-locally. To use licensed photography, extend `ArtPlate` to render an `<img>` over the plate, keeping the
-plate as the fallback.
+Imagery: `EntityImage` (`components/art/entity-image.tsx`) shows the provider's photo for an entity
+(Qloo `properties.image.url`, https only) over the matching `ArtPlate`. The plate shows while loading, when
+there is no image and on error. Campaign and marketing imagery stays generative.

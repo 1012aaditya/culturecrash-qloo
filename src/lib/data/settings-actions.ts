@@ -326,3 +326,64 @@ export async function deleteAccountAction(confirmEmail: string): Promise<Result>
   (await cookies()).delete(WORKSPACE_COOKIE);
   redirect("/?account=deleted");
 }
+
+// ---------------------------------------------------------------------------
+// Retention & workspace deletion
+// ---------------------------------------------------------------------------
+const RETENTION_CHOICES: (number | null)[] = [null, 30, 90, 180, 365];
+
+export async function updateRetentionAction(days: number | null): Promise<Result> {
+  if (!RETENTION_CHOICES.includes(days)) return { ok: false, error: "Choose one of the listed retention periods." };
+  const ctx = await getCtx();
+  try {
+    assertCan(ctx.workspace.role, "workspace.delete");
+    const ws = ctx.workspace.workspaceId;
+    await withUser(ctx.user.id, async (tx) => {
+      const rows = await tx`update workspaces set data_retention_days = ${days} where id = ${ws} returning id`;
+      if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });
+      await logActivity(tx, {
+        workspaceId: ws, actorId: ctx.user.id, verb: "configured", objectType: "workspace", objectId: ws,
+        summary: days ? `set data retention to ${days} days` : "turned off automatic data retention",
+      });
+    });
+  } catch (e) {
+    return friendly(e);
+  }
+  revalidatePath("/settings/workspace");
+  return { ok: true };
+}
+
+/** Owner-only. Removes stored brief files first, then the workspace (everything cascades). */
+export async function deleteWorkspaceAction(confirmName: string): Promise<Result> {
+  const ctx = await getCtx();
+  try {
+    assertCan(ctx.workspace.role, "workspace.delete");
+  } catch (e) {
+    return friendly(e);
+  }
+  const ws = ctx.workspace;
+  if (confirmName.trim() !== ws.name) return { ok: false, error: "Type the workspace name exactly to confirm.", fieldErrors: { confirm: "Does not match the workspace name" } };
+  if (ctx.memberships.length < 2) return { ok: false, error: "This is your only workspace. Create another workspace first, or delete your account instead." };
+  const e = env();
+  try {
+    const paths = await withUser(ctx.user.id, async (tx) =>
+      (await tx`select storage_path from brief_documents where workspace_id = ${ws.workspaceId} and storage_path is not null`).map((r) => r.storage_path as string));
+    if (paths.length && e.AUTH_MODE === "supabase" && e.NEXT_PUBLIC_SUPABASE_URL) {
+      const { supabaseServer } = await import("@/lib/auth/supabase");
+      const client = await supabaseServer();
+      for (let i = 0; i < paths.length; i += 100) {
+        const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(paths.slice(i, i + 100));
+        if (error) throw new Error("storage cleanup failed");
+      }
+    }
+    await withUser(ctx.user.id, async (tx) => {
+      const rows = await tx`delete from workspaces where id = ${ws.workspaceId} returning id`;
+      if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });
+    });
+  } catch (err) {
+    return friendly(err, "The workspace could not be deleted. Nothing in the database was removed.");
+  }
+  const next = ctx.memberships.find((m) => m.workspaceId !== ws.workspaceId)!;
+  (await cookies()).set(WORKSPACE_COOKIE, next.workspaceId, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
+  redirect("/dashboard?workspace=deleted");
+}

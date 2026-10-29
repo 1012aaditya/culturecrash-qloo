@@ -32,15 +32,15 @@ export function providerRegistry(opts: { demo?: boolean } = {}): ProviderInfo[] 
     {
       key: "serper", label: "Google Search (Serper)", capability: "web_search", strengths: "Live Google Search organic web index, news, and brand websites",
       configured: Boolean(e.SERPER_API_KEY), unavailableReason: e.SERPER_API_KEY ? null : "SERPER_API_KEY is not set",
-      costModel: `per request, estimated $${e.SERPER_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Serper.dev Google Search API terms.", verified: "live",
+      costModel: `per request, estimated $${e.SERPER_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Serper.dev Google Search API terms.", verified: "contract_only",
     },
     {
-      key: "tavily", label: "Tavily", capability: "web_search", strengths: "Alternate web search when Brave is not configured",
+      key: "tavily", label: "Tavily", capability: "web_search", strengths: "Alternate web search when Serper and Brave are not configured",
       configured: Boolean(e.TAVILY_API_KEY), unavailableReason: e.TAVILY_API_KEY ? null : "TAVILY_API_KEY is not set",
       costModel: `per request, estimated $${e.TAVILY_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Tavily terms.", verified: "contract_only",
     },
     {
-      key: "exa", label: "Exa", capability: "web_search", strengths: "Alternate web search, long-tail essays and blogs",
+      key: "exa", label: "Exa", capability: "semantic_search", strengths: "Semantic discovery: niche essays, scenes and independent publications keyword search misses",
       configured: Boolean(e.EXA_API_KEY), unavailableReason: e.EXA_API_KEY ? null : "EXA_API_KEY is not set",
       costModel: `per request, estimated $${e.EXA_USD_PER_REQUEST}`, cacheTtlHours: 24, terms: "Exa terms.", verified: "contract_only",
     },
@@ -63,14 +63,14 @@ export function providerRegistry(opts: { demo?: boolean } = {}): ProviderInfo[] 
       terms: "CC BY-SA 4.0 — attribution kept with excerpts.", verified: "contract_only",
     },
     {
-      key: "google_trends", label: "Google Trends & Search Velocity", capability: "trend_velocity", strengths: "Consumer search momentum, rising interest velocity, and breakout search queries",
-      configured: true, unavailableReason: null, costModel: "free (public search momentum signal)", cacheTtlHours: 12,
-      terms: "Public Google search momentum data; fair use.", verified: "live",
+      key: "hacker_news", label: "Hacker News (Algolia)", capability: "tech_community", strengths: "Developer, AI and startup discussion — used only for technology briefs",
+      configured: true, unavailableReason: null, costModel: "free (public Algolia API, fair use)", cacheTtlHours: 6,
+      terms: "HN Search API by Algolia; public posts, attribute to Hacker News.", verified: "contract_only",
     },
     {
-      key: "hacker_news", label: "Hacker News (Algolia)", capability: "community", strengths: "Developer, AI, builder, and tech founder discussions and critical reception",
-      configured: true, unavailableReason: null, costModel: "free forever (open Algolia API)", cacheTtlHours: 6,
-      terms: "Hacker News Algolia Search API terms.", verified: "live",
+      key: "google_suggest", label: "Google search suggestions", capability: "search_language", strengths: "How people phrase searches around a topic (autocomplete) — not volume or trend data",
+      configured: e.GOOGLE_SUGGEST === "enabled", unavailableReason: e.GOOGLE_SUGGEST === "enabled" ? null : "Off by default (undocumented endpoint). Set GOOGLE_SUGGEST=enabled if acceptable for your use.",
+      costModel: "free (undocumented endpoint)", cacheTtlHours: 24, terms: "Undocumented Google autocomplete endpoint; may change or be blocked.", verified: "contract_only",
     },
     {
       key: "brand_docs", label: "Client documents", capability: "brand_context", strengths: "Brief, brand guidelines and research uploaded to this campaign",
@@ -90,17 +90,26 @@ export function providerRegistry(opts: { demo?: boolean } = {}): ProviderInfo[] 
 /** Default routing: which capabilities answer which kind of question (first = primary). */
 export const ROUTES: Record<Intent, Capability[]> = {
   competitor: ["web_search", "video"],
-  community: ["community", "web_search"],
+  community: ["community", "tech_community", "search_language", "web_search"],
   creator: ["video", "web_search"],
-  culture: ["web_search", "encyclopedia"],
-  trend: ["trend_velocity", "web_search", "community"],
+  culture: ["web_search", "semantic_search", "encyclopedia"],
+  trend: ["web_search", "community", "tech_community"],
   brand_context: ["brand_context"],
-  audience: ["web_search", "community", "brand_context"],
-  counterevidence: ["web_search", "community"],
+  audience: ["web_search", "community", "search_language", "brand_context"],
+  counterevidence: ["web_search", "semantic_search", "community", "tech_community"],
 };
 
-/** The one web-search provider for a job: Brave, else Tavily, else Exa (or demo fixtures in demo runs). */
+/**
+ * The one keyword web-search provider for a job: Serper, else Brave, else Tavily — Exa only when
+ * none of those is set (otherwise Exa is used selectively as the semantic complement).
+ */
 export function pickWebSearch(providers: ProviderInfo[], demo: boolean): ProviderKey | null {
   if (demo) return "demo_web";
-  return (["serper", "brave", "exa", "tavily"] as const).find((k) => providers.find((p) => p.key === k)?.configured) ?? null;
+  return (["serper", "brave", "tavily", "exa"] as const).find((k) => providers.find((p) => p.key === k)?.configured) ?? null;
+}
+
+const TECH = /\b(tech|technology|software|saas|ai|artificial intelligence|developer|startup|app|fintech|crypto|web3|gaming hardware|semiconductor|cloud|devtools|robotics)\b/i;
+/** Hacker News is only relevant for technology, AI, startup or developer briefs. */
+export function isTechBrief(text: string | null | undefined): boolean {
+  return TECH.test(text ?? "");
 }

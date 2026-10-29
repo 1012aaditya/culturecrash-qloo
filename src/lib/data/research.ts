@@ -18,6 +18,8 @@ export type EntityRow = {
   id: string; providerId: string; name: string; type: string; role: "seed" | "result" | "tag" | "audience"; affinity: number | null;
   popularity: number | null; tags: string[]; description: string | null; retrievedAt: string; sourceId: string | null; evidenceId: string | null;
   imageUrl: string | null; profileOf: string | null;
+  /** Qloo popularity observations for this entity across runs in the workspace (oldest first). */
+  popularityHistory?: { value: number; at: string }[];
   culturalTier?: "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit" | null;
   deltaScore?: number | null;
   hop?: number | null;
@@ -57,6 +59,11 @@ export async function getResearchView(ctx: Ctx, projectId: string, runId?: strin
     const rels = await tx`select id, from_entity_id, to_entity_id, relation, value from entity_relationships where run_id = ${run.id}`;
     const sources = await tx`select id, endpoint, params, status, http_status, result_count, duration_ms, error_message, retrieved_at, provider from research_sources where run_id = ${run.id} order by retrieved_at`;
     const [raw] = await tx`select * from research_runs where id = ${run.id}`;
+    const history = await tx`select source_ref, value, collected_at from trend_observations
+      where workspace_id = ${raw.workspace_id} and provider = 'qloo' and metric = 'popularity' and source_ref = any(${entities.map((e) => e.provider_entity_id as string)})
+      order by collected_at`;
+    const historyBy = new Map<string, { value: number; at: string }[]>();
+    for (const h of history) historyBy.set(h.source_ref, [...(historyBy.get(h.source_ref) ?? []), { value: Number(h.value), at: new Date(h.collected_at).toISOString() }]);
     const deep = await readDeepView(tx, raw);
     return {
       runs,
@@ -66,7 +73,7 @@ export async function getResearchView(ctx: Ctx, projectId: string, runId?: strin
         id: e.id, providerId: e.provider_entity_id, name: e.name, type: e.entity_type, role: e.role, affinity: e.affinity === null ? null : Number(e.affinity),
         popularity: e.popularity === null ? null : Number(e.popularity), tags: e.tags ?? [], description: e.properties?.description ?? null,
         retrievedAt: new Date(e.retrieved_at).toISOString(), sourceId: e.source_id, evidenceId: e.evidence_id,
-        imageUrl: e.properties?.image_url ?? null, profileOf: e.properties?.profile_of ?? null,
+        imageUrl: e.properties?.image_url ?? null, profileOf: e.properties?.profile_of ?? null, popularityHistory: historyBy.get(e.provider_entity_id) ?? [],
         culturalTier: (e.properties?.cultural_tier as "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit") ?? null,
         deltaScore: typeof e.properties?.delta_score === "number" ? e.properties.delta_score : null,
         hop: typeof e.properties?.hop === "number" ? e.properties.hop : 1,

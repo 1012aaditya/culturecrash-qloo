@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Surface } from "@/components/ui/surface";
 import { getCtx } from "@/lib/data/workspace";
 import { getIntegrationPrefs } from "@/lib/data/workspace-admin";
+import { withUser } from "@/lib/db";
+import { providerHealth, type ProviderHealth } from "@/lib/research/deep/health";
 import { providerRegistry } from "@/lib/research/deep/registry";
 import { env, integrationStatus, maskSecret } from "@/lib/env";
 import { can } from "@/lib/permissions";
@@ -75,6 +77,8 @@ export default async function IntegrationsPage() {
   const e = env();
   const prefs = await getIntegrationPrefs(ctx);
   const research = providerRegistry();
+  const health = await withUser(ctx.user.id, (tx) => providerHealth(tx, ctx.workspace.workspaceId));
+  const healthRows = [{ key: "qloo", label: "Qloo Insights", configured: s.qloo }, ...research.map((p) => ({ key: p.key, label: p.label, configured: p.configured }))];
   const canManage = can(ctx.workspace.role, "integrations.manage");
   // Masked suffixes are diagnostics for admins only; full secrets never leave the server.
   const masked = (v: string | undefined) => (canManage ? maskSecret(v) ?? "—" : v ? "set (visible to admins)" : "—");
@@ -179,6 +183,7 @@ export default async function IntegrationsPage() {
           ]}
         />
       </div>
+      <ProviderHealthTable rows={healthRows} health={health} />
       <p className="text-[12px] text-muted">
         Note: provider credentials come from the server configuration above. Turning Qloo off here blocks new live research runs in this workspace,
         and the default location is used as the location signal when a brief has no market. Turning web research off keeps every research job to Qloo and
@@ -186,5 +191,45 @@ export default async function IntegrationsPage() {
         come from the labelled template engine, and no brief, evidence or document text is sent to the model provider.
       </p>
     </div>
+  );
+}
+
+/** Measured, separate states per provider — a configured key is not shown as a working integration. */
+function ProviderHealthTable({ rows, health }: { rows: { key: string; label: string; configured: boolean }[]; health: Map<string, ProviderHealth> }) {
+  const mark = (v: boolean | null, title: string) => (
+    <span title={title} className={cn("inline-block size-2.5 rounded-full", v === true ? "bg-success" : v === false ? "bg-danger" : "bg-ink/15")} aria-label={`${title}: ${v === true ? "yes" : v === false ? "no" : "not yet observed"}`} />
+  );
+  return (
+    <Surface className="overflow-x-auto p-5">
+      <h2 className="text-[14px] font-semibold">Provider health</h2>
+      <p className="mt-1 text-[12px] text-muted">Measured from this workspace’s research calls in the last 30 days. Each column is a separate check — green means observed, red means it failed, grey means not observed yet.</p>
+      <table className="mt-4 w-full min-w-[860px] text-left text-[12px]">
+        <thead className="text-[10px] uppercase tracking-wider text-muted">
+          <tr>{["Provider", "Configured", "Auth", "Reachable", "Succeeded", "Data", "Valid", "Used in reports", "Requests", "Last success", "Last error", "Latency", "Est. cost"].map((h) => <th key={h} className="pb-2 pr-3 font-medium">{h}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {rows.map((r) => {
+            const h = health.get(r.key) ?? (r.key === "qloo" ? health.get("qloo") : undefined);
+            return (
+              <tr key={r.key}>
+                <td className="py-2 pr-3 font-medium">{r.label}</td>
+                <td className="pr-3">{mark(r.configured, "Credentials configured")}</td>
+                <td className="pr-3">{mark(h ? h.authVerified : null, "Authentication verified")}</td>
+                <td className="pr-3">{mark(h ? (h.reachable ? true : h.requests ? false : null) : null, "Endpoint reachable")}</td>
+                <td className="pr-3">{mark(h ? (h.succeeded > 0 ? true : h.requests ? false : null) : null, "A request succeeded")}</td>
+                <td className="pr-3">{mark(h ? (h.dataReturned > 0 ? true : h.succeeded ? false : null) : null, "Data returned")}</td>
+                <td className="pr-3">{mark(h ? (h.validationFailures === 0 && h.succeeded > 0 ? true : h.validationFailures ? false : null) : null, "Response passed validation")}</td>
+                <td className="pr-3">{mark(h ? (h.usedInReports > 0 ? true : null) : null, "Used in a report")}{h?.usedInReports ? <span className="ml-1 text-muted">{h.usedInReports}</span> : null}</td>
+                <td className="pr-3 tabular-nums">{h?.requests ?? 0}{h?.rateLimited ? <span className="text-warning"> · {h.rateLimited}×429</span> : null}</td>
+                <td className="pr-3 text-muted">{h?.lastSuccessAt ? formatDateTime(h.lastSuccessAt) : "—"}</td>
+                <td className="max-w-[200px] truncate pr-3 text-muted" title={h?.lastError?.message}>{h?.lastError ? `${h.lastError.category} · ${formatDateTime(h.lastError.at)}` : "—"}</td>
+                <td className="pr-3 tabular-nums text-muted">{h?.avgLatencyMs != null ? `${h.avgLatencyMs} ms` : "—"}</td>
+                <td className="tabular-nums text-muted">{h ? `$${h.usdEstimated.toFixed(3)}` : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Surface>
   );
 }

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "note": "Representative briefs for evaluating Qloo-first research. Run with scripts/research-eval.ts against a deployment with live keys. Expected properties are what a human reviewer checks — not answers.",
+  "briefs": [
+    {
+      "id": "fashion-streetwear-in",
+      "brief": { "brand": "Kaarigar Street", "category": "Streetwear", "market": "India", "audience": "Gen Z in Indian metros who mix craft heritage with street style", "objective": "Launch a capsule collection", "competitors": ["Bewakoof", "The Souled Store"], "interests": ["sneaker culture", "indie hip-hop"] },
+      "question": "Which cultural scenes could a craft-led streetwear capsule credibly join, and how do competitors talk to this audience?",
+      "depth": "standard",
+      "expect": ["Qloo seeds at least one artist or brand question", "Competitor positioning cites the competitors' own pages or coverage", "Opportunities name the Qloo entity they rest on", "No claim of purchase intent from affinity"]
+    },
+    {
+      "id": "entertainment-anime-us",
+      "brief": { "brand": "Lantern Studios", "category": "Animated series streaming", "market": "United States", "audience": "Adults 25-34 who watch anime and indie games", "objective": "Grow awareness for a new animated series", "competitors": ["Crunchyroll"], "interests": ["anime", "indie games"] },
+      "question": "What adjacent entertainment and creator communities share this audience's taste?",
+      "depth": "standard",
+      "expect": ["YouTube or creator evidence used for creator questions (if configured)", "Qloo cross-category results (games, music, podcasts) appear", "Community claims labelled as opinion"]
+    },
+    {
+      "id": "beauty-glass-skin-kr",
+      "brief": { "brand": "Lumen", "category": "Skincare", "market": "South Korea", "audience": "Women 18-30 interested in minimalist routines", "objective": "Position a two-step routine", "competitors": ["COSRX"], "interests": ["glass skin", "skinimalism"] },
+      "question": "Is 'skinimalism' growing, and what frustrations drive it?",
+      "depth": "deep",
+      "expect": ["Trend language is not used without repeated observations", "Counter-evidence question present", "Contradictions surfaced if sources disagree"]
+    },
+    {
+      "id": "food-oat-milk-uk",
+      "brief": { "brand": "Oatfield", "category": "Plant-based milk", "market": "United Kingdom", "audience": "Urban professionals who care about coffee culture", "objective": "Differentiate in cafes", "competitors": ["Oatly", "Alpro"], "interests": ["specialty coffee"] },
+      "question": "Which coffee-culture places and personalities connect to this audience, and where is Oatly's positioning saturated?",
+      "depth": "standard",
+      "expect": ["Qloo places/destinations used", "Saturation claims cite sources, not inferred from absence"]
+    },
+    {
+      "id": "tech-ai-notes-global",
+      "brief": { "brand": "Quill", "category": "AI note-taking app", "market": null, "audience": "Startup founders and developers", "objective": "Build credibility with technical users", "competitors": ["Notion", "Otter.ai"], "interests": ["productivity", "open source"] },
+      "question": "How do developers talk about AI note-takers, and what cultural references resonate with them?",
+      "depth": "quick",
+      "expect": ["Hacker News used (technology brief)", "Hacker News NOT used for the other four briefs"]
+    }
+  ]
+}

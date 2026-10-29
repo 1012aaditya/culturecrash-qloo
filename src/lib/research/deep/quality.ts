@@ -34,6 +34,7 @@ const CREDIBILITY: Record<SourceType, Partial<Record<ClaimType, number>> & { def
   video: { default: 0.4, source_opinion: 0.6, observed_measurement: 0.6 },
   client_document: { default: 0.75 },
   demo_fixture: { default: 0.2 },
+  search_suggestions: { default: 0.3, source_opinion: 0.45 },   // phrasing only; never evidence of volume
 };
 
 export function scoreClaim(input: {

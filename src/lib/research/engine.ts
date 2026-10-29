@@ -446,6 +446,19 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
             values (${runId}, ${ws}, ${from}, ${to}, 'explainability', ${edge.score}, null)`;
         }
       }
+      // Each run records Qloo's popularity for the entities it returned as a dated observation, so
+      // repeated research builds a real time series. It is Qloo's relative 0–1 popularity, not search
+      // volume or audience size. Demonstration fixtures are never recorded as observations.
+      if (!isDemo) {
+        const seen = new Set<string>();
+        for (const x of [...seeds.map((sd) => sd.entity), ...results.map((r) => r.entity)]) {
+          if (x.popularity === null || seen.has(x.providerId)) continue;
+          seen.add(x.providerId);
+          await tx`insert into trend_observations (workspace_id, project_id, run_id, topic, provider, metric, value, unit, geography, period_end, source_ref, method, limitations)
+            values (${ws}, ${run.project_id}, ${runId}, ${x.name.slice(0, 200)}, 'qloo', 'popularity', ${x.popularity}, 'relative (0–1)', ${plan.location ?? null}, now(), ${x.providerId},
+              'Qloo entity popularity at retrieval', 'Qloo-reported relative popularity at this moment; not search volume, audience size or intent.')`;
+        }
+      }
       return obs;
     });
 

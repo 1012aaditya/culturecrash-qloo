@@ -1,32 +1,75 @@
-# Multi-source research engine
+# Qloo-first research engine
 
-CultureCrash research jobs combine Qloo cultural affinity, live web search, video, community discussion
-and the client's own documents into one evidence model, then write a cited report. The goal is useful,
-defensible insight per unit of time and cost, not search volume.
+CultureCrash research is organised around Qloo. A job maps the cultural affinities around the brief
+with Qloo first. It then investigates the strongest Qloo connections with the external sources that can
+answer each question (web, semantic, video, community and the client's own documents) and writes a cited
+report. That report separates observed Qloo data, source-reported claims, AI interpretation and untested
+hypotheses. The goal is useful, defensible insight per unit of time and cost, not search volume.
 
 Code: `src/lib/research/deep/` (engine), `src/lib/research/jobs.ts` (job creation, limits),
 `src/lib/research/engine.ts` (Qloo stage), `src/app/api/research/*` (REST API),
-`src/components/research/deep/*` (UI). Schema: `supabase/migrations/20261030001100_deep_research.sql`.
+`src/components/research/deep/*` (UI). Schema: migrations `…1100_deep_research.sql` and `…1200_qloo_first.sql`.
 
-## Integration status (be precise about what has been exercised)
+## Integration status (what has actually been exercised)
+
+"Contract only" means the adapter is built to the provider's documented request and response shapes and
+unit-tested against them, but no live request has been made from this codebase. The sandbox that built it
+cannot reach these hosts and had no keys. **Settings → Integrations → Provider health** shows what has been
+observed in your workspace. It tracks key set, authentication, reachability, success, data returned,
+validation and use in a report as separate states.
 
 | Provider | Role | Status |
 |---|---|---|
-| Qloo Insights | Cultural affinity (entities, tags, places) | **Live-verified** by the project owner (`/search`, `/v2/insights`). `/v2/tags` (`filter.query`) and `signal.demographics.age` are **not yet verified**; the age signal is off unless `QLOO_AGE_SIGNAL=enabled`. |
-| Brave Search | Primary web discovery | **Built to Brave's documented contract, not yet exercised live.** No key was available and the build sandbox cannot reach `api.search.brave.com`. |
-| Tavily / Exa | Alternate web search (used only if Brave is not set) | Contract only, not exercised live. |
-| YouTube Data API v3 | Creator videos plus public view/like/comment counts | Contract only, not exercised live. Third-party transcripts are **not** fetched (`captions.download` requires the owner's authorisation). |
-| Reddit Data API (OAuth) | Community discussion | Contract only, not exercised live. Enabled only with OAuth credentials **and** `REDDIT_COMMERCIAL_ACCESS=approved`, because commercial use needs Reddit's approval. Unauthenticated `.json` scraping is deliberately not used. |
-| Wikipedia (MediaWiki REST) | Background and provenance | Contract only, not exercised live. No key; CC BY-SA attribution is kept. |
-| Google Trends | Search momentum & breakout query velocity | **Working, tested** (queries search momentum index, records to `trend_observations`). |
-| Hacker News (Algolia) | Tech, AI, and builder community sentiment | **Working, tested** (fair-use open API). |
-| Client documents | Brand context (keyword search over uploaded briefs and guidelines) | **Working, tested** (E2E scenario J, RLS tests). |
-| Page retrieval | Full text for the most relevant results | **Working, tested** with stubbed HTTP (robots.txt, SSRF guard, redirects, content types). Not exercised against the live web from the sandbox. |
-| Demo web fixtures | Fictional sources for demos and tests | Working; always labelled; never on production. |
+| **Qloo Insights** | **Core**: cultural affinity (entities, taste tags, places), runs first and seeds questions | **Live-verified** by the project owner (`/search`, `/v2/insights`). `/v2/tags` (`filter.query`) and `signal.demographics.age` are **not verified**; the age signal is off unless `QLOO_AGE_SIGNAL=enabled`. |
+| Serper (Google Search) | Primary keyword web search: brands, competitors, news, original sources | Contract only. |
+| Brave Search | Web search if Serper is not set | Contract only (billing could not be activated). |
+| Exa | Semantic complement for culture, scene and counter-evidence questions (different phrasing, not the same query as Serper) | Contract only. |
+| Tavily | Web search fallback | Contract only. |
+| YouTube Data API v3 | Creator and video discourse plus public view/like/comment counts | Contract only. Third-party transcripts are **not** fetched (`captions.download` needs the owner's authorisation). Excerpts expire after 30 days. |
+| Reddit Data API (OAuth) | Community language, frustrations and counterpoints | Contract only. Requires OAuth credentials **and** `REDDIT_COMMERCIAL_ACCESS=approved`. |
+| Hacker News (Algolia) | Developer and startup discourse, **technology briefs only** | Contract only. Routed only when the brief is about tech, AI, startups or developers. |
+| Google search suggestions | How people phrase searches (autocomplete) | Contract only, **off by default** (`GOOGLE_SUGGEST=enabled`). This is **not Google Trends**: no volume, no index, no time series, and nothing is stored as a trend observation. |
+| Wikipedia (MediaWiki REST) | Background and cultural history | Contract only. CC BY-SA attribution kept. Never used alone to support a current trend. |
+| Client documents | Brand context from uploaded briefs and guidelines (keyword search) | **Working, tested** (E2E scenario J, RLS tests). |
+| Page retrieval | Full text for the most relevant results | **Working, tested** with stubbed HTTP (robots.txt, SSRF guard, redirects, content types). |
+| Demo fixtures | Fictional Qloo and web data for demos and tests | Working; always labelled; never on production. |
 
-**Removed from the earlier commit:** Google News RSS (no documented terms for commercial use), Wikidata
-(not needed yet), Firecrawl (overlaps page retrieval), unauthenticated Reddit JSON (terms), and the
-unsourced "cultural pulse" (it presented AI text as verified external sources).
+**Corrected from an earlier commit:** a provider labelled "Google Trends & Search Velocity" called
+Google's undocumented autocomplete endpoint. It reported autocomplete ranking as a "search velocity index
+/1300", stamped results as published "now", and saved that number as a trend observation. It has been
+replaced by the honest search-suggestions provider above. No official Google Trends API is integrated;
+Google's Trends API is limited-access, and access would have to be confirmed first.
+
+### Trends: what is real today
+
+Each research run records **Qloo's popularity** (0–1, relative) for the entities it returns, as dated rows
+in `trend_observations` (`provider = 'qloo'`, `metric = 'popularity'`). Repeated research therefore builds a
+genuine time series per entity. The entity panel shows the change once there are at least two
+observations. With a single observation, the UI says so and makes no "rising" or "emerging" claims.
+
+## How Qloo drives a job
+
+1. **Qloo first.** Brand, competitors, audience interests (via `/v2/tags`) and market are resolved and
+   queried; entities, taste tags, places and explainability edges are stored as observed data.
+2. **Picks.** The strongest results are selected deterministically: 1, 2 or 4 by depth, by affinity with
+   a slight preference for under-the-radar ("white space") entities, type diversity, and the top taste tag.
+3. **Qloo-seeded questions.** Each pick becomes a question routed by entity type (artist/creator → video
+   plus web, brand → web, place → web plus semantic, taste tag → community plus semantic), for example:
+   "Qloo links the artist X to this audience (affinity 0.91). What public context explains that
+   connection, and could it matter for the brand?" Brief questions (audience, competitors, counter-evidence,
+   brand documents) follow, within the depth's cap.
+4. **External research** runs per question. Web claims found for a Qloo question are linked to that Qloo
+   entity (`evidence_items.entity_ids`), so the entity panel shows "External evidence about this entity".
+5. **Synthesis** cites Qloo observations ("Qloo · entity 0.91") and web claims (numbered) separately.
+   Opportunities must name their Qloo foundation and include audience relevance, brand fit, creative
+   direction, risks, evidence gaps, a validation experiment and success metrics. Without an LLM, one
+   **template hypothesis** is built from the strongest Qloo result and labelled as such.
+6. **Act on it.** Any report opportunity can be saved to the Opportunities board or turned into a draft
+   experiment (control plus variant, primary and secondary metrics, decision rule). Both keep their Qloo
+   and web evidence links.
+
+If Qloo is not configured or fails, the run continues with the other sources. The report states that it
+is not grounded in cultural-affinity data, and the run can be at most "partially completed".
 
 ### Verify live (≈ 2 minutes, from a machine or deployment with network access)
 
@@ -145,11 +188,29 @@ workspaces.
 These sit on the same services as the UI (`jobs.ts`, `read.ts`), so a future MCP server or browser
 extension can call them without duplicating research logic.
 
+## Evaluation
+
+`docs/eval/research-briefs.json` holds five representative briefs (fashion, entertainment, beauty,
+food and beverage, technology), each with properties a reviewer should check. `scripts/research-eval.ts`
+runs them through the real API. It reports status, completeness, Qloo-seeded questions, providers,
+sources, distinct hosts, independent sources, duplicates removed, claims, **citation integrity** (the
+share of cited ids that resolve to a stored claim or Qloo observation), opportunities grounded in Qloo,
+contradictions, cost and time. Strategic usefulness still needs human review.
+
+```bash
+BASE_URL=https://your-app CC_COOKIE='…session cookie…' PROJECT_ID=<uuid> npx tsx scripts/research-eval.ts [brief-id]
+```
+
+So far the script has been run only against the local server in demo mode, which validates the
+pipeline, not research quality. It has not been run with live keys.
+
 ## Not built yet (next milestones)
 
-- Trend observations over time: the `trend_observations` table is now populated by the Google Trends & Search Velocity provider (`src/lib/research/deep/providers/google-trends.ts`), storing consumer momentum index scores and breakout queries.
+- Live verification of Serper, Exa, YouTube, Reddit, Wikipedia and Hacker News, and of Qloo `/v2/tags`.
+- An official Google Trends integration (needs confirmed API access); until then trend claims rely on
+  repeated Qloo popularity observations only.
 - Visual analysis across assets (image uploads use vision for brief extraction only).
 - Embedding-based retrieval for client documents (keyword search only today).
-- Saving report opportunities straight into the Opportunities board (the existing generator reads the
-  new web claims, but there is no one-click import yet).
-- A quality benchmark set of research briefs with human-reviewed reference evidence.
+- Measuring Serper and Exa overlap and usefulness on the evaluation briefs once keys are live.
+- Feeding first-party campaign results back into recommendations (experiments record results, but no
+  analytics connector exists).

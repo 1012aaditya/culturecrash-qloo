@@ -21,7 +21,7 @@ import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 import { CulturalNetwork, TYPE_LABEL, TYPE_THEME } from "./cultural-network";
 import { ResearchLauncher } from "./deep/research-launcher";
 import { ResearchProgress, ResearchReport } from "./deep/research-report";
-import type { DeepView, ProviderStatus } from "@/lib/research/deep/view-types";
+import type { ClaimRow, DeepView, ProviderStatus } from "@/lib/research/deep/view-types";
 
 type Props = {
   project: { id: string; name: string; category: string | null; market: string | null; isDemo: boolean; description: string };
@@ -251,7 +251,7 @@ export function ResearchWorkspace(p: Props) {
             {runActive ? (
               <ResearchProgress projectId={p.project.id} runId={p.run.id} stage={live?.stage ?? p.deep.stage} live={live} cancelRequested={p.deep.cancelRequested} canCancel={p.canRun} />
             ) : (
-              <ResearchReport deep={p.deep} isDemo={isDemoRun} />
+              <ResearchReport deep={p.deep} isDemo={isDemoRun} projectId={p.project.id} runId={p.run.id} canEdit={p.canRun} />
             )}
           </div>
         ) : (
@@ -369,7 +369,8 @@ export function ResearchWorkspace(p: Props) {
       {/* Contextual research panel */}
       <aside className="flex flex-col gap-4" aria-label="Research details">
         {selectedEntity ? (
-          <EntityPanel entity={selectedEntity} entities={p.entities} relationships={p.relationships} sources={p.sources} run={p.run!} projectId={p.project.id} onClose={() => setSelected(null)} onSelect={setSelected} />
+          <EntityPanel entity={selectedEntity} entities={p.entities} relationships={p.relationships} sources={p.sources} run={p.run!} projectId={p.project.id} onClose={() => setSelected(null)} onSelect={setSelected}
+            externalClaims={(p.deep?.claims ?? []).filter((c) => c.evidenceType === "external_source" && c.entityIds.includes(selectedEntity.id))} />
         ) : (
           <>
             {p.featured ? (
@@ -526,8 +527,24 @@ function RunOverview({ run, entities, projectId, generatorLabel, onSelect, theme
   );
 }
 
-function EntityPanel({ entity: e, entities, relationships, sources, run, projectId, onClose, onSelect }: {
+function PopularityHistory({ history }: { history: { value: number; at: string }[] }) {
+  if (history.length < 2) {
+    return <p className="mt-2 text-[11px] text-muted">One Qloo popularity observation so far. Run research again later to see how it changes over time.</p>;
+  }
+  const first = history[0];
+  const last = history[history.length - 1];
+  const delta = last.value - first.value;
+  return (
+    <p className="mt-2 text-[11px] text-muted">
+      Qloo popularity across {history.length} observations: {first.value.toFixed(3)} ({new Date(first.at).toLocaleDateString()}) → {last.value.toFixed(3)} ({new Date(last.at).toLocaleDateString()}),
+      {" "}<b className={cn("font-medium", delta > 0 ? "text-success" : delta < 0 ? "text-danger" : "text-ink")}>{delta >= 0 ? "+" : ""}{delta.toFixed(3)}</b>. Relative popularity, not search volume.
+    </p>
+  );
+}
+
+function EntityPanel({ entity: e, entities, relationships, sources, run, projectId, onClose, onSelect, externalClaims }: {
   entity: EntityRow; entities: EntityRow[]; relationships: RelRow[]; sources: SourceRow[]; run: RunRow; projectId: string; onClose: () => void; onSelect: (id: string) => void;
+  externalClaims: ClaimRow[];
 }) {
   const source = sources.find((s) => s.id === e.sourceId);
   const related = relationships.filter((r) => r.from === e.id || r.to === e.id).map((r) => ({ r, other: entities.find((x) => x.id === (r.from === e.id ? r.to : r.from)) })).filter((x) => x.other);
@@ -580,7 +597,19 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
         </dl>
         {e.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{e.tags.map((t) => <Badge key={t} tone="outline">{t}</Badge>)}</div>}
         {e.description && <p className="mt-2 text-[12px] text-muted">{e.description}</p>}
+        {run.mode !== "demo" && e.popularity !== null && <PopularityHistory history={e.popularityHistory ?? []} />}
       </div>
+      {externalClaims.length > 0 && (
+        <div className="mt-3 rounded-cc-sm border border-line p-3">
+          <p className="cc-eyebrow text-[9px] text-muted">External evidence about this entity · {externalClaims.length}</p>
+          <ul className="mt-2 space-y-1.5 text-[12px]">
+            {externalClaims.slice(0, 4).map((c) => (
+              <li key={c.id}>{c.url ? <a href={c.url} target="_blank" rel="noopener noreferrer nofollow" className="hover:text-violet">{c.text}</a> : c.text} <span className="text-muted">· {c.provider}</span></li>
+            ))}
+          </ul>
+          <p className="mt-1 text-[10px] text-faint">Retrieved to investigate this Qloo result; open the Report to see how it was used.</p>
+        </div>
+      )}
       <p className="mt-3 text-[12px] leading-relaxed text-muted">
         {e.profileOf
           ? "Profile tags show how Qloo catalogues the brand itself. They describe the brand, not the audience’s affinity."

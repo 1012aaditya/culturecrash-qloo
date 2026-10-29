@@ -85,6 +85,8 @@ describe("claim extraction", () => {
   });
 });
 
+const opp = { title: "", thesis: "t", audience: "a", qlooEvidenceIds: [] as string[], supportingClaimIds: [] as string[], counterClaimIds: [] as string[], audienceRelevance: "", brandFit: "", creativeDirection: "", assumptions: [], risks: [], evidenceGaps: [], validation: "test", successMetrics: [], exploratory: false };
+
 describe("synthesis", () => {
   const claims = [{ id: "c1", text: "A", type: "source_fact", score: 0.7, independent: 2, questionKey: "q1", sources: ["X"] }, { id: "c2", text: "B", type: "source_opinion", score: 0.5, independent: 1, questionKey: "q1", sources: ["Y"] }];
   it("drops findings and opportunities that cite nothing real, and one-sided contradictions", () => {
@@ -93,17 +95,23 @@ describe("synthesis", () => {
       findings: [{ statement: "ok", kind: "supported", claimIds: ["c1", "fake"], questionKey: "q1", strength: "strong" }, { statement: "unsupported", kind: "interpretation", claimIds: ["fake"], questionKey: "q1", strength: "weak" }],
       contradictions: [{ claimIds: ["c1", "fake"], explanation: "x" }, { claimIds: ["c1", "c2"], explanation: "y" }],
       gaps: [{ questionKey: "q9", description: "?" }],
-      opportunities: [{ title: "T", thesis: "t", audience: "a", supportingClaimIds: ["c1"], counterClaimIds: ["fake"], assumptions: [], risks: [], validation: "test", exploratory: false }, { title: "U", thesis: "u", audience: "a", supportingClaimIds: ["nope"], counterClaimIds: [], assumptions: [], risks: [], validation: "", exploratory: false }],
+      opportunities: [
+        { ...opp, title: "T", supportingClaimIds: ["c1"], counterClaimIds: ["fake"], qlooEvidenceIds: ["qloo-1", "fake-q"] },
+        { ...opp, title: "U", supportingClaimIds: ["nope"] },
+        { ...opp, title: "Q", supportingClaimIds: [], qlooEvidenceIds: ["qloo-1"] },
+      ],
       limitations: [],
-    }, new Set(["c1", "c2"]), new Set(["q1"]));
+    }, new Set(["c1", "c2"]), new Set(["q1"]), new Set(["qloo-1"]));
     expect(s.findings).toHaveLength(1);
     expect(s.findings[0].claimIds).toEqual(["c1"]);
     expect(s.contradictions).toHaveLength(1);
     expect(s.gaps).toHaveLength(0);
-    expect(s.opportunities).toHaveLength(1);
-    expect(s.opportunities[0]).toMatchObject({ counterClaimIds: [], exploratory: true }); // one supporting claim → exploratory
+    // Kept: one with web support, one built only on a Qloo observation. Dropped: one citing nothing real.
+    expect(s.opportunities.map((o) => o.title)).toEqual(["T", "Q"]);
+    expect(s.opportunities[0]).toMatchObject({ counterClaimIds: [], qlooEvidenceIds: ["qloo-1"], exploratory: true }); // one supporting claim → exploratory
+    expect(s.opportunities[1].supportingClaimIds).toEqual([]);
   });
-  it("rules synthesis restates claims, reports gaps, and invents no opportunities", () => {
+  it("rules synthesis restates claims and reports gaps; without Qloo data it invents no opportunities", () => {
     const s = rulesSynthesis([{ key: "q1", text: "Q1", intent: "audience", priority: 1, queries: [] }, { key: "q2", text: "Q2", intent: "trend", priority: 2, queries: [] }], claims,
       [{ key: "q1", question: "Q1", priority: 1, claims: 2, independent: 2, status: "sufficient" }, { key: "q2", question: "Q2", priority: 2, claims: 0, independent: 0, status: "none" }]);
     expect(s.findings.map((f) => f.claimIds[0])).toEqual(["c1", "c2"]);

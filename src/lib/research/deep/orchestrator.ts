@@ -11,11 +11,11 @@ import { cacheGet, cacheKey, cachePut } from "./cache";
 import { dedupe, independentCount, isRepeatQuery, mergeClaims, tokens } from "./dedupe";
 import { extractionPrompt, extractionSchema, rulesExtraction, validateExtraction, type ExtractDoc } from "./extract";
 import { fetchPage } from "./fetch-page";
-import { buildPlanV2, countryCode, llmPlanSchema, sanitizeLlmPlan } from "./planner";
+import { buildPlanV2, countryCode, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan } from "./planner";
 import { exaSearch, tavilySearch } from "./providers/alt-web";
 import { braveSearch } from "./providers/brave";
 import { demoSearch } from "./providers/demo";
-import { googleTrendsSearch } from "./providers/google-trends";
+import { googleSuggest } from "./providers/google-suggest";
 import { hackerNewsSearch } from "./providers/hacker-news";
 import { redditSearch } from "./providers/reddit";
 import { serperSearch } from "./providers/serper";
@@ -23,8 +23,8 @@ import { wikipediaSearch } from "./providers/wikipedia";
 import { youtubeSearch } from "./providers/youtube";
 import { scoreClaim } from "./quality";
 import { providerRegistry, type ProviderInfo } from "./registry";
-import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, type Coverage, type Report, type SynthClaim } from "./synthesize";
-import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, ResearchPlanV2, ResearchQuestion } from "./types";
+import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, type Coverage, type QlooObservation, type Report, type SynthClaim } from "./synthesize";
+import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
 
 export type AffinityOutcome =
   | { ok: true; observations: number; failures: number; summary: string | null }
@@ -114,6 +114,22 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   if (!ctx.webEnabled) {
     registry = registry.map((p) => (p.key === "brand_docs" ? p : { ...p, configured: false, unavailableReason: "Web research is turned off for this workspace in Settings → Integrations" }));
   }
+  // ---------------------------------------------------------------- Qloo first
+  // Qloo's cultural affinities are the core discovery step: they run before planning, and the
+  // strongest returned entities become questions for the external sources to investigate.
+  await save({ stage: "affinity" });
+  const affinity: AffinityOutcome = await affinityStage();
+  if (!affinity.ok && !affinity.skipped) providerFailures.push({ provider: "qloo", error: affinity.message });
+  const qlooRows: QlooPick[] = affinity.ok ? await withUser(userId, (tx) => tx`
+    select e.id, e.name, e.entity_type, e.role, e.affinity, e.popularity, e.properties->>'cultural_tier' as tier,
+      (select ev.id from evidence_items ev where ev.run_id = e.run_id and e.id = any(ev.entity_ids) and ev.evidence_type = 'provider_observation' limit 1) as evidence_id
+    from cultural_entities e where e.run_id = ${runId} and e.role in ('result', 'tag')`.then((rows) => rows.map((r) => ({
+      entityId: r.id, evidenceId: r.evidence_id, name: r.name, type: r.role === "tag" ? "tag" : r.entity_type, role: r.role,
+      affinity: r.affinity === null ? null : Number(r.affinity), popularity: r.popularity === null ? null : Number(r.popularity), tier: r.tier,
+    })))) : [];
+  const qlooPicks = pickQlooEntities(qlooRows, QLOO_PICKS[depth]);
+  await save({ stage: "planning" });
+
   const useLlm = !isDemo && (await llmEnabled(userId, ws));
   const objective = (run.research_question as string | null) ?? null;
   const freshness = ((run.budget as { freshness?: "month" | "year" | "any" })?.freshness) ?? "year";
@@ -125,16 +141,10 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     }));
     if (out) llmQuestions = sanitizeLlmPlan(out, depth, ctx.hasBrandDocs);
   }
-  const plan = buildPlanV2(ctx.brief, { objective, depth, freshness, hasBrandDocs: ctx.hasBrandDocs, registry, demo: isDemo, llmQuestions });
+  const plan = buildPlanV2(ctx.brief, { objective, depth, freshness, hasBrandDocs: ctx.hasBrandDocs, registry, demo: isDemo, llmQuestions, qlooQuestions: qlooQuestions(qlooPicks, ctx.brief) });
   if (!ctx.webEnabled) plan.notes.push("Web research is turned off for this workspace; only client documents and Qloo were used.");
-  await withUser(userId, (tx) => tx`update research_runs set plan = plan || ${tx.json({ deep: plan } as never)} where id = ${runId}`);
-
-  // ---------------------------------------------------------------- affinity (Qloo)
-  let affinity: AffinityOutcome | null = null;
+  await withUser(userId, (tx) => tx`update research_runs set plan = plan || ${tx.json({ deep: { ...plan, qlooPicks } } as never)} where id = ${runId}`);
   if (await cancelled()) return finish("cancelled");
-  await save({ stage: "affinity" });
-  affinity = await affinityStage();
-  if (!affinity.ok && !affinity.skipped) providerFailures.push({ provider: "qloo", error: affinity.message });
 
   // ---------------------------------------------------------------- search rounds
   const country = countryCode(plan.geography);
@@ -211,13 +221,6 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     await withUser(userId, async (tx) => {
       await ledger(tx, t.provider, "search", { ...call, count: call.data.length, questionKey: t.q.key, round });
       if (call.ok && info && info.cacheTtlHours > 0 && !isDemo) await cachePut(tx, ws, t.provider, key, call.data, info.cacheTtlHours);
-      if (call.ok && t.provider === "google_trends" && !isDemo) {
-        for (const hit of call.data.slice(0, 3)) {
-          const val = hit.metrics.search_interest ?? 100;
-          await tx`insert into trend_observations (workspace_id, project_id, run_id, topic, provider, metric, value, unit, geography, source_ref, method)
-            values (${ws}, ${projectId}, ${runId}, ${t.query.slice(0, 200)}, 'google_trends', 'search_momentum_index', ${val}, 'index', ${country ?? null}, ${hit.url ?? null}, 'google_suggest_velocity')`.catch(() => {});
-        }
-      }
     });
     if (!call.ok) {
       const msg = call.errorKind === "config" ? `${call.error} — check the API key or plan` : call.error ?? "failed";
@@ -236,7 +239,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       case "youtube": return youtubeSearch({ query, count: 5, regionCode: country, publishedAfter: freshness === "any" ? null : new Date(Date.now() - (freshness === "month" ? 31 : 366) * 86_400_000).toISOString(), apiKey: e.YOUTUBE_API_KEY! });
       case "reddit": return redditSearch({ query, count: 8, timeframe: freshness, clientId: e.REDDIT_CLIENT_ID!, clientSecret: e.REDDIT_CLIENT_SECRET! });
       case "wikipedia": return wikipediaSearch({ query, count: 3 });
-      case "google_trends": return googleTrendsSearch({ query, count: 4, country });
+      case "google_suggest": return googleSuggest({ query, country });
       case "hacker_news": return hackerNewsSearch({ query, count: depth === "quick" ? 4 : 8 });
       default: return { ok: false, data: [], status: "error", httpStatus: null, durationMs: 0, error: `Unknown provider ${p}`, errorKind: "permanent", units: 0, costUsdEstimated: 0, costUsdActual: null, params: {}, raw: null, cached: false };
     }
@@ -348,10 +351,10 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
         } else {
           const [row] = await tx`
             insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim_type, claim, source_provider, source_ref, source_url, retrieved_at, source_timestamp,
-              raw_metadata, normalized_value, document_ids, excerpt, question_key, extraction_method, quality, independent_sources, scope, is_demo, created_by, review_status, limitations)
+              raw_metadata, normalized_value, document_ids, excerpt, question_key, extraction_method, quality, independent_sources, scope, is_demo, created_by, review_status, limitations, entity_ids)
             values (${projectId}, ${ws}, ${runId}, ${evidenceType}, ${m.claimType}, ${m.text}, ${support.provider}, ${support.externalId}, ${support.canonicalUrl}, ${support.retrievedAt},
               ${support.publishedAt}, ${tx.json({ deep: true, publisher: support.publisher, title: support.title } as never)}, null, ${m.documentIds}, ${m.excerpt}, ${m.questionKey},
-              ${(m as { method?: string }).method ?? "rules:excerpt"}, ${tx.json(quality as never)}, ${independent}, ${tx.json(m.scope as never)}, ${isDemo}, ${userId}, 'unreviewed', ${limitation})
+              ${(m as { method?: string }).method ?? "rules:excerpt"}, ${tx.json(quality as never)}, ${independent}, ${tx.json(m.scope as never)}, ${isDemo}, ${userId}, 'unreviewed', ${limitation}, ${q?.qlooEntityIds ?? []})
             returning id`;
           claims.push({ dbId: row.id, text: m.text, claimType: m.claimType, documentIds: m.documentIds, excerpt: m.excerpt, questionKey: m.questionKey, scope: m.scope, method: (m as { method?: string }).method ?? "rules:excerpt", score: quality.score, independent, quality });
         }
@@ -377,13 +380,20 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       id: c.dbId!, text: c.text, type: c.claimType, score: c.score, independent: c.independent, questionKey: c.questionKey,
       sources: c.documentIds.map((id) => docs.find((d) => d.id === id)?.publisher ?? docs.find((d) => d.id === id)?.title ?? "").filter(Boolean).slice(0, 3),
     }));
+    // Qloo observations are citable alongside web claims (observed API data, labelled as such).
+    const qlooObs: QlooObservation[] = [...qlooRows].filter((r) => r.evidenceId).sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0)).slice(0, 24).map((r) => ({
+      id: r.evidenceId!, entity: r.name, type: r.type, affinity: r.affinity, popularity: r.popularity,
+      questionKey: plan.questions.find((q) => q.qlooEntityIds?.includes(r.entityId))?.key ?? null,
+      claim: `${r.name} (${r.type})${r.affinity !== null ? `, affinity ${r.affinity.toFixed(2)}` : ""}`,
+    }));
+    const qlooIds = new Set(qlooObs.map((o) => o.id));
     let generator = "rules";
-    let synthesis = rulesSynthesis(plan.questions, synthClaims, coverage);
-    if (useLlm && synthClaims.length && !isCancelled) {
+    let synthesis = rulesSynthesis(plan.questions, synthClaims, coverage, qlooObs, brief);
+    if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled) {
       const model = depth === "quick" ? e.LLM_MODEL_FAST : e.LLM_MODEL;
       const out = await llm("synthesize", model, depth === "quick" ? 0.01 : 0.12, () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
-        prompt: synthesisPrompt(brief, plan.objective, plan.questions, synthClaims, coverage, affinity?.ok ? affinity.summary : null) }), true);
-      if (out) { synthesis = validateSynthesis(out, new Set(synthClaims.map((c) => c.id)), new Set(plan.questions.map((q) => q.key))); generator = `llm:${model}`; }
+        prompt: synthesisPrompt(brief, plan.objective, plan.questions, synthClaims, coverage, affinity.ok ? affinity.summary : null, qlooObs) }), true);
+      if (out) { synthesis = validateSynthesis(out, new Set(synthClaims.map((c) => c.id)), new Set(plan.questions.map((q) => q.key)), qlooIds); generator = `llm:${model}`; }
       else synthesis.limitations.unshift("The LLM synthesis was skipped (budget) or failed; this summary restates the strongest source claims.");
     }
     if (isDemo) synthesis.limitations.unshift("DEMONSTRATION DATA: every source in this report is fictional.");
@@ -408,7 +418,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       }
       for (const o of report.opportunities) {
         await tx`insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim_type, claim, source_provider, raw_metadata, is_demo, created_by, review_status, limitations)
-          values (${projectId}, ${ws}, ${runId}, 'hypothesis', 'strategic_hypothesis', ${`${o.title}: ${o.thesis}`}, ${generator}, ${tx.json({ supporting_evidence_ids: o.supportingClaimIds, counter_evidence_ids: o.counterClaimIds, assumptions: o.assumptions, validation: o.validation } as never)}, ${isDemo}, ${userId}, 'needs_validation',
+          values (${projectId}, ${ws}, ${runId}, 'hypothesis', 'strategic_hypothesis', ${`${o.title}: ${o.thesis}`}, ${generator}, ${tx.json({ supporting_evidence_ids: [...o.qlooEvidenceIds, ...o.supportingClaimIds], counter_evidence_ids: o.counterClaimIds, qloo_evidence_ids: o.qlooEvidenceIds, assumptions: o.assumptions, validation: o.validation, creative_direction: o.creativeDirection, success_metrics: o.successMetrics } as never)}, ${isDemo}, ${userId}, 'needs_validation',
           'Strategic hypothesis generated from research. Validate with the suggested experiment before treating it as a conclusion.')`;
       }
       for (const c of report.contradictions) {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { BriefInput } from "@/lib/ai/template";
-import { pickWebSearch, ROUTES, type ProviderInfo } from "./registry";
-import type { Depth, Intent, ProviderKey, ResearchPlanV2, ResearchQuestion } from "./types";
+import { isTechBrief, pickWebSearch, ROUTES, type ProviderInfo } from "./registry";
+import type { Depth, Intent, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
 
 const QUESTION_CAP: Record<Depth, number> = { quick: 3, standard: 5, deep: 7 };
 const QUERIES_PER_QUESTION: Record<Depth, number> = { quick: 1, standard: 2, deep: 2 };
@@ -59,25 +59,35 @@ export function rulesPlan(b: BriefInput, opts: { objective: string | null; depth
 }
 
 /** Which providers answer each question: the primary configured provider per routed capability. */
-export function selectProviders(questions: ResearchQuestion[], registry: ProviderInfo[], demo: boolean): { providers: ProviderKey[]; skipped: { provider: ProviderKey; reason: string }[]; byQuestion: Record<string, ProviderKey[]> } {
+/** At most this many providers answer one question — more sources per question rarely pays for itself. */
+const MAX_PROVIDERS_PER_QUESTION = 3;
+
+export function selectProviders(questions: ResearchQuestion[], registry: ProviderInfo[], demo: boolean, opts: { tech?: boolean } = {}): { providers: ProviderKey[]; skipped: { provider: ProviderKey; reason: string }[]; byQuestion: Record<string, ProviderKey[]> } {
   const web = pickWebSearch(registry, demo);
   const byCap = (cap: string): ProviderKey | null => {
     if (cap === "web_search") return web;
     if (demo) return null; // demo runs only use the labelled fixture web provider (+ client documents)
-    return registry.find((p) => p.capability === cap && p.configured)?.key ?? null;
+    if (cap === "tech_community" && !opts.tech) return null; // Hacker News only for technology briefs
+    const key = registry.find((p) => p.capability === cap && p.configured)?.key ?? null;
+    return key === web ? null : key; // Exa as the semantic complement only when it isn't already the web provider
   };
   const byQuestion: Record<string, ProviderKey[]> = {};
   for (const q of questions) {
-    const caps = ROUTES[q.intent];
-    const chosen = caps.map(byCap).filter((k): k is ProviderKey => Boolean(k));
+    const chosen = [...new Set(ROUTES[q.intent].map(byCap).filter((k): k is ProviderKey => Boolean(k)))].slice(0, MAX_PROVIDERS_PER_QUESTION);
     // Brand-context questions use client documents only; everything else gets at least web search when available.
     if (q.intent === "brand_context") byQuestion[q.key] = ["brand_docs"];
-    else byQuestion[q.key] = [...new Set(chosen.length ? chosen : web ? [web] : [])];
+    else byQuestion[q.key] = chosen.length ? chosen : web ? [web] : [];
   }
   const providers = [...new Set(Object.values(byQuestion).flat())];
   const skipped = registry
-    .filter((p) => !providers.includes(p.key) && p.key !== "demo_web" && !(web && p.capability === "web_search"))
-    .map((p) => ({ provider: p.key, reason: p.unavailableReason ?? "Not relevant to these questions" }));
+    .filter((p) => !providers.includes(p.key) && p.key !== "demo_web")
+    .map((p) => ({
+      provider: p.key,
+      reason: !p.configured ? p.unavailableReason ?? "Not configured"
+        : p.capability === "tech_community" && !opts.tech ? "Only used for technology, AI or startup briefs"
+        : p.capability === "web_search" ? `Another web-search provider (${web}) is used for this job`
+        : "Not relevant to these questions",
+    }));
   return { providers, skipped, byQuestion };
 }
 
@@ -101,15 +111,76 @@ export function sanitizeLlmPlan(out: z.infer<typeof llmPlanSchema>, depth: Depth
     }));
 }
 
-export function buildPlanV2(b: BriefInput, opts: { objective: string | null; depth: Depth; freshness: "month" | "year" | "any"; hasBrandDocs: boolean; registry: ProviderInfo[]; demo: boolean; llmQuestions?: ResearchQuestion[] | null }): ResearchPlanV2 & { byQuestion: Record<string, ProviderKey[]> } {
-  const questions = opts.llmQuestions?.length ? opts.llmQuestions : rulesPlan(b, opts);
-  const sel = selectProviders(questions, opts.registry, opts.demo);
+export function buildPlanV2(b: BriefInput, opts: { objective: string | null; depth: Depth; freshness: "month" | "year" | "any"; hasBrandDocs: boolean; registry: ProviderInfo[]; demo: boolean; llmQuestions?: ResearchQuestion[] | null; qlooQuestions?: ResearchQuestion[] }): ResearchPlanV2 & { byQuestion: Record<string, ProviderKey[]> } {
+  const briefQs = opts.llmQuestions?.length ? opts.llmQuestions : rulesPlan(b, opts);
+  const questions = mergeQuestions(opts.qlooQuestions ?? [], briefQs, opts.depth);
+  const tech = isTechBrief([b.category, b.product, b.brand, opts.objective].filter(Boolean).join(" "));
+  const sel = selectProviders(questions, opts.registry, opts.demo, { tech });
   const notes: string[] = [];
   if (!sel.providers.some((p) => p !== "brand_docs")) notes.push("No web, video or community provider is configured, so only client documents (and Qloo, if configured) can be used.");
+  if (opts.qlooQuestions?.length) notes.push(`${opts.qlooQuestions.length} question(s) investigate entities Qloo returned for this brief.`);
+  else notes.push("No Qloo results were available to seed the research; questions come from the brief only.");
   return {
     objective: opts.objective ?? `Understand the cultural context for ${b.brand ?? b.name}${b.market ? ` in ${b.market}` : ""}.`,
     depth: opts.depth, questions, geography: b.market ?? null,
     timeframe: { freshness: opts.freshness, label: opts.freshness === "month" ? "Past month" : opts.freshness === "year" ? "Past year" : "Any time" },
     providers: sel.providers, skipped: sel.skipped, notes, planner: opts.llmQuestions?.length ? "llm" : "rules", byQuestion: sel.byQuestion,
   };
+}
+
+/** How many Qloo results each depth investigates externally. */
+export const QLOO_PICKS: Record<Depth, number> = { quick: 1, standard: 2, deep: 4 };
+
+const TYPE_LABEL: Record<string, string> = {
+  artist: "artist", person: "public figure", movie: "film", tv_show: "TV show", podcast: "podcast", book: "book", video_game: "video game",
+  brand: "brand", place: "place", destination: "destination", tag: "taste tag",
+};
+/** Which kind of external evidence fits a Qloo entity type. */
+const TYPE_INTENT: Record<string, Intent> = {
+  artist: "creator", person: "creator", podcast: "creator", tv_show: "creator", movie: "creator", video_game: "creator", book: "culture",
+  brand: "competitor", place: "culture", destination: "culture", tag: "community",
+};
+
+/**
+ * Picks the Qloo results worth investigating: highest affinity first, preferring under-the-radar
+ * ("white space") entities and type diversity, plus the strongest taste tag. Deterministic.
+ */
+export function pickQlooEntities(rows: QlooPick[], n: number): QlooPick[] {
+  const results = rows.filter((r) => r.role === "result" && r.affinity !== null)
+    .sort((a, b) => (b.tier === "white_space" ? 0.05 : 0) + (b.affinity ?? 0) - ((a.tier === "white_space" ? 0.05 : 0) + (a.affinity ?? 0)));
+  const picks: QlooPick[] = [];
+  const types = new Set<string>();
+  for (const r of results) {
+    if (picks.length >= Math.max(1, n - (n > 1 ? 1 : 0))) break;
+    if (types.has(r.type) && results.some((x) => !types.has(x.type) && !picks.includes(x))) continue;
+    picks.push(r);
+    types.add(r.type);
+  }
+  const tag = rows.filter((r) => r.role === "tag").sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))[0];
+  if (n > 1 && tag) picks.push(tag);
+  for (const r of results) if (picks.length < n && !picks.includes(r)) picks.push(r);
+  return picks.slice(0, n);
+}
+
+/** One research question per picked Qloo entity, routed by entity type. */
+export function qlooQuestions(picks: QlooPick[], b: BriefInput): ResearchQuestion[] {
+  const brand = b.brand ?? b.name;
+  const cat = b.category ?? b.product ?? "";
+  const aud = b.audience ? clean(b.audience).split(/[.,;]/)[0].slice(0, 50) : null;
+  return picks.map((p, i) => {
+    const kind = TYPE_LABEL[p.type] ?? p.type;
+    return {
+      key: `k${i + 1}`, origin: "qloo" as const, priority: (i < 2 ? 1 : 2) as 1 | 2, intent: TYPE_INTENT[p.type] ?? "culture",
+      text: `Qloo links the ${kind} “${p.name}” to this audience${p.affinity !== null ? ` (affinity ${p.affinity.toFixed(2)})` : ""}. What public context explains that connection, and could it matter for ${brand}?`,
+      queries: [clean(`${p.name} ${cat}`), clean(`${p.name} ${aud ?? b.market ?? "fans"}`)].map((x) => x.slice(0, 160)),
+      qlooEntityIds: [p.entityId], qlooEvidenceIds: p.evidenceId ? [p.evidenceId] : [],
+    };
+  });
+}
+
+/** Qloo-seeded questions first, then brief questions, within the depth's cap. */
+export function mergeQuestions(qloo: ResearchQuestion[], brief: ResearchQuestion[], depth: Depth): ResearchQuestion[] {
+  const cap = QUESTION_CAP[depth];
+  const qs = [...qloo.map((q) => ({ ...q, queries: q.queries.slice(0, QUERIES_PER_QUESTION[depth]) })), ...brief.map((q) => ({ ...q, origin: q.origin ?? ("brief" as const) }))];
+  return qs.slice(0, cap).map((q, i) => ({ ...q, key: `q${i + 1}` }));
 }

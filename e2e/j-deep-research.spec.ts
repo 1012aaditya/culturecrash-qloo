@@ -20,6 +20,19 @@ test("Scenario J — multi-source research: client document, cited report, evide
   await expect(page.getByRole("tab", { name: /sources/ })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Demonstration data").first()).toBeVisible();
 
+  // Qloo first: the report opens with the Qloo foundation, and Qloo-seeded questions are marked.
+  await expect(page.getByText("Qloo foundation").first()).toBeVisible();
+  await expect(page.getByText("Seeded by Qloo").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Qloo · / }).first()).toBeVisible();
+
+  // At least one opportunity with a creative direction and a validation experiment, savable to the board.
+  await expect(page.getByText("Creative direction").first()).toBeVisible();
+  await expect(page.getByText("Validation experiment").first()).toBeVisible();
+  await page.getByRole("button", { name: /Save as opportunity/ }).first().click();
+  await expect(page.getByRole("link", { name: /Open saved opportunity/ })).toBeVisible();
+  await page.getByRole("button", { name: /Create experiment/ }).first().click();
+  await expect(page.getByRole("link", { name: /Open experiment/ })).toBeVisible();
+
   // Report: completeness is stated, citations open the evidence inspector.
   await expect(page.getByText(/complete|partial|limited/).first()).toBeVisible();
   await page.getByRole("button", { name: "Open claim 1" }).first().click();
@@ -29,6 +42,12 @@ test("Scenario J — multi-source research: client document, cited report, evide
   // Sources include the client document and mark duplicates honestly.
   await page.getByRole("tab", { name: /sources/ }).click();
   await expect(page.getByText("brand-guidelines.txt (client document)")).toBeVisible();
+
+  // The saved opportunity and drafted experiment exist on their boards.
+  await page.goto(`/projects/${projectId}/opportunities`);
+  await expect(page.getByText(/as a cultural bridge/).first()).toBeVisible();
+  await page.goto(`/projects/${projectId}/experiments`);
+  await expect(page.getByText(/Test: .*as a cultural bridge/).first()).toBeVisible();
 
   // REST API: the owner can read the job; another workspace gets 404, signed-out gets 401.
   const mine = await page.request.get(`/api/research/${runId}/evidence?limit=5`);

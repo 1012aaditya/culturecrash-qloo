@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { exaSearch, tavilySearch } from "@/lib/research/deep/providers/alt-web";
 import { braveSearch } from "@/lib/research/deep/providers/brave";
 import { classify, requestJson } from "@/lib/research/deep/providers/http";
-import { googleTrendsSearch } from "@/lib/research/deep/providers/google-trends";
+import { googleSuggest } from "@/lib/research/deep/providers/google-suggest";
 import { hackerNewsSearch } from "@/lib/research/deep/providers/hacker-news";
 import { redditSearch } from "@/lib/research/deep/providers/reddit";
 import { wikipediaSearch } from "@/lib/research/deep/providers/wikipedia";
@@ -77,25 +77,19 @@ describe("Reddit adapter", () => {
   });
 });
 
-describe("Google Trends adapter", () => {
-  it("extracts search velocity index and rising queries without an API key", async () => {
-    const fetcher = vi.fn(async () => json([
-      "cottagecore",
-      ["cottagecore aesthetic", "cottagecore dress", "cottagecore decor"],
-      ["", "", ""],
-      [],
-      { "google:suggestrelevance": [1250, 1100, 950] }
-    ]));
-    const r = await googleTrendsSearch({ query: "cottagecore", country: "US", fetcher });
+describe("Google search suggestions (not Google Trends)", () => {
+  it("reports phrasing only: no invented index, no fake publication date, no trend metric", async () => {
+    const fetcher = vi.fn(async () => json(["cottagecore", ["cottagecore aesthetic", "cottagecore dress", "cottagecore"], [], { "google:suggestrelevance": [1250, 1100, 950] }]));
+    const r = await googleSuggest({ query: "cottagecore", country: "US", fetcher });
     expect(r.ok).toBe(true);
-    expect(r.data.length).toBeGreaterThanOrEqual(2);
-    expect(r.data[0]).toMatchObject({
-      provider: "google_trends",
-      sourceType: "web_page",
-      publisher: "Google Trends",
-      metrics: { search_interest: 1250 },
-    });
-    expect(r.data[0].url).toContain("trends.google.com/trends/explore?q=cottagecore&geo=US");
+    expect(r.data).toHaveLength(1);
+    expect(r.data[0]).toMatchObject({ provider: "google_suggest", sourceType: "search_suggestions", publishedAt: null, metrics: {}, url: null });
+    expect(r.data[0].snippet).toContain("“cottagecore aesthetic”");
+    expect(r.data[0].snippet).not.toMatch(/1250|velocity|index/i);
+    expect(r.data[0].usageRestrictions).toMatch(/not search volume/);
+    // An unexpected shape is a validation failure, not an empty success.
+    const bad = await googleSuggest({ query: "x", fetcher: vi.fn(async () => json({ nope: true })) });
+    expect(bad).toMatchObject({ ok: false, errorKind: "permanent" });
   });
 });
 

@@ -8,7 +8,7 @@ export async function readObservations(tx: Tx, projectId: string, opts: { runId?
   if (!runId) return [];
   const kw = opts.keyword?.trim() ? `%${opts.keyword.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
   const rows = await tx`
-    select ev.id, ev.claim, ev.normalized_value, ev.claim_type, ce.name, ce.entity_type, ce.role
+    select ev.id, ev.claim, ev.normalized_value, ev.claim_type, ev.evidence_type, ce.name, ce.entity_type, ce.role
     from evidence_items ev left join cultural_entities ce on ce.id = ev.entity_ids[1]
     where ev.project_id = ${projectId} and ev.run_id = ${runId}
       and (ev.evidence_type = 'provider_observation'
@@ -17,7 +17,10 @@ export async function readObservations(tx: Tx, projectId: string, opts: { runId?
     order by ev.evidence_type = 'provider_observation' desc, coalesce(ev.normalized_value, (ev.quality->>'score')::numeric) desc nulls last
     limit ${opts.limit ?? 80}`;
   // Web/community claims carry role "web" and no affinity: they are cited source claims, not Qloo measurements.
-  return rows.map((r) => ({ id: r.id, claim: r.claim, entityName: r.name, entityType: r.entity_type ?? r.claim_type, affinity: r.normalized_value === null ? null : Number(r.normalized_value), role: r.role ?? "web" }));
+  // Only provider observations carry a Qloo role/affinity; web claims linked to a Qloo entity stay "web".
+  return rows.map((r) => r.evidence_type === "provider_observation"
+    ? { id: r.id, claim: r.claim, entityName: r.name, entityType: r.entity_type, affinity: r.normalized_value === null ? null : Number(r.normalized_value), role: r.role }
+    : { id: r.id, claim: r.claim, entityName: r.name ?? null, entityType: r.claim_type, affinity: null, role: "web" });
 }
 
 export async function latestCompletedRun(tx: Tx, projectId: string) {

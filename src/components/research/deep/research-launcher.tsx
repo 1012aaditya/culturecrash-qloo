@@ -50,8 +50,9 @@ export function ResearchLauncher({ projectId, providers, qlooConfigured, webEnab
     <>
       <Button size="sm" onClick={() => setOpen(true)} disabled={disabled}><Play /> {label}</Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title="New research" description="CultureCrash plans the questions, searches the sources that can answer them, follows up on gaps and writes a cited report." className="w-[min(680px,calc(100vw-24px))]">
-          <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
+        <DialogContent title="New research" description="Qloo maps the cultural affinities around your brief first; CultureCrash then investigates the strongest connections with the sources that can answer each question, follows up on gaps and writes a cited report." className="flex max-h-[86dvh] w-[min(680px,calc(100vw-24px))] flex-col">
+          {/* The body scrolls; the action row stays on screen on short viewports. */}
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
             <Field label="Research question" htmlFor="rq" optional hint="Leave empty to research the brief as a whole.">
               <Textarea id="rq" value={question} onChange={(e) => setQuestion(e.target.value)} maxLength={1000} placeholder="e.g. What frustrates Gen Z about skincare routines in India, and how do competitors talk about it?" className="min-h-20" />
             </Field>
@@ -79,7 +80,7 @@ export function ResearchLauncher({ projectId, providers, qlooConfigured, webEnab
             <div>
               <p className="mb-2 text-[13px] font-medium">Sources</p>
               <ul className="grid gap-1.5 sm:grid-cols-2">
-                <li className="flex items-start gap-2 text-[12px]">{qlooConfigured ? <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" /> : <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-faint" />}<span><b className="font-medium">Qloo</b> <span className="text-muted">— {qlooConfigured ? "cultural affinity" : "not configured"}</span></span></li>
+                <li className="flex items-start gap-2 text-[12px]">{qlooConfigured ? <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" /> : <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-faint" />}<span><b className="font-medium">Qloo — core</b> <span className="text-muted">— {qlooConfigured ? "runs first; its strongest cultural connections become questions for the other sources" : "not configured: research will not be grounded in cultural-affinity data"}</span></span></li>
                 {providers.filter((p) => p.key !== "demo_web").map((p) => (
                   <li key={p.key} className="flex items-start gap-2 text-[12px]" title={p.unavailableReason ?? p.costModel}>
                     {p.configured && (webEnabled || p.key === "brand_docs") ? <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" /> : <CircleDashed className="mt-0.5 size-3.5 shrink-0 text-faint" />}
@@ -90,7 +91,7 @@ export function ResearchLauncher({ projectId, providers, qlooConfigured, webEnab
               {!anySource && <p className="mt-2 rounded-cc-sm bg-ink/5 p-2.5 text-[12px] text-muted">No web, video or community source is available, so this run can only use client documents{qlooConfigured ? " and Qloo" : ""}. The report will say so.</p>}
             </div>
           </div>
-          <div className="mt-5 flex items-center justify-end gap-2 border-t border-line pt-4">
+          <div className="mt-5 flex shrink-0 items-center justify-end gap-2 border-t border-line pt-4">
             <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
             <Button onClick={start} disabled={pending}>{pending ? <Loader2 className="animate-spin" /> : <Search />} Start research</Button>
           </div>

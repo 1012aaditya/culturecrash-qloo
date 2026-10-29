@@ -5,7 +5,7 @@
  */
 import { braveSearch } from "../src/lib/research/deep/providers/brave";
 import { exaSearch, tavilySearch } from "../src/lib/research/deep/providers/alt-web";
-import { googleTrendsSearch } from "../src/lib/research/deep/providers/google-trends";
+import { googleSuggest } from "../src/lib/research/deep/providers/google-suggest";
 import { hackerNewsSearch } from "../src/lib/research/deep/providers/hacker-news";
 import { redditSearch } from "../src/lib/research/deep/providers/reddit";
 import { serperSearch } from "../src/lib/research/deep/providers/serper";
@@ -21,7 +21,7 @@ const show = (name: string, r: { ok: boolean; httpStatus: number | null; data: {
 (async () => {
   console.log(`Query: "${q}"\n`);
   show("wikipedia", await wikipediaSearch({ query: q }));
-  show("google_trends", await googleTrendsSearch({ query: q, country: "in" }));
+  show("google_suggest", await googleSuggest({ query: q, country: "in" }));
   show("hacker_news", await hackerNewsSearch({ query: q }));
   if (e.SERPER_API_KEY) {
     const s = await serperSearch({ query: q, country: "in", apiKey: e.SERPER_API_KEY });

@@ -5,7 +5,7 @@
 export type Depth = "quick" | "standard" | "deep";
 
 export type SourceType =
-  | "web_page" | "news" | "encyclopedia" | "community_post" | "video" | "brand_site" | "client_document" | "demo_fixture";
+  | "web_page" | "news" | "encyclopedia" | "community_post" | "video" | "brand_site" | "client_document" | "demo_fixture" | "search_suggestions";
 
 export type ClaimType =
   | "observed_measurement" | "source_fact" | "source_opinion" | "model_interpretation"
@@ -16,9 +16,9 @@ export type Intent = "competitor" | "community" | "creator" | "culture" | "trend
 
 export type ProviderKey =
   | "brave" | "serper" | "tavily" | "exa" | "youtube" | "reddit" | "wikipedia" | "brand_docs" | "demo_web"
-  | "google_trends" | "hacker_news";
+  | "google_suggest" | "hacker_news";
 
-export type Capability = "web_search" | "video" | "community" | "encyclopedia" | "brand_context" | "trend_velocity";
+export type Capability = "web_search" | "semantic_search" | "video" | "community" | "tech_community" | "encyclopedia" | "brand_context" | "search_language";
 
 export type ResearchQuestion = {
   key: string;            // q1, q2…
@@ -26,6 +26,16 @@ export type ResearchQuestion = {
   intent: Intent;
   queries: string[];      // initial search queries
   priority: 1 | 2 | 3;    // 1 = must answer
+  /** Where the question came from; Qloo-seeded questions investigate a returned entity. */
+  origin?: "qloo" | "brief" | "user";
+  qlooEntityIds?: string[];     // cultural_entities ids this question investigates
+  qlooEvidenceIds?: string[];   // the provider_observation evidence for those entities
+};
+
+/** A Qloo result selected to seed external research. */
+export type QlooPick = {
+  entityId: string; evidenceId: string | null; name: string; type: string; role: "result" | "tag";
+  affinity: number | null; popularity: number | null; tier: string | null;
 };
 
 export type ResearchPlanV2 = {

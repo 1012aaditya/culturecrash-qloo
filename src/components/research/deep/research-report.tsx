@@ -1,12 +1,14 @@
 "use client";
 
-import { AlertTriangle, ChevronDown, ExternalLink, FileText, Loader2, Square } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, BookmarkPlus, ChevronDown, ExternalLink, FileText, FlaskConical, Loader2, Square } from "lucide-react";
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { When } from "@/components/ui/time";
 import { useToast } from "@/components/ui/toast";
 import { cancelResearchAction } from "@/lib/research/actions";
+import { createReportExperimentAction, saveReportOpportunityAction } from "@/lib/research/report-actions";
 import type { ClaimRow, DeepView, DocumentRow } from "@/lib/research/deep/view-types";
 import { cn } from "@/lib/utils";
 
@@ -59,7 +61,7 @@ export function ResearchProgress({ projectId, runId, stage, live, cancelRequeste
   );
 }
 
-export function ResearchReport({ deep, isDemo }: { deep: DeepView; isDemo: boolean }) {
+export function ResearchReport({ deep, isDemo, projectId, runId, canEdit }: { deep: DeepView; isDemo: boolean; projectId: string; runId: string; canEdit: boolean }) {
   const [tab, setTab] = React.useState<"report" | "sources" | "claims">("report");
   const [openClaim, setOpenClaim] = React.useState<string | null>(null);
   const sourceClaims = deep.claims.filter((c) => ["source_fact", "source_opinion", "observed_measurement"].includes(c.claimType));
@@ -68,10 +70,23 @@ export function ResearchReport({ deep, isDemo }: { deep: DeepView; isDemo: boole
   const r = deep.report;
   const u = deep.usage;
   const questions = deep.plan?.questions ?? [];
-  const cite = (ids: string[]) => ids.filter((id) => num.has(id)).map((id) => (
+  const qloo = new Map((deep.qloo ?? []).map((q) => [q.evidenceId, q]));
+  // Qloo observations cite as "Qloo · entity" (observed API data); web claims as numbers.
+  const qlooChip = (id: string) => {
+    const q = qloo.get(id)!;
+    return (
+      <Link key={id} href={`/projects/${projectId}/evidence/${id}`} title={q.claim} className="ml-1 inline-flex max-w-[180px] items-center gap-1 truncate rounded-full bg-peach/50 px-1.5 align-middle text-[10px] text-[#8a3d22] transition-colors hover:bg-coral hover:text-white">
+        Qloo · {q.name}{q.affinity !== null ? ` ${q.affinity.toFixed(2)}` : ""}
+      </Link>
+    );
+  };
+  const cite = (ids: string[]) => [...ids.filter((id) => qloo.has(id)).map(qlooChip), ...ids.filter((id) => num.has(id)).map((id) => (
     <button key={id} onClick={() => { setTab("claims"); setOpenClaim(id); requestAnimationFrame(() => document.getElementById(`claim-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })); }}
       className="ml-1 rounded-full bg-lilac/60 px-1.5 font-mono text-[10px] text-violet-ink transition-colors hover:bg-violet hover:text-white" aria-label={`Open claim ${num.get(id)}`}>{num.get(id)}</button>
-  ));
+  ))];
+  const seeds = (deep.qloo ?? []).filter((q) => q.role === "seed");
+  const picks = deep.plan?.qlooPicks ?? [];
+  const observedCount = (deep.qloo ?? []).filter((q) => q.role !== "seed").length;
 
   return (
     <section className="cc-animate-in rounded-[28px] border border-line bg-paper shadow-card" aria-label="Research report">
@@ -106,6 +121,7 @@ export function ResearchReport({ deep, isDemo }: { deep: DeepView; isDemo: boole
         <div className="space-y-6 p-5">
           {!r ? <p className="text-[13px] text-muted">The report appears when the job finishes.</p> : (
             <>
+              <QlooFoundation seeds={seeds.map((s) => s.name)} picks={picks} observed={observedCount} />
               <p className="text-[14px] leading-relaxed">{r.summary}</p>
               {questions.map((q) => {
                 const cov = r.coverage.find((c) => c.key === q.key);
@@ -113,7 +129,7 @@ export function ResearchReport({ deep, isDemo }: { deep: DeepView; isDemo: boole
                 return (
                   <div key={q.key} className="cc-reveal">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <h3 className="text-[13px] font-semibold">{q.text}</h3>
+                      <h3 className="text-[13px] font-semibold">{q.origin === "qloo" && <Badge tone="peach" className="mr-1.5 align-middle">Seeded by Qloo</Badge>}{q.text}</h3>
                       {cov && <Badge tone={cov.status === "sufficient" ? "success" : cov.status === "thin" ? "warning" : "danger"}>{cov.status === "sufficient" ? `${cov.independent} independent sources` : cov.status === "thin" ? "thin evidence" : "no evidence found"}</Badge>}
                     </div>
                     {fs.length ? (
@@ -138,16 +154,28 @@ export function ResearchReport({ deep, isDemo }: { deep: DeepView; isDemo: boole
               {r.opportunities.length > 0 && (
                 <div>
                   <h3 className="text-[13px] font-semibold">Opportunity hypotheses</h3>
-                  <p className="text-[11px] text-muted">Hypotheses to test, not conclusions.</p>
-                  <ul className="mt-3 grid gap-3 md:grid-cols-2">
+                  <p className="text-[11px] text-muted">Hypotheses to test, not conclusions. A cultural affinity does not show that people will buy.</p>
+                  <ul className="mt-3 grid gap-3">
                     {r.opportunities.map((o, i) => (
-                      <li key={i} className="cc-lift rounded-cc border border-line p-4">
-                        <div className="flex items-start justify-between gap-2"><p className="font-medium">{o.title}</p>{o.exploratory && <Badge tone="peach">exploratory</Badge>}</div>
-                        <p className="mt-1 text-[13px] leading-relaxed">{o.thesis}</p>
-                        <p className="mt-2 text-[12px] text-muted">Support{cite(o.supportingClaimIds)}{o.counterClaimIds.length ? <> · Against{cite(o.counterClaimIds)}</> : null}</p>
-                        {o.assumptions.length > 0 && <p className="mt-2 text-[12px]"><b className="font-medium">Assumes:</b> {o.assumptions.join("; ")}</p>}
-                        {o.risks.length > 0 && <p className="mt-1 text-[12px]"><b className="font-medium">Risks:</b> {o.risks.join("; ")}</p>}
-                        <p className="mt-1 text-[12px]"><b className="font-medium">Validate:</b> {o.validation}</p>
+                      <li key={i} className="cc-lift rounded-cc border border-line p-5">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <p className="cc-display text-2xl leading-tight">{o.title}</p>
+                          <div className="flex gap-1">{o.exploratory && <Badge tone="peach">exploratory</Badge>}{r.generator === "rules" && <Badge tone="outline">template (no LLM)</Badge>}</div>
+                        </div>
+                        <p className="mt-2 text-[13px] leading-relaxed">{o.thesis}</p>
+                        <dl className="mt-3 grid gap-x-6 gap-y-2 text-[12px] sm:grid-cols-2">
+                          <OppRow label="Qloo foundation">{o.qlooEvidenceIds?.length ? cite(o.qlooEvidenceIds) : <span className="text-muted">none cited</span>}</OppRow>
+                          <OppRow label="External evidence">{o.supportingClaimIds.length ? cite(o.supportingClaimIds) : <span className="text-muted">none yet</span>}{o.counterClaimIds.length ? <> · against{cite(o.counterClaimIds)}</> : null}</OppRow>
+                          {o.audienceRelevance && <OppRow label="Audience relevance">{o.audienceRelevance}</OppRow>}
+                          {o.brandFit && <OppRow label="Brand fit">{o.brandFit}</OppRow>}
+                          {o.creativeDirection && <OppRow label="Creative direction">{o.creativeDirection}</OppRow>}
+                          {o.risks.length > 0 && <OppRow label="Risks & counterarguments">{o.risks.join("; ")}</OppRow>}
+                          {o.assumptions.length > 0 && <OppRow label="Assumes">{o.assumptions.join("; ")}</OppRow>}
+                          {o.evidenceGaps?.length > 0 && <OppRow label="Evidence gaps">{o.evidenceGaps.join("; ")}</OppRow>}
+                          <OppRow label="Validation experiment">{o.validation}</OppRow>
+                          {o.successMetrics?.length > 0 && <OppRow label="Success metrics">{o.successMetrics.join(" · ")}</OppRow>}
+                        </dl>
+                        {canEdit && <OpportunityActions projectId={projectId} runId={runId} index={i} />}
                       </li>
                     ))}
                   </ul>
@@ -260,5 +288,56 @@ function ClaimItem({ c, n, open, onToggle, docs, question, numOf }: { c: ClaimRo
         </div>
       )}
     </li>
+  );
+}
+
+function OppRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div><dt className="text-[10px] uppercase tracking-wider text-muted">{label}</dt><dd className="mt-0.5 leading-relaxed">{children}</dd></div>;
+}
+
+function QlooFoundation({ seeds, picks, observed }: { seeds: string[]; picks: { entityId: string; name: string; type: string; affinity: number | null; tier: string | null }[]; observed: number }) {
+  if (!seeds.length && !picks.length && !observed) {
+    return <p className="rounded-cc-sm bg-ink/[0.03] p-3 text-[12px] text-muted">Qloo was not used in this run (not configured, turned off, or no signal could be resolved), so the research is not grounded in cultural-affinity data.</p>;
+  }
+  return (
+    <div className="rounded-cc border border-peach/60 bg-peach/10 p-4">
+      <p className="cc-eyebrow text-[10px] text-[#8a3d22]">Qloo foundation</p>
+      <p className="mt-1 text-[13px]">
+        {seeds.length ? <>Signals: <b className="font-medium">{seeds.join(", ")}</b>. </> : null}
+        Qloo returned <b className="font-medium">{observed}</b> cultural entities and taste tags{picks.length ? <>; these were investigated with external sources:</> : "."}
+      </p>
+      {picks.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1.5">
+          {picks.map((p) => (
+            <li key={p.entityId} className="rounded-full bg-paper px-2.5 py-1 text-[12px] shadow-card">
+              {p.name} <span className="text-muted">· {p.type}{p.affinity !== null ? ` · affinity ${p.affinity.toFixed(2)}` : ""}{p.tier === "white_space" ? " · white space" : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-[11px] text-muted">Affinity is Qloo’s relative taste correlation for this signal — not a probability, audience size or purchase intent. Explore every returned entity in the Network view.</p>
+    </div>
+  );
+}
+
+function OpportunityActions({ projectId, runId, index }: { projectId: string; runId: string; index: number }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = React.useState<"save" | "test" | null>(null);
+  const [links, setLinks] = React.useState<{ save?: string; test?: string }>({});
+  const run = async (kind: "save" | "test") => {
+    setBusy(kind);
+    const r = kind === "save" ? await saveReportOpportunityAction(projectId, runId, index) : await createReportExperimentAction(projectId, runId, index);
+    setBusy(null);
+    if (!r.ok) return toast({ tone: "error", title: r.error });
+    setLinks((l) => ({ ...l, [kind]: r.href }));
+    toast({ tone: "success", title: kind === "save" ? "Saved to Opportunities" : "Experiment drafted" });
+  };
+  return (
+    <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-3">
+      {links.save ? <Button asChild size="sm" variant="soft"><Link href={links.save}>Open saved opportunity →</Link></Button>
+        : <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("save")}>{busy === "save" ? <Loader2 className="animate-spin" /> : <BookmarkPlus />} Save as opportunity</Button>}
+      {links.test ? <Button asChild size="sm" variant="soft"><Link href={links.test}>Open experiment →</Link></Button>
+        : <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run("test")}>{busy === "test" ? <Loader2 className="animate-spin" /> : <FlaskConical />} Create experiment</Button>}
+    </div>
   );
 }

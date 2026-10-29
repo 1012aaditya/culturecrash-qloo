@@ -25,7 +25,7 @@ export function DialogContent({
       <D.Overlay className="fixed inset-0 z-50 bg-charcoal/40 backdrop-blur-[2px] data-[state=open]:animate-[cc-fade-in_.25s_ease-out] data-[state=closed]:animate-[cc-fade-out_.15s_ease-in]" />
       <D.Content
         className={cn(
-          "fixed left-1/2 top-[12vh] z-50 w-[min(560px,calc(100vw-24px))] -translate-x-1/2 rounded-cc-lg border border-line bg-paper p-6 shadow-[0_30px_80px_-20px_rgba(17,17,22,0.45)] focus:outline-none data-[state=open]:animate-[cc-dialog-in_.32s_var(--cc-ease-out)] data-[state=closed]:animate-[cc-dialog-out_.16s_var(--cc-ease-in)]",
+          "fixed left-1/2 top-[12vh] z-50 max-h-[86dvh] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 overflow-y-auto rounded-cc-lg border border-line bg-paper p-6 shadow-[0_30px_80px_-20px_rgba(17,17,22,0.45)] focus:outline-none data-[state=open]:animate-[cc-dialog-in_.32s_var(--cc-ease-out)] data-[state=closed]:animate-[cc-dialog-out_.16s_var(--cc-ease-in)]",
           className,
         )}
       >

@@ -26,6 +26,8 @@ const schema = z.object({
   TAVILY_API_KEY: opt(z.string().min(8)),
   BRAVE_API_KEY: opt(z.string().min(8)),
   SERPER_API_KEY: opt(z.string().min(8)),
+  // Google autocomplete is undocumented: off unless explicitly enabled.
+  GOOGLE_SUGGEST: opt(z.enum(["enabled"])),
   EXA_API_KEY: opt(z.string().min(8)),
   FIRECRAWL_API_KEY: opt(z.string().min(8)),
   YOUTUBE_API_KEY: opt(z.string().min(8)),

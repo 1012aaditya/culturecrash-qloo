@@ -39,7 +39,7 @@ export function CommandBar({ data }: { data: ShellData }) {
   return (
     <>
       <header className="cc-no-print pointer-events-none sticky top-0 z-40 px-2.5 pt-2.5 sm:px-4 sm:pt-3">
-        <div className="cc-glass pointer-events-auto mx-auto flex h-14 max-w-[1680px] items-center gap-2 rounded-full pl-3 pr-2 sm:gap-3">
+        <div className="cc-glass pointer-events-auto mx-auto flex h-14 max-w-[1680px] items-center gap-2 rounded-full pl-3 pr-2 animate-[cc-scale-in_.6s_var(--cc-ease-out)_backwards] sm:gap-3">
           <Link href="/dashboard" className="flex items-center gap-2 pr-1" aria-label="CultureCrash dashboard">
             <LogoMark className="size-7" />
             <span className="hidden text-[17px] font-semibold tracking-[-0.03em] xl:inline">CultureCrash</span>

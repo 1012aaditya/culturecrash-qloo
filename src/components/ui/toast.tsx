@@ -29,7 +29,7 @@ export function Toaster({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             className={cn(
-              "cc-animate-in pointer-events-auto flex items-start gap-3 rounded-cc border p-3.5 shadow-[0_20px_50px_-20px_rgba(17,17,22,0.45)]",
+              "animate-[cc-toast-in_.45s_var(--cc-ease-spring)_backwards] pointer-events-auto flex items-start gap-3 rounded-cc border p-3.5 shadow-[0_20px_50px_-20px_rgba(17,17,22,0.45)]",
               t.tone === "error" ? "border-danger/20 bg-paper" : "border-white/10 bg-charcoal text-white",
             )}
           >

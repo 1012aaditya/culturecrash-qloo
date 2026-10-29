@@ -115,10 +115,10 @@ export function CommandPalette({ open, onOpenChange, data, projectId }: { open: 
   return (
     <D.Root open={open} onOpenChange={onOpenChange}>
       <D.Portal>
-        <D.Overlay className="fixed inset-0 z-50 bg-charcoal/30 backdrop-blur-[3px]" />
+        <D.Overlay className="fixed inset-0 z-50 bg-charcoal/30 backdrop-blur-[3px] data-[state=open]:animate-[cc-fade-in_.2s_ease-out] data-[state=closed]:animate-[cc-fade-out_.12s_ease-in]" />
         <D.Content
           aria-label="Command palette"
-          className="fixed left-1/2 top-[10vh] z-50 w-[min(640px,calc(100vw-20px))] -translate-x-1/2 overflow-hidden rounded-cc-lg border border-line bg-paper/95 shadow-[0_40px_100px_-30px_rgba(17,17,22,0.5)] backdrop-blur-xl cc-animate-in"
+          className="fixed left-1/2 top-[10vh] z-50 w-[min(640px,calc(100vw-20px))] -translate-x-1/2 overflow-hidden rounded-cc-lg border border-line bg-paper/95 shadow-[0_40px_100px_-30px_rgba(17,17,22,0.5)] backdrop-blur-xl data-[state=open]:animate-[cc-dialog-in_.3s_var(--cc-ease-out)] data-[state=closed]:animate-[cc-dialog-out_.14s_var(--cc-ease-in)]"
         >
           <D.Title className="sr-only">Command palette</D.Title>
           <D.Description className="sr-only">Search projects, evidence and actions. Use arrow keys to move and Enter to open.</D.Description>

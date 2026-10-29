@@ -133,14 +133,14 @@ export function ProjectLibrary({ projects, canCreate, canEdit, canDeleteAny, use
       {filtered.length === 0 ? (
         <EmptyState className="mt-4" title="No campaigns match" body="Try a different search or reset the filters." />
       ) : view === "gallery" ? (
-        <ul className="mt-4 grid auto-rows-auto gap-4 md:grid-cols-12">
+        <ul className="cc-stagger mt-4 grid auto-rows-auto gap-4 md:grid-cols-12">
           {filtered.map((p, i) => {
             const states = stageStates(p);
             const stage = STAGES.find((s) => s.key === currentStage(p))!;
             const big = i % 8 === 0;
             return (
-              <li key={p.id} className={cn("group relative overflow-hidden rounded-[28px] bg-charcoal text-white shadow-card", spans[i % spans.length])}>
-                <ArtPlate theme={themeForCategory(p.category)} seed={p.id} rounded={false} className="absolute inset-0 transition-transform duration-700 group-hover:scale-[1.03]" />
+              <li key={p.id} className={cn("cc-lift group relative overflow-hidden rounded-[28px] bg-charcoal text-white shadow-card", spans[i % spans.length])}>
+                <ArtPlate theme={themeForCategory(p.category)} seed={p.id} rounded={false} className="absolute inset-0 transition-transform duration-[1.4s] ease-[var(--cc-ease-out)] group-hover:scale-[1.06]" />
                 <div className="absolute inset-0 bg-gradient-to-t from-charcoal/90 via-charcoal/20 to-transparent" />
                 <Link href={`/projects/${p.id}`} className="absolute inset-0 z-[1]" aria-label={`Open ${p.name}`} />
                 <div className="pointer-events-none relative z-[2] flex h-full flex-col justify-between p-5">

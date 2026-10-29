@@ -55,7 +55,7 @@ export default async function ClientWorkspacePage({ params }: PageProps<"/worksp
               <ul className="mt-4 grid gap-3 sm:grid-cols-2">
                 {projects.map((p) => (
                   <li key={p.id}>
-                    <Link href={`/projects/${p.id}`} className="group flex h-full gap-3 rounded-cc border border-line p-2.5 transition-shadow hover:shadow-card">
+                    <Link href={`/projects/${p.id}`} className="group flex h-full gap-3 rounded-cc border border-line p-2.5 cc-lift">
                       <ArtPlate theme={themeForCategory(p.category)} seed={p.id} className="size-16 shrink-0" />
                       <span className="min-w-0 py-0.5">
                         <span className="block truncate text-[14px] font-medium group-hover:text-violet">{p.name}</span>

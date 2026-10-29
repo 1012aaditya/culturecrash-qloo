@@ -29,7 +29,7 @@ export function StrategyStudio({ projectId, directions, canEdit, llm, generatorL
   projectId: string; directions: DirectionView[]; canEdit: boolean; llm: boolean; generatorLabel: string; isDemo: boolean; theme: PlateTheme;
 }) {
   return (
-    <div className="grid gap-5 lg:grid-cols-12">
+    <div className="cc-stagger grid gap-5 lg:grid-cols-12">
       {directions.map((d, i) => (
         <Territory key={d.id} d={d} projectId={projectId} canEdit={canEdit} llm={llm} wide={i === 2} className={LAYOUT[i]} theme={i === 0 ? theme : THEMES[i]} generatorLabel={generatorLabel} isDemo={isDemo} />
       ))}
@@ -57,7 +57,7 @@ function Territory({ d, projectId, canEdit, llm, className, wide, theme, generat
     });
 
   return (
-    <article id={`direction-${d.id}`} className={cn("scroll-mt-28 overflow-hidden rounded-[32px] border bg-paper shadow-card", selected ? "border-violet ring-4 ring-lilac" : "border-line", className)}>
+    <article id={`direction-${d.id}`} className={cn("scroll-mt-28 overflow-hidden rounded-[32px] border bg-paper shadow-card transition-[box-shadow,border-color] duration-500 hover:shadow-float", selected ? "border-violet ring-4 ring-lilac" : "border-line", className)}>
       <div className={cn("grid", wide && "lg:grid-cols-[0.9fr_1.4fr]")}>
         <header className={cn("relative overflow-hidden bg-charcoal text-white", wide ? "min-h-[360px]" : "min-h-[280px]")}>
           <ArtPlate theme={theme} seed={`${d.id}-${d.slot}`} rounded={false} className="absolute inset-0" />

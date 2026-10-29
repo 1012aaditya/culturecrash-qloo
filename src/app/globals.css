@@ -162,6 +162,124 @@ body {
 .cc-animate-pulse { animation: cc-pulse-soft 1.8s ease-in-out infinite; }
 .cc-animate-in { animation: cc-fade-up 0.45s ease-out both; }
 
+/* ------------------------------------------------------------------ */
+/* Motion system                                                       */
+/* Easing: expressive ease-out for entrances, a light spring for pops. */
+/* Entrance animations use fill-mode "backwards" so no transform is    */
+/* left behind (a lingering transform would trap fixed/sticky children).*/
+/* ------------------------------------------------------------------ */
+:root {
+  --cc-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --cc-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --cc-ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+}
+html { scroll-behavior: smooth; }
+::selection { background: rgba(184, 165, 255, 0.45); }
+
+@keyframes cc-page-in {
+  from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@keyframes cc-pop {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-scale-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-scale-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(0.97); }
+}
+/* Dialogs are centred with Tailwind's `translate` property, so these use `transform` only for the offset. */
+@keyframes cc-dialog-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-dialog-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+@keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cc-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes cc-toast-in {
+  from { opacity: 0; transform: translateX(24px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-word {
+  from { opacity: 0; transform: translateY(0.45em) rotate(2deg); filter: blur(8px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@keyframes cc-blob {
+  0%, 100% { border-radius: 46% 54% 42% 58% / 55% 45% 55% 45%; transform: rotate(0deg) scale(1); }
+  33% { border-radius: 58% 42% 52% 48% / 44% 56% 44% 56%; transform: rotate(8deg) scale(1.03); }
+  66% { border-radius: 40% 60% 60% 40% / 52% 48% 52% 48%; transform: rotate(-6deg) scale(0.98); }
+}
+@keyframes cc-orb {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(60px, -40px, 0); }
+}
+@keyframes cc-reveal {
+  from { opacity: 0; transform: translateY(40px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes cc-dash { to { stroke-dashoffset: -100; } }
+@keyframes cc-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Route entrance (app/(app)/template.tsx, app/(marketing)/template.tsx) */
+.cc-page { animation: cc-page-in 0.5s var(--cc-ease-out) backwards; }
+
+/* Children enter one after another */
+.cc-stagger > * { animation: cc-fade-up 0.55s var(--cc-ease-out) backwards; animation-delay: calc(var(--cc-i, 0) * 55ms + var(--cc-stagger-delay, 60ms)); }
+.cc-stagger > *:nth-child(1) { --cc-i: 0; } .cc-stagger > *:nth-child(2) { --cc-i: 1; } .cc-stagger > *:nth-child(3) { --cc-i: 2; }
+.cc-stagger > *:nth-child(4) { --cc-i: 3; } .cc-stagger > *:nth-child(5) { --cc-i: 4; } .cc-stagger > *:nth-child(6) { --cc-i: 5; }
+.cc-stagger > *:nth-child(7) { --cc-i: 6; } .cc-stagger > *:nth-child(8) { --cc-i: 7; } .cc-stagger > *:nth-child(9) { --cc-i: 8; }
+.cc-stagger > *:nth-child(10) { --cc-i: 9; } .cc-stagger > *:nth-child(11) { --cc-i: 10; } .cc-stagger > *:nth-child(n + 12) { --cc-i: 11; }
+
+/* Scroll-driven reveal (pure CSS; browsers without view timelines just show content) */
+@supports (animation-timeline: view()) {
+  .cc-reveal {
+    animation: cc-reveal linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 30%;
+  }
+  .cc-scroll-progress {
+    position: fixed; inset: 0 0 auto 0; z-index: 60; height: 2px; transform-origin: 0 50%;
+    background: linear-gradient(90deg, var(--cc-violet), var(--cc-coral));
+    animation: cc-progress linear both; animation-timeline: scroll(root);
+  }
+}
+
+/* Headline words rise in sequence (see <MotionWords>) */
+.cc-word { display: inline-block; animation: cc-word 0.9s var(--cc-ease-out) backwards; animation-delay: calc(var(--cc-w, 0) * 70ms + 120ms); }
+
+/* Hover lift for cards and tiles */
+.cc-lift { transition: transform 0.45s var(--cc-ease-out), box-shadow 0.45s var(--cc-ease-out), border-color 0.3s ease; }
+.cc-lift:hover { transform: translateY(-3px); box-shadow: var(--cc-shadow-float); }
+.cc-lift:active { transform: translateY(-1px) scale(0.995); transition-duration: 0.12s; }
+
+/* Image zoom inside a lifted card */
+.cc-zoom { overflow: hidden; }
+.cc-zoom > * { transition: transform 0.9s var(--cc-ease-out); }
+.cc-zoom:hover > * { transform: scale(1.05); }
+
+/* Pointer parallax layers (vars set by <Parallax>) */
+.cc-depth-1, .cc-depth-2, .cc-depth-3 { transition: transform 0.9s var(--cc-ease-out); will-change: transform; }
+.cc-depth-1 { transform: translate3d(calc(var(--cc-mx, 0) * 8px), calc(var(--cc-my, 0) * 8px), 0); }
+.cc-depth-2 { transform: translate3d(calc(var(--cc-mx, 0) * 18px), calc(var(--cc-my, 0) * 18px), 0); }
+.cc-depth-3 { transform: translate3d(calc(var(--cc-mx, 0) * -14px), calc(var(--cc-my, 0) * -14px), 0); }
+
+.cc-animate-blob { animation: cc-blob 14s ease-in-out infinite; }
+.cc-animate-orb { animation: cc-orb 18s ease-in-out infinite; }
+.cc-animate-pop { animation: cc-pop 0.6s var(--cc-ease-spring) backwards; }
+.cc-skeleton {
+  background: linear-gradient(90deg, rgba(17,17,22,0.05) 25%, rgba(17,17,22,0.1) 50%, rgba(17,17,22,0.05) 75%);
+  background-size: 200% 100%;
+  animation: cc-shimmer 1.6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -169,6 +287,8 @@ body {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+  .cc-reveal, .cc-scroll-progress { animation: none !important; }
+  .cc-lift:hover, .cc-zoom:hover > *, .cc-depth-1, .cc-depth-2, .cc-depth-3 { transform: none !important; }
 }
 
 /* Report print styles */

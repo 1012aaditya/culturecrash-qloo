@@ -57,7 +57,7 @@ export default async function ExperimentsPage({ params, searchParams }: PageProp
                 <ul className="space-y-2">
                   {list.map((x) => (
                     <li key={x.id}>
-                      <Link href={`/projects/${projectId}/experiments/${x.id}`} className={cn("block rounded-cc border p-4 transition-shadow hover:shadow-card", key === "running" ? "border-white/10 bg-white/5" : "border-line bg-paper")}>
+                      <Link href={`/projects/${projectId}/experiments/${x.id}`} className={cn("block rounded-cc border p-4 cc-lift", key === "running" ? "border-white/10 bg-white/5" : "border-line bg-paper")}>
                         <p className="text-[14px] font-medium leading-snug">{x.name}</p>
                         <p className={cn("mt-1.5 line-clamp-3 text-[12px] leading-snug", key === "running" ? "text-white/65" : "text-muted")}>{x.hypothesis}</p>
                         <div className="mt-3 flex flex-wrap gap-1.5">

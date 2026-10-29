@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Compass, FlaskConical, Layers, Lightbulb, Scale, Users } from "lucide-react";
 import { ArtPlate } from "@/components/art/plate";
 import { HeroComposition } from "@/components/marketing/hero-composition";
+import { MotionWords } from "@/components/motion/motion-words";
 import { Button } from "@/components/ui/button";
 import { STAGES } from "@/lib/stages";
 import { cn } from "@/lib/utils";
@@ -29,18 +30,19 @@ export default function LandingPage() {
     <>
       {/* HERO */}
       <section className="cc-atmosphere relative overflow-hidden pt-28 sm:pt-32">
-        <div className="pointer-events-none absolute -left-40 top-40 size-[420px] rounded-full bg-lavender/30 blur-[120px]" />
+        <div className="cc-animate-orb pointer-events-none absolute -left-40 top-40 size-[420px] rounded-full bg-lavender/30 blur-[120px]" />
+        <div className="cc-animate-orb pointer-events-none absolute -right-20 bottom-0 size-[360px] rounded-full bg-peach/30 blur-[120px]" style={{ animationDelay: "-9s" }} />
         <div className="relative mx-auto grid max-w-[1320px] items-center gap-6 px-5 pb-16 md:px-10 lg:grid-cols-[0.95fr_1.25fr]">
           <div className="relative z-10 max-w-xl">
-            <p className="cc-eyebrow text-muted">Cultural intelligence · Campaign strategy</p>
+            <p className="cc-eyebrow cc-animate-in text-muted">Cultural intelligence · Campaign strategy</p>
             <h1 className="cc-display mt-6 text-[56px] text-ink sm:text-[76px] xl:text-[92px]">
-              Turn cultural signals into <em className="text-violet">iconic</em> brands.
+              <MotionWords>Turn cultural signals into <em className="text-violet">iconic</em> brands.</MotionWords>
             </h1>
-            <p className="mt-7 max-w-md text-[17px] leading-relaxed text-muted">
+            <p className="cc-animate-in mt-7 max-w-md text-[17px] leading-relaxed text-muted" style={{ animationDelay: "0.6s" }}>
               CultureCrash helps brand and creative teams understand people through culture, discover meaningful
               opportunities, and turn evidence into strategy, creative direction and measurable experiments.
             </p>
-            <div className="mt-9 flex flex-wrap items-center gap-3">
+            <div className="cc-animate-in mt-9 flex flex-wrap items-center gap-3" style={{ animationDelay: "0.75s" }}>
               <Button asChild size="lg">
                 <Link href="/signup">
                   Start a campaign <ArrowRight />
@@ -50,7 +52,7 @@ export default function LandingPage() {
                 <Link href="/product">Explore the product</Link>
               </Button>
             </div>
-            <dl className="mt-12 grid max-w-md grid-cols-3 gap-6 border-t border-line pt-6 text-[12px]">
+            <dl className="cc-stagger mt-12 grid max-w-md grid-cols-3 gap-6 border-t border-line pt-6 text-[12px]" style={{ ["--cc-stagger-delay" as string]: "900ms" }}>
               <div><dt className="text-faint">Input</dt><dd className="mt-1 font-medium">A campaign brief</dd></div>
               <div><dt className="text-faint">Engine</dt><dd className="mt-1 font-medium">Qloo taste data + AI</dd></div>
               <div><dt className="text-faint">Output</dt><dd className="mt-1 font-medium">Cited strategy & tests</dd></div>
@@ -62,8 +64,8 @@ export default function LandingPage() {
 
       {/* PRODUCT INTRODUCTION */}
       <section className="relative overflow-hidden bg-charcoal py-24 text-white md:py-32">
-        <div className="pointer-events-none absolute right-0 top-0 size-[600px] rounded-full bg-violet/20 blur-[140px]" />
-        <div className="relative mx-auto grid max-w-[1320px] gap-14 px-5 md:px-10 lg:grid-cols-[1.3fr_1fr]">
+        <div className="cc-animate-orb pointer-events-none absolute right-0 top-0 size-[600px] rounded-full bg-violet/20 blur-[140px]" />
+        <div className="cc-reveal relative mx-auto grid max-w-[1320px] gap-14 px-5 md:px-10 lg:grid-cols-[1.3fr_1fr]">
           <div>
             <p className="cc-eyebrow text-white/45">The problem</p>
             <h2 className="cc-display mt-5 text-5xl md:text-7xl">
@@ -86,7 +88,7 @@ export default function LandingPage() {
 
       {/* WORKFLOW */}
       <section className="mx-auto max-w-[1320px] px-5 py-24 md:px-10 md:py-32" aria-labelledby="workflow-title">
-        <div className="grid gap-6 md:grid-cols-[1fr_1.4fr] md:items-end">
+        <div className="cc-reveal grid gap-6 md:grid-cols-[1fr_1.4fr] md:items-end">
           <div>
             <p className="cc-eyebrow text-muted">One workflow</p>
             <h2 id="workflow-title" className="cc-display mt-4 text-5xl md:text-6xl">Explore → Interpret → Create → Test → Track</h2>
@@ -101,7 +103,7 @@ export default function LandingPage() {
             <li
               key={s.key}
               className={cn(
-                "group relative flex min-h-[260px] flex-col justify-between overflow-hidden rounded-cc-lg border border-line p-6",
+                "cc-reveal cc-lift group relative flex min-h-[260px] flex-col justify-between overflow-hidden rounded-cc-lg border border-line p-6",
                 i === 0 && "bg-charcoal text-white md:col-span-5 md:row-span-2 md:min-h-[540px]",
                 i === 1 && "bg-paper md:col-span-4",
                 i === 2 && "bg-lilac/60 md:col-span-3",
@@ -109,10 +111,10 @@ export default function LandingPage() {
                 i === 4 && "bg-peach/35 md:col-span-4",
               )}
             >
-              {i === 0 && <ArtPlate theme="culture" seed="explore" rounded={false} className="absolute inset-0 opacity-70" />}
+              {i === 0 && <ArtPlate theme="culture" seed="explore" rounded={false} className="absolute inset-0 opacity-70 transition-transform duration-[1.2s] ease-[var(--cc-ease-out)] group-hover:scale-105" />}
               <div className="relative flex items-center justify-between">
                 <span className={cn("font-mono text-xs", i === 0 ? "text-white/60" : "text-muted")}>{s.number}</span>
-                <ArrowUpRight className={cn("size-4 opacity-40", i === 0 && "text-white")} />
+                <ArrowUpRight className={cn("size-4 opacity-40 transition-[opacity,transform] duration-500 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:opacity-100", i === 0 && "text-white")} />
               </div>
               <div className="relative">
                 <h3 className={cn("cc-display", i === 0 ? "text-6xl" : "text-4xl")}>{s.label}</h3>
@@ -127,7 +129,7 @@ export default function LandingPage() {
       {/* PRODUCT PREVIEW */}
       <section className="bg-ivory-2/60 py-24 md:py-32" aria-labelledby="preview-title">
         <div className="mx-auto max-w-[1320px] px-5 md:px-10">
-          <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
+          <div className="cc-reveal flex flex-col justify-between gap-6 md:flex-row md:items-end">
             <div className="max-w-xl">
               <p className="cc-eyebrow text-muted">Inside the workspace</p>
               <h2 id="preview-title" className="cc-display mt-4 text-5xl md:text-6xl">See the bigger cultural picture.</h2>
@@ -136,24 +138,24 @@ export default function LandingPage() {
               <Link href="/showcase">Open the interactive showcase <ArrowRight /></Link>
             </Button>
           </div>
-          <Link href="/showcase" className="group mt-12 block overflow-hidden rounded-[32px] border border-line bg-paper shadow-card">
+          <Link href="/showcase" className="cc-reveal cc-lift group mt-12 block overflow-hidden rounded-[32px] border border-line bg-paper shadow-card">
             <div className="flex items-center gap-2 border-b border-line px-5 py-3 text-[12px] text-muted">
               <span className="rounded-full bg-peach/50 px-2 py-0.5 text-[11px] font-medium text-[#8a3d22]">Demonstration data</span>
               Sample campaign “Skincare Launch” — fixture records, not live research.
             </div>
             <div className="grid md:grid-cols-[1.6fr_1fr]">
               <div className="relative h-[380px] overflow-hidden md:h-[460px]">
-                <ArtPlate theme="culture" seed="preview" rounded={false} className="absolute inset-0 opacity-25" />
+                <ArtPlate theme="culture" seed="preview" rounded={false} className="absolute inset-0 opacity-25 transition-transform duration-[1.4s] ease-[var(--cc-ease-out)] group-hover:scale-105" />
                 <svg viewBox="0 0 800 460" className="absolute inset-0 size-full" aria-hidden="true">
                   {[[400, 230, 170, 110], [400, 230, 620, 90], [400, 230, 160, 360], [400, 230, 640, 350], [400, 230, 420, 70], [400, 230, 330, 400]].map(([x1, y1, x2, y2], i) => (
-                    <path key={i} d={`M${x1} ${y1} Q ${(x1 + x2) / 2 + 30} ${(y1 + y2) / 2 - 30} ${x2} ${y2}`} stroke="#8064F5" strokeOpacity="0.45" fill="none" />
+                    <path key={i} d={`M${x1} ${y1} Q ${(x1 + x2) / 2 + 30} ${(y1 + y2) / 2 - 30} ${x2} ${y2}`} stroke="#8064F5" strokeOpacity="0.45" fill="none" strokeDasharray="4 6" className="animate-[cc-dash_6s_linear_infinite]" />
                   ))}
-                  <circle cx="400" cy="230" r="70" fill="#B8A5FF" opacity="0.65" />
+                  <circle cx="400" cy="230" r="70" fill="#B8A5FF" opacity="0.65" className="cc-animate-pulse origin-center" style={{ animationDuration: "4s" }} />
                   <circle cx="400" cy="230" r="44" fill="#8064F5" opacity="0.8" />
                   {[[170, 110], [620, 90], [160, 360], [640, 350], [420, 70], [330, 400]].map(([x, y], i) => (
                     <g key={i}>
                       <circle cx={x} cy={y} r="22" fill="#fff" stroke="#E9E5E1" />
-                      <circle cx={x} cy={y} r="6" fill={i % 2 ? "#F29A8B" : "#8064F5"} />
+                      <circle cx={x} cy={y} r="6" fill={i % 2 ? "#F29A8B" : "#8064F5"} className="cc-animate-pulse" style={{ animationDelay: `${i * 0.3}s` }} />
                     </g>
                   ))}
                   <text x="400" y="234" textAnchor="middle" fill="#fff" fontSize="13" fontFamily="sans-serif">Audience</text>
@@ -166,7 +168,7 @@ export default function LandingPage() {
                   Every opportunity lists the observations it rests on, what remains unknown, and the experiment that
                   would validate it.
                 </p>
-                <div className="mt-6 space-y-2">
+                <div className="mt-6 space-y-2 [&>div]:transition-transform [&>div]:duration-500 group-hover:[&>div:nth-child(1)]:translate-x-1 group-hover:[&>div:nth-child(2)]:translate-x-2 group-hover:[&>div:nth-child(3)]:translate-x-3">
                   {["Provider observation", "AI interpretation", "Hypothesis to test"].map((t, i) => (
                     <div key={t} className="flex items-center justify-between rounded-cc-sm border border-line px-3 py-2.5 text-[12px]">
                       <span>{t}</span>
@@ -182,17 +184,17 @@ export default function LandingPage() {
 
       {/* USE CASES */}
       <section className="mx-auto max-w-[1320px] px-5 py-24 md:px-10 md:py-32" aria-labelledby="usecases-title">
-        <p className="cc-eyebrow text-muted">Use cases</p>
-        <h2 id="usecases-title" className="cc-display mt-4 max-w-3xl text-5xl md:text-6xl">Built for the questions agencies are paid to answer.</h2>
+        <p className="cc-eyebrow cc-reveal text-muted">Use cases</p>
+        <h2 id="usecases-title" className="cc-display cc-reveal mt-4 max-w-3xl text-5xl md:text-6xl">Built for the questions agencies are paid to answer.</h2>
         <div className="mt-14 grid gap-4 md:grid-cols-12">
           {useCases.map(({ icon: Icon, title, body, span, theme }) => (
-            <article key={title} className={cn("relative overflow-hidden rounded-cc-lg border border-line bg-paper p-6", span, theme && "min-h-[260px] md:grid md:grid-cols-[1fr_1fr] md:gap-6")}>
+            <article key={title} className={cn("cc-reveal cc-lift group relative overflow-hidden rounded-cc-lg border border-line bg-paper p-6", span, theme && "min-h-[260px] md:grid md:grid-cols-[1fr_1fr] md:gap-6")}>
               <div className="relative z-10 flex flex-col">
-                <Icon className="size-5 text-violet" />
+                <Icon className="size-5 text-violet transition-transform duration-500 ease-[var(--cc-ease-spring)] group-hover:-rotate-6 group-hover:scale-125" />
                 <h3 className="mt-6 text-xl font-semibold tracking-tight">{title}</h3>
                 <p className="mt-2 max-w-md text-[14px] leading-relaxed text-muted">{body}</p>
               </div>
-              {theme && <ArtPlate theme={theme} seed={title} className="mt-6 h-48 md:mt-0 md:h-full" />}
+              {theme && <div className="cc-zoom mt-6 h-48 rounded-cc md:mt-0 md:h-full"><ArtPlate theme={theme} seed={title} className="size-full" /></div>}
             </article>
           ))}
         </div>
@@ -212,7 +214,7 @@ export default function LandingPage() {
           </div>
           <ol className="relative border-l border-line">
             {ladder.map(([title, body], i) => (
-              <li key={title} className="relative pb-10 pl-10 last:pb-0">
+              <li key={title} className="cc-reveal relative pb-10 pl-10 last:pb-0">
                 <span className="absolute -left-[13px] top-0 flex size-[26px] items-center justify-center rounded-full border border-line bg-ivory font-mono text-[10px] text-muted">
                   {i + 1}
                 </span>
@@ -228,7 +230,7 @@ export default function LandingPage() {
       <section className="relative overflow-hidden py-24 md:py-32">
         <div className="pointer-events-none absolute inset-0 cc-atmosphere" />
         <div className="relative mx-auto grid max-w-[1320px] items-center gap-10 px-5 md:px-10 lg:grid-cols-[1.4fr_1fr]">
-          <h2 className="cc-display text-6xl md:text-8xl">Bring your next brief.</h2>
+          <h2 className="cc-display cc-reveal text-6xl md:text-8xl">Bring your next brief.</h2>
           <div>
             <p className="text-[16px] leading-relaxed text-muted">
               Start a campaign in a few minutes, or talk to us about a pilot for your agency and a live client project.

@@ -29,8 +29,22 @@ Surfaces and lighting: `cc-glass` is the floating translucent control surface (c
 zoom). `cc-glass-dark` is the stage navigator. `cc-atmosphere` adds lavender and peach radial light behind
 canvases — gradients are lighting, never card fills.
 
-Motion: line drawing for network edges, a slow float for hero nodes, fade-up for panels.
-`prefers-reduced-motion` disables all of it.
+Motion (all in `globals.css`, no animation library; `prefers-reduced-motion` turns every one off):
+
+- Easing tokens: `--cc-ease-out` (expressive entrances), `--cc-ease-spring` (pops, the stage pill), `--cc-ease-in` (exits).
+- Page entrance: `app/(app)/template.tsx` and `app/(marketing)/template.tsx` wrap pages in `.cc-page`
+  (fade, 12px rise, blur clearing). Templates remount on navigation but not on `router.refresh()`, so data
+  refreshes don't replay it. Entrance animations use fill-mode `backwards`, so no transform is left behind to
+  trap fixed or sticky children.
+- `.cc-stagger` (children enter in sequence; `--cc-stagger-delay` offsets the start), `.cc-reveal`
+  (scroll-driven, pure CSS via `animation-timeline: view()`; browsers without support simply show content),
+  `.cc-lift` (hover lift + press), `.cc-zoom` (image zoom inside a card), `.cc-skeleton` (shimmer).
+- `<MotionWords>` splits a headline into words that rise in sequence; `<Parallax>` sets pointer variables
+  for `.cc-depth-1/2/3` layers (fine pointers only).
+- Menus scale in from their trigger and fade out; dialogs and the command palette rise in and settle; toasts
+  slide in with a spring; the stage navigator has one white pill that glides to the active stage.
+- Signature loops: network edges draw in, nodes pop in after them, and the audience blob slowly morphs; the hero
+  cards float; light orbs drift. A 2px scroll-progress line runs along the top of marketing pages.
 
 ## Navigation (no sidebar)
 

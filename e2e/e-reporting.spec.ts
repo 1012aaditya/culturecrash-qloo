@@ -32,7 +32,8 @@ test("Scenario E — generate report, verify contents, export PDF, share read-on
   await expect(anon.getByRole("heading", { name: "Key evidence" })).toBeVisible();
   await expect(anon.getByRole("link", { name: /Projects/ })).toHaveCount(0);
   await page.getByRole("button", { name: /Revoke/ }).first().click();
-  await expect(page.getByText("revoked").first()).toBeVisible();
+  // Wait for the real confirmation (the dialog text also contains the word "revoked").
+  await expect(page.getByText("Link revoked")).toBeVisible();
   await anon.reload();
   await expect(anon.getByText("This link is not available")).toBeVisible();
 });

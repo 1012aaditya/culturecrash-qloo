@@ -34,7 +34,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps<"/
         <ul className="grid gap-4 md:grid-cols-3">
           {reports.map((r, i) => (
             <li key={r.id} className={cn(i === 0 && "md:col-span-2 md:row-span-2")}>
-              <Link href={`/projects/${projectId}/reports/${r.id}`} className={cn("flex h-full flex-col justify-between rounded-[28px] border border-line p-6 transition-shadow hover:shadow-card", i === 0 ? "min-h-[320px] bg-charcoal text-white" : "bg-paper")}>
+              <Link href={`/projects/${projectId}/reports/${r.id}`} className={cn("flex h-full flex-col justify-between rounded-[28px] border border-line p-6 cc-lift", i === 0 ? "min-h-[320px] bg-charcoal text-white" : "bg-paper")}>
                 <div className="flex flex-wrap gap-1.5"><Badge tone={i === 0 ? "glass" : "outline"}>v{r.versions}</Badge>{r.shares > 0 && <Badge tone={i === 0 ? "glass" : "violet"}>shared · {r.shares}</Badge>}{r.demo && <DemoBadge label="Demo" />}</div>
                 <div className="mt-10"><h2 className={cn("cc-display", i === 0 ? "text-5xl" : "text-3xl")}>{r.title}</h2><p className={cn("mt-2 text-[12px]", i === 0 ? "text-white/60" : "text-muted")}>{r.author} · updated {formatDateTime(r.updated_at)}</p></div>
               </Link>

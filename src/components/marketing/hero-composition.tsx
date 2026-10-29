@@ -1,4 +1,5 @@
 import { ArtPlate, type PlateTheme } from "@/components/art/plate";
+import { Parallax } from "@/components/motion/parallax";
 import { cn } from "@/lib/utils";
 
 const nodes: { theme: PlateTheme; label: string; kind: string; className: string }[] = [
@@ -11,8 +12,8 @@ const nodes: { theme: PlateTheme; label: string; kind: string; className: string
 /** Illustrative hero composition (no data). Network lines suggest how CultureCrash connects signals. */
 export function HeroComposition() {
   return (
-    <div className="relative h-[560px] w-full sm:h-[640px]" aria-label="Illustrative composition of a cultural network around an audience" role="img">
-      <div className="absolute right-[6%] top-0 h-[78%] w-[52%] overflow-hidden rounded-[44px] shadow-[0_40px_80px_-30px_rgba(23,21,30,0.55)]">
+    <Parallax className="relative h-[560px] w-full sm:h-[640px]" aria-label="Illustrative composition of a cultural network around an audience" role="img">
+      <div className="cc-depth-1 cc-animate-in absolute right-[6%] top-0 h-[78%] w-[52%] overflow-hidden rounded-[44px] shadow-[0_40px_80px_-30px_rgba(23,21,30,0.55)]" style={{ animationDuration: "0.9s" }}>
         <ArtPlate theme="beauty" seed="hero" rounded={false} className="size-full" />
         <div className="absolute left-6 right-6 top-6">
           <p className="cc-eyebrow text-white/70">Audience lens</p>
@@ -40,9 +41,9 @@ export function HeroComposition() {
       </svg>
 
       <div className="absolute left-[38%] top-[44%] -translate-x-1/2 -translate-y-1/2">
-        <div className="relative size-[150px] sm:size-[180px]">
-          <div className="absolute inset-0 rounded-[46%_54%_42%_58%/55%_45%_55%_45%] bg-[radial-gradient(circle_at_35%_35%,#E8DFFF,#B8A5FF_45%,#8064F5_80%)] opacity-90 blur-[2px]" />
-          <div className="absolute -inset-6 -z-10 rounded-full bg-peach/60 blur-3xl" />
+        <div className="cc-depth-2 cc-animate-pop relative size-[150px] sm:size-[180px]" style={{ animationDelay: "0.35s" }}>
+          <div className="cc-animate-blob absolute inset-0 rounded-[46%_54%_42%_58%/55%_45%_55%_45%] bg-[radial-gradient(circle_at_35%_35%,#E8DFFF,#B8A5FF_45%,#8064F5_80%)] opacity-90 blur-[2px]" />
+          <div className="cc-animate-pulse absolute -inset-6 -z-10 rounded-full bg-peach/60 blur-3xl" style={{ animationDuration: "5s" }} />
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white">
             <span className="cc-eyebrow text-[9px] text-white/80">Target audience</span>
             <span className="mt-1 text-sm font-medium">Your brief</span>
@@ -51,16 +52,20 @@ export function HeroComposition() {
       </div>
 
       {nodes.map((n, i) => (
-        <figure key={n.label} className={cn("absolute overflow-hidden rounded-[20px] shadow-[0_24px_40px_-20px_rgba(23,21,30,0.6)] cc-animate-float", n.className)} style={{ animationDelay: `${i * 0.8}s` }}>
-          <ArtPlate theme={n.theme} seed={n.label} rounded={false} className="size-full" />
-          <figcaption className="absolute bottom-2.5 left-3 right-3 text-white">
-            <span className="block text-[13px] font-semibold leading-tight">{n.label}</span>
-            <span className="block text-[10px] text-white/70">{n.kind}</span>
-          </figcaption>
-        </figure>
+        <div key={n.label} className={cn("absolute", i % 2 ? "cc-depth-3" : "cc-depth-2", n.className)}>
+          <div className="cc-animate-pop size-full" style={{ animationDelay: `${0.5 + i * 0.12}s` }}>
+            <figure className="cc-animate-float relative size-full overflow-hidden rounded-[20px] shadow-[0_24px_40px_-20px_rgba(23,21,30,0.6)] transition-transform duration-500 hover:scale-105" style={{ animationDelay: `${i * 0.8}s` }}>
+              <ArtPlate theme={n.theme} seed={n.label} rounded={false} className="size-full" />
+              <figcaption className="absolute bottom-2.5 left-3 right-3 text-white">
+                <span className="block text-[13px] font-semibold leading-tight">{n.label}</span>
+                <span className="block text-[10px] text-white/70">{n.kind}</span>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
       ))}
 
-      <div className="cc-glass absolute bottom-[6%] right-[2%] hidden w-[250px] rounded-cc-lg p-4 sm:block">
+      <div className="cc-glass cc-depth-1 cc-animate-in absolute bottom-[6%] right-[2%] hidden w-[250px] rounded-cc-lg p-4 sm:block" style={{ animationDelay: "0.9s" }}>
         <p className="cc-eyebrow text-[10px] text-muted">How a finding is labelled</p>
         <ul className="mt-3 space-y-2.5 text-[12px]">
           <li className="flex items-start gap-2"><span className="mt-1 size-2 rounded-full bg-ink" /> <span><b className="font-medium">Observed</b> — returned by a data provider, with retrieval time</span></li>
@@ -69,6 +74,6 @@ export function HeroComposition() {
         </ul>
       </div>
       <p className="absolute bottom-0 left-[52%] text-[10px] text-muted">Illustrative composition — not research data</p>
-    </div>
+    </Parallax>
   );
 }

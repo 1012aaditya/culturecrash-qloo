@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import * as React from "react";
 import { usePathname } from "next/navigation";
 import { Check, ClipboardList, Compass, FlaskConical, LineChart, Sparkles } from "lucide-react";
 import { STAGES, stageForPath, stageHref, type StageKey } from "@/lib/stages";
@@ -28,9 +29,17 @@ export function StageNav({ projectId, stages }: { projectId: string; stages: Rec
   // The research canvas has its own immersive vertical rail on wide screens.
   const research = /\/research$/.test(pathname);
   const sub = pathname.split(`/projects/${projectId}/`)[1] ?? "";
+  const navRef = React.useRef<HTMLElement>(null);
+  const { box, animate } = useActivePill(navRef, active);
   return (
     <div className={cn("cc-no-print space-y-3", research && "xl:hidden")}>
-      <nav aria-label="Campaign workflow" className="cc-glass-dark flex gap-1 overflow-x-auto rounded-full p-1.5 text-white">
+      <nav ref={navRef} aria-label="Campaign workflow" className="cc-glass-dark relative flex gap-1 overflow-x-auto rounded-full p-1.5 text-white">
+        {/* One white pill that glides to the active stage */}
+        <span
+          aria-hidden="true"
+          className={cn("pointer-events-none absolute top-1.5 bottom-1.5 rounded-full bg-white shadow-[0_8px_24px_-10px_rgba(0,0,0,0.5)]", animate && "transition-[left,width] duration-500 ease-[var(--cc-ease-spring)]")}
+          style={{ left: box.left, width: box.width, opacity: box.width ? 1 : 0 }}
+        />
         {STAGES.map((s) => {
           const Icon = icons[s.key];
           const info = stages[s.key];
@@ -40,13 +49,14 @@ export function StageNav({ projectId, stages }: { projectId: string; stages: Rec
               key={s.key}
               href={stageHref(projectId, s.key)}
               aria-current={isActive ? "step" : undefined}
+              data-stage={s.key}
               title={info.missing ?? undefined}
               className={cn(
-                "group flex min-w-[150px] flex-1 items-center gap-2.5 rounded-full px-3 py-2 transition-colors",
-                isActive ? "bg-white text-ink" : "text-white/70 hover:bg-white/10 hover:text-white",
+                "group relative z-10 flex min-w-[150px] flex-1 items-center gap-2.5 rounded-full px-3 py-2 transition-colors duration-300",
+                isActive ? "text-ink" : "text-white/70 hover:bg-white/10 hover:text-white",
               )}
             >
-              <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full border", isActive ? "border-violet/30 bg-lilac text-violet" : "border-white/15")}>
+              <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full border transition-[background,border-color,color,scale] duration-300 group-hover:scale-110", isActive ? "border-violet/30 bg-lilac text-violet" : "border-white/15")}>
                 <Icon className="size-4" />
               </span>
               <span className="min-w-0 flex-1">
@@ -103,4 +113,25 @@ export function StageRail({ projectId, stages }: { projectId: string; stages: Re
       })}
     </nav>
   );
+}
+
+/** Measures the active stage link so the indicator can slide to it (no slide on first paint). */
+function useActivePill(navRef: React.RefObject<HTMLElement | null>, active: StageKey | null) {
+  const [box, setBox] = React.useState({ left: 0, width: 0 });
+  const [animate, setAnimate] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const el = active ? nav.querySelector<HTMLElement>(`[data-stage="${active}"]`) : null;
+    // ResizeObserver calls back once immediately, then on every size change.
+    const ro = new ResizeObserver(() => setBox(el ? { left: el.offsetLeft, width: el.offsetWidth } : { left: 0, width: 0 }));
+    ro.observe(nav);
+    const id = requestAnimationFrame(() => setAnimate(true));
+    el?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(id);
+    };
+  }, [navRef, active]);
+  return { box, animate };
 }

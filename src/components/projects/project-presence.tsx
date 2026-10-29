@@ -35,7 +35,9 @@ export function ProjectPresence({ projectId }: { projectId: string }) {
         const res = await fetch(`/api/projects/${projectId}/presence`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, field: field.current }),
         });
-        if (res.ok && alive) setPeers(((await res.json()) as { peers: PresencePeer[] }).peers);
+        // Always read the body, even after unmount, so the request completes.
+        const data = res.ok ? ((await res.json()) as { peers: PresencePeer[] }) : (await res.body?.cancel(), null);
+        if (data && alive) setPeers(data.peers);
       } catch {
         // offline: keep the last known peers until the next beat
       } finally {

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { MotionWords } from "@/components/motion/motion-words";
 import { ArrowRight, FileText, FlaskConical, Lightbulb, Plus, Sparkles } from "lucide-react";
 import { ArtPlate, themeForCategory } from "@/components/art/plate";
 import { AskEntry } from "@/components/nav/ask-entry";
@@ -36,7 +37,7 @@ export default async function DashboardPage() {
         <div className="flex flex-col justify-between gap-8 py-4">
           <div>
             <p className="cc-eyebrow text-muted">{ctx.workspace.name}</p>
-            <h1 className="cc-display mt-4 text-6xl md:text-7xl">{greeting()}, {firstName(ctx)}.</h1>
+            <h1 className="cc-display mt-4 text-6xl md:text-7xl"><MotionWords>{`${greeting()}, ${firstName(ctx)}.`}</MotionWords></h1>
             <p className="mt-4 max-w-md text-[15px] leading-relaxed text-muted">
               {projects.length === 0
                 ? "Your workspace is ready. Start with a campaign brief — research, strategy and reports build from there."
@@ -53,8 +54,8 @@ export default async function DashboardPage() {
         </div>
 
         {featured ? (
-          <Link href={`/projects/${featured.id}`} className="group relative min-h-[380px] overflow-hidden rounded-[36px] bg-charcoal text-white shadow-card">
-            <ArtPlate theme={themeForCategory(featured.category)} seed={featured.id} rounded={false} className="absolute inset-0 transition-transform duration-700 group-hover:scale-[1.02]" />
+          <Link href={`/projects/${featured.id}`} className="cc-lift cc-animate-in group relative min-h-[380px] overflow-hidden rounded-[36px] bg-charcoal text-white shadow-card" style={{ animationDelay: "0.15s", animationDuration: "0.8s" }}>
+            <ArtPlate theme={themeForCategory(featured.category)} seed={featured.id} rounded={false} className="absolute inset-0 transition-transform duration-[1.4s] ease-[var(--cc-ease-out)] group-hover:scale-[1.05]" />
             <div className="absolute inset-0 bg-gradient-to-r from-charcoal/85 via-charcoal/30 to-transparent" />
             <div className="relative flex h-full flex-col justify-between p-8">
               <div className="flex gap-2"><Badge tone="glass">Continue · {STAGES.find((s) => s.key === currentStage(featured))!.label}</Badge>{featured.isDemo && <DemoBadge />}</div>
@@ -69,7 +70,7 @@ export default async function DashboardPage() {
         ) : (
           <div className="relative min-h-[380px] overflow-hidden rounded-[36px] bg-charcoal p-8 text-white">
             <ArtPlate theme="culture" seed="onboarding" rounded={false} className="absolute inset-0 opacity-70" />
-            <ol className="relative grid h-full content-end gap-3 sm:grid-cols-5">
+            <ol className="cc-stagger relative grid h-full content-end gap-3 sm:grid-cols-5">
               {STAGES.map((s) => (
                 <li key={s.key} className="rounded-cc border border-white/15 bg-white/5 p-4 backdrop-blur">
                   <p className="font-mono text-[11px] text-white/50">{s.number}</p>
@@ -88,11 +89,11 @@ export default async function DashboardPage() {
           {rest.length === 0 ? (
             <EmptyState className="mt-4" title={projects.length ? "Only one campaign so far" : "No campaigns yet"} body="Recent campaigns appear here with their stage and research status." />
           ) : (
-            <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+            <ul className="cc-stagger mt-4 grid gap-3 sm:grid-cols-2" style={{ ["--cc-stagger-delay" as string]: "250ms" }}>
               {rest.slice(0, 4).map((p, i) => (
                 <li key={p.id} className={cn(i === 0 && "sm:row-span-2")}>
-                  <Link href={`/projects/${p.id}`} className={cn("group flex h-full gap-4 rounded-cc-lg border border-line bg-paper p-3 transition-shadow hover:shadow-card", i === 0 && "flex-col")}>
-                    <ArtPlate theme={themeForCategory(p.category)} seed={p.id} className={cn("shrink-0", i === 0 ? "h-52 w-full" : "h-20 w-20")} />
+                  <Link href={`/projects/${p.id}`} className={cn("cc-lift group flex h-full gap-4 rounded-cc-lg border border-line bg-paper p-3", i === 0 && "flex-col")}>
+                    <div className={cn("cc-zoom shrink-0 rounded-cc", i === 0 ? "h-52 w-full" : "h-20 w-20")}><ArtPlate theme={themeForCategory(p.category)} seed={p.id} className="size-full" /></div>
                     <div className="min-w-0 py-1">
                       <p className="truncate font-medium group-hover:text-violet">{p.name}</p>
                       <p className="truncate text-[12px] text-muted">{[p.clientName, p.market].filter(Boolean).join(" · ") || "—"}</p>

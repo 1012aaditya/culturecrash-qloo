@@ -48,9 +48,9 @@ export function OpportunityBoard({ projectId, opportunities, evidence, direction
       {shown.length === 0 ? (
         <EmptyState title="No opportunities yet" body="Generate hypotheses from the latest completed research run. Each will cite the observations it rests on." />
       ) : (
-        <ul className="grid gap-4 lg:grid-cols-12">
+        <ul className="cc-stagger grid gap-4 lg:grid-cols-12">
           {shown.map((o, i) => (
-            <li key={o.id} id={`opp-${o.id}`} className={cn("scroll-mt-28 overflow-hidden rounded-[30px] border border-line bg-paper shadow-card", i === 0 ? "lg:col-span-12" : i % 3 === 1 ? "lg:col-span-7" : "lg:col-span-5", o.status === "dismissed" && "opacity-60")}>
+            <li key={o.id} id={`opp-${o.id}`} className={cn("scroll-mt-28 overflow-hidden rounded-[30px] border border-line bg-paper shadow-card transition-[box-shadow,opacity] duration-500 hover:shadow-float", i === 0 ? "lg:col-span-12" : i % 3 === 1 ? "lg:col-span-7" : "lg:col-span-5", o.status === "dismissed" && "opacity-60")}>
               <div className={cn("grid h-full", i === 0 && "lg:grid-cols-[1fr_1.15fr]")}>
                 <div className={cn("relative overflow-hidden bg-charcoal text-white", i === 0 ? "min-h-[300px]" : "min-h-[180px]")}>
                   <ArtPlate theme={theme} seed={o.id} rounded={false} className="absolute inset-0" />

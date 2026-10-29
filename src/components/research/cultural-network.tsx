@@ -164,14 +164,15 @@ export function CulturalNetwork({
         {/* Audience centre (the research signal) */}
         <div className="pointer-events-none absolute" style={{ left: CX - 105, top: CY - 95, width: 210, height: 190 }}>
           <div className="absolute -inset-10 rounded-full bg-peach/50 blur-3xl" />
-          <div className="absolute inset-0 rounded-[46%_54%_42%_58%/55%_45%_55%_45%] bg-[radial-gradient(circle_at_35%_30%,#E8DFFF,#B8A5FF_45%,#8064F5_85%)] opacity-90 shadow-[0_30px_60px_-20px_rgba(128,100,245,0.7)]" />
+          <div className="cc-animate-blob absolute inset-0 rounded-[46%_54%_42%_58%/55%_45%_55%_45%] bg-[radial-gradient(circle_at_35%_30%,#E8DFFF,#B8A5FF_45%,#8064F5_85%)] opacity-90 shadow-[0_30px_60px_-20px_rgba(128,100,245,0.7)]" />
           <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-white">
             <span className="cc-eyebrow text-[9px] text-white/80">Research signal</span>
             <span className="mt-1 text-[15px] font-medium leading-tight">{audienceLabel}</span>
           </div>
         </div>
 
-        {nodes.filter(visible).map((n) => {
+        {nodes.filter(visible).map((n, idx) => {
+          const pop = { animationDelay: `${Math.min(250 + idx * 28, 1100)}ms` };
           const match = q && n.name.toLowerCase().includes(q);
           const dim = (connected && !connected.has(n.id)) || (q && !match);
           const sel = n.id === selectedId;
@@ -184,11 +185,11 @@ export function CulturalNetwork({
                 aria-label={label}
                 aria-pressed={sel}
                 className={cn(
-                  "absolute overflow-hidden rounded-[18px] text-left text-white shadow-[0_20px_40px_-18px_rgba(23,21,30,0.7)] transition-[opacity,transform,box-shadow] duration-300 focus-visible:outline-4",
+                  "cc-animate-pop absolute overflow-hidden rounded-[18px] text-left text-white shadow-[0_20px_40px_-18px_rgba(23,21,30,0.7)] transition-[opacity,scale,box-shadow] duration-500 ease-[var(--cc-ease-spring)] focus-visible:outline-4",
                   sel ? "z-20 scale-110 ring-4 ring-violet" : "z-10 hover:scale-105",
                   dim && "opacity-25",
                 )}
-                style={{ left: n.x - 50, top: n.y - 62, width: 100, height: 124 }}
+                style={{ left: n.x - 50, top: n.y - 62, width: 100, height: 124, ...pop }}
               >
                 <EntityImage src={n.imageUrl} theme={TYPE_THEME[n.type] ?? theme} seed={n.providerId} rounded={false} className="absolute inset-0" />
                 <span className="absolute inset-x-2 bottom-2">
@@ -204,12 +205,12 @@ export function CulturalNetwork({
               onClick={() => onSelect(n.id)}
               aria-label={label}
               aria-pressed={sel}
-              className={cn("group absolute flex items-center gap-1.5 transition-opacity duration-300", sel ? "z-20" : "z-10", dim && "opacity-25")}
-              style={{ left: n.x - 7, top: n.y - 7 }}
+              className={cn("cc-animate-pop group absolute flex items-center gap-1.5 transition-opacity duration-300", sel ? "z-20" : "z-10", dim && "opacity-25")}
+              style={{ left: n.x - 7, top: n.y - 7, ...pop }}
             >
               <span
                 className={cn(
-                  "block size-3.5 shrink-0 rounded-full border-2 border-white shadow transition-transform",
+                  "block size-3.5 shrink-0 rounded-full border-2 border-white shadow transition-[scale,box-shadow] duration-300 ease-[var(--cc-ease-spring)] group-hover:scale-125",
                   n.role === "seed" ? "size-4 bg-ink" : n.role === "tag" ? "bg-coral" : "bg-violet",
                   sel && "scale-150 ring-4 ring-lilac",
                   match && "ring-4 ring-peach",

@@ -35,8 +35,8 @@ export function NotificationBell({ initial, tasks }: { initial: Notifications; t
       if (document.visibilityState !== "visible") return;
       try {
         const res = await fetch("/api/notifications", { cache: "no-store" });
-        if (res.ok && alive) {
-          const next = (await res.json()) as Notifications;
+        const next = res.ok ? ((await res.json()) as Notifications) : (await res.body?.cancel(), null);
+        if (next && alive) {
           setData((cur) => {
             if (next.unread > cur.unread) router.refresh(); // new work finished: refresh tasks and pages too
             return next;

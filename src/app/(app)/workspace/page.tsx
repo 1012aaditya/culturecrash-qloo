@@ -127,7 +127,7 @@ export default async function WorkspaceOverviewPage({ searchParams }: PageProps<
             <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {o.projects.map((p, i) => (
                 <li key={p.id} className={cn(i === 0 && "sm:col-span-2 xl:col-span-1 xl:row-span-2")}>
-                  <Link href={`/projects/${p.id}`} className={cn("group flex h-full gap-3 rounded-cc border border-line p-2.5 transition-shadow hover:shadow-card", i === 0 && "xl:flex-col")}>
+                  <Link href={`/projects/${p.id}`} className={cn("group flex h-full gap-3 rounded-cc border border-line p-2.5 cc-lift", i === 0 && "xl:flex-col")}>
                     <ArtPlate theme={themeForCategory(p.category)} seed={p.id} className={cn("shrink-0", i === 0 ? "h-16 w-16 xl:h-40 xl:w-full" : "h-16 w-16")} />
                     <span className="min-w-0 py-0.5">
                       <span className="block truncate text-[13px] font-medium group-hover:text-violet">{p.name}</span>

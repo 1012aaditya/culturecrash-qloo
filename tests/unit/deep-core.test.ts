@@ -102,6 +102,20 @@ describe("budget", () => {
     t = DEPTH_PROFILES.quick.maxSeconds * 1000;
     expect(b.canSpend("provider", 0).reason).toBe("time_limit");
   });
+  it("guarantees time for later stages after a slow earlier stage", () => {
+    let t = 0;
+    const b = new Budget(DEPTH_PROFILES.standard, Infinity, () => t);
+    t = 160_000; // a slow Qloo stage used almost all of standard's 170 s
+    expect(b.canSpend("provider", 0).reason).toBe("time_limit");
+    b.ensureSecondsLeft(85);
+    expect(b.canSpend("provider", 0).ok).toBe(true);
+    t += 84_000;
+    expect(b.canSpend("provider", 0).ok).toBe(true);
+    t += 2_000;
+    expect(b.canSpend("provider", 0).reason).toBe("time_limit");
+    b.ensureSecondsLeft(0); // never takes time away
+    expect(b.canSpend("provider", 0).reason).toBe("time_limit");
+  });
   it("prices LLM tokens per model", () => {
     expect(llmCostUsd("claude-haiku-5-5", 1_000_000, 0)).toBeCloseTo(0.1);
     expect(llmCostUsd("claude-opus-5-5", 0, 1_000_000)).toBeCloseTo(20);

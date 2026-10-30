@@ -41,6 +41,13 @@ describe("QlooClient", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("retries a timeout once, not three times", async () => {
+    const fetcher = vi.fn(async () => { throw Object.assign(new Error("aborted"), { name: "TimeoutError" }); });
+    const c = new QlooClient("k-12345678", "https://api.qloo.com", fetcher, noSleep);
+    await expect(c.insights({ filterType: "urn:entity:place", signalEntities: ["s"] })).rejects.toMatchObject({ code: "timeout" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("does not retry 4xx client errors and surfaces the provider message", async () => {
     const fetcher = vi.fn(async () => json(400, { error: "filter.type is required" }));
     const c = new QlooClient("k-12345678", "https://api.qloo.com", fetcher, noSleep);

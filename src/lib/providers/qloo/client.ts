@@ -4,6 +4,7 @@ import { QlooError, type EntityTypeUrn, type NormalizedEntity, type NormalizedTa
 const ALLOWED_HOSTS = new Set(["hackathon.api.qloo.com", "api.qloo.com", "staging.api.qloo.com"]);
 const TIMEOUT_MS = 12_000;
 const MAX_ATTEMPTS = 3;
+const MAX_TIMEOUT_ATTEMPTS = 2;
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -97,10 +98,13 @@ export class QlooClient {
         }
         const timeout = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
         lastError = new QlooError(timeout ? "Qloo request timed out" : "Could not reach the Qloo API", timeout ? "timeout" : "network");
-        if (attempt < MAX_ATTEMPTS) {
+        // A query that timed out twice keeps timing out (live: place insights for India), and each try
+        // costs TIMEOUT_MS of the research run's time budget, so timeouts get one retry only.
+        if (attempt < (timeout ? MAX_TIMEOUT_ATTEMPTS : MAX_ATTEMPTS)) {
           await this.sleep(500 * 2 ** attempt);
           continue;
         }
+        break;
       }
     }
     throw lastError ?? new QlooError("Qloo request failed", "network");

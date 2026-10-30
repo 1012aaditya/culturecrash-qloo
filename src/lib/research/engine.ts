@@ -505,7 +505,14 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       generator = "demo-template";
     } else if ((await llmEnabled(userId, ws)) && observations.some((o) => o.role !== "seed")) {
       try {
-        const out = await generateStructured({ schema: researchInterpretationSchema, prompt: interpretationPrompt(brief!, observations, plan) });
+        // Embedded in a multi-source job, this is an intermediate read that the job's own synthesis
+        // supersedes, and it shares the job's time budget: the main model took ~90 s live and left no
+        // time for web search, so the fast model drafts it.
+        const out = await generateStructured({
+          schema: researchInterpretationSchema,
+          prompt: interpretationPrompt(brief!, observations, plan),
+          ...(embedded ? { model: env().LLM_MODEL_FAST, effort: "low" as const } : {}),
+        });
         const valid = new Set(observations.map((o) => o.id));
         out.data.findings = out.data.findings.map((f) => ({ ...f, evidenceIds: f.evidenceIds.filter((id) => valid.has(id)) }));
         interpretation = out.data;

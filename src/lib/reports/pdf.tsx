@@ -38,7 +38,7 @@ function Sec({ k, n, children }: { k: string; n: number; children: React.ReactNo
   );
 }
 
-function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: number; createdAt: string }) {
+function ReportPdf({ s, version, createdAt, pageNumbers }: { s: ReportSnapshot; version: number; createdAt: string; pageNumbers: boolean }) {
   const on = (k: string) => s.sections.includes(k as never);
   let n = 0;
   const date = new Date(createdAt).toISOString().slice(0, 10);
@@ -182,7 +182,7 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
         )}
         <View style={st.footer} fixed>
           <Text>{s.title} · v{version}</Text>
-          <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
+          {pageNumbers && <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />}
         </View>
       </Page>
     </Document>
@@ -190,5 +190,12 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
 }
 
 export async function renderReportPdf(s: ReportSnapshot, version: number, createdAt: string) {
-  return renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} />);
+  try {
+    return await renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers />);
+  } catch (e) {
+    // react-pdf 4.9 bug: for some page layouts, re-laying out `render` (page number) nodes leaves a child
+    // unpositioned and pdfkit throws "unsupported number: -1.9e21". Retry without page numbers.
+    if (!(e instanceof Error && e.message.startsWith("unsupported number"))) throw e;
+    return renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers={false} />);
+  }
 }

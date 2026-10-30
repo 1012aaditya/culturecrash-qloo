@@ -27,8 +27,8 @@ import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, ty
 import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
 
 export type AffinityOutcome =
-  | { ok: true; observations: number; failures: number; summary: string | null }
-  | { ok: false; skipped?: boolean; code: string; message: string };
+  | { ok: true; observations: number; failures: number; summary: string | null; notes?: string[] }
+  | { ok: false; skipped?: boolean; code: string; message: string; notes?: string[] };
 
 type Doc = Hit & { id: string; canonicalUrl: string | null; text: string; group: string; duplicateOf: string | null; questionKeys: string[]; extraction: string; retrievedAt: string };
 type Claim = { dbId: string | null; text: string; claimType: ClaimType; documentIds: string[]; excerpt: string | null; questionKey: string | null; scope: ClaimDraft["scope"]; method: string; score: number; independent: number; quality: object };
@@ -397,6 +397,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       else synthesis.limitations.unshift("The LLM synthesis was skipped (budget) or failed; this summary restates the strongest source claims.");
     }
     if (isDemo) synthesis.limitations.unshift("DEMONSTRATION DATA: every source in this report is fictional.");
+    synthesis.limitations.push(...(affinity.notes ?? []));
     for (const f of providerFailures) synthesis.limitations.push(`${f.provider} failed: ${f.error}. Results from that source are missing.`);
     for (const s of plan.skipped) if (s.reason && !/not relevant/i.test(s.reason)) synthesis.limitations.push(`${s.provider} not used: ${s.reason}.`);
 

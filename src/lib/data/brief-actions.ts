@@ -8,6 +8,7 @@ import { briefExtractionSchema, type BriefExtraction } from "@/lib/ai/schemas";
 import { templateBriefExtraction } from "@/lib/ai/template";
 import { withUser } from "@/lib/db";
 import { ensureChunks } from "@/lib/research/deep/brand-docs";
+import { zipUncompressedBytes } from "@/lib/upload-guards";
 import { env } from "@/lib/env";
 import { logActivity, trackEvent } from "./activity";
 import { BRIEF_CORE_FIELDS, isUuid } from "./projects";
@@ -80,6 +81,15 @@ const ALLOWED = new Map([
   ["image/gif", "gif"],
 ]);
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_UNZIPPED_BYTES = 60 * 1024 * 1024;
+const MAX_PDF_PAGES = 300;
+const PARSE_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("parse timeout")), ms); })])
+    .finally(() => clearTimeout(timer));
+}
 
 export type UploadResult = { ok: true; documentId: string; extracted: boolean; textPreview: string | null; stored: boolean } | { ok: false; error: string };
 
@@ -102,6 +112,11 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
   // Magic-byte checks: content must match the declared type.
   if (kind === "pdf" && bytes.subarray(0, 5).toString() !== "%PDF-") return { ok: false, error: "That file is not a valid PDF." };
   if (kind === "docx" && !(bytes[0] === 0x50 && bytes[1] === 0x4b)) return { ok: false, error: "That file is not a valid DOCX document." };
+  if (kind === "docx") {
+    const unzipped = zipUncompressedBytes(bytes);
+    if (unzipped === null) return { ok: false, error: "That file is not a valid DOCX document." };
+    if (unzipped > MAX_UNZIPPED_BYTES) return { ok: false, error: "That DOCX expands to more than 60 MB, so it was not opened. Save a smaller copy and try again." };
+  }
 
   let extracted: string | null = null;
   let status: "extracted" | "unsupported" | "failed" = "unsupported";
@@ -112,12 +127,13 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
       if (extracted === null) status = "unsupported";
     } else if (kind === "pdf") {
       const { extractText, getDocumentProxy } = await import("unpdf");
-      const pdf = await getDocumentProxy(new Uint8Array(bytes));
-      const { text: t } = await extractText(pdf, { mergePages: true });
+      const pdf = await withTimeout(getDocumentProxy(new Uint8Array(bytes)), PARSE_TIMEOUT_MS);
+      if (pdf.numPages > MAX_PDF_PAGES) return { ok: false, error: `That PDF has ${pdf.numPages} pages. Upload one with ${MAX_PDF_PAGES} pages or fewer.` };
+      const { text: t } = await withTimeout(extractText(pdf, { mergePages: true }), PARSE_TIMEOUT_MS);
       extracted = String(t);
     } else if (kind === "docx") {
       const mammoth = await import("mammoth");
-      extracted = (await mammoth.extractRawText({ buffer: bytes })).value;
+      extracted = (await withTimeout(mammoth.extractRawText({ buffer: bytes }), PARSE_TIMEOUT_MS)).value;
     } else {
       extracted = bytes.toString("utf8");
     }

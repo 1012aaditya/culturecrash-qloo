@@ -8,6 +8,7 @@ import { assertCan } from "@/lib/permissions";
 import { DEPTH_PROFILES } from "./deep/budget";
 import type { Depth } from "./deep/types";
 import { buildPlan } from "./engine";
+import { platformHeadroomUsd } from "./spend";
 
 export type JobOptions = {
   projectId: string;
@@ -30,7 +31,17 @@ export async function createResearchJob(ctx: Ctx, o: JobOptions): Promise<JobRes
   if (o.mode === "demo" && !demoModeAllowed()) return { ok: false, error: "Demonstration mode is disabled on this deployment.", status: 403 };
   if (o.mode === "live" && !o.depth && !env().QLOO_API_KEY) return { ok: false, error: "Qloo is not configured on this server. Choose a research depth to use web and document sources instead.", status: 409 };
   const ws = ctx.workspace.workspaceId;
+  // Live runs spend the server's provider keys: refuse once the platform-wide monthly ceiling is reached.
+  if (o.mode === "live") {
+    const platform = await platformHeadroomUsd();
+    if (platform !== null && platform < (o.depth ? DEPTH_PROFILES[o.depth].synthesisReserveUsd : 0.01)) {
+      return { ok: false, error: "Live research is paused: this server has reached its monthly research spending limit. Demo runs still work.", status: 402 };
+    }
+  }
   return withUser(ctx.user.id, async (tx) => {
+    // One job creation at a time per workspace, so the active-run, daily-limit and budget checks
+    // below can't be raced by two tabs or API calls.
+    await tx`select pg_advisory_xact_lock(hashtext(${`research-job:${ws}`}))`;
     const brief = await loadBrief(tx, o.projectId);
     if (!brief) return { ok: false as const, error: "Project not found.", status: 404 };
     // Idempotency: double-clicks and retries of the same request reuse the job.
@@ -43,6 +54,10 @@ export async function createResearchJob(ctx: Ctx, o: JobOptions): Promise<JobRes
     const [active] = await tx`select id from research_runs where project_id = ${o.projectId} and status in ('queued', 'running') limit 1`;
     if (active) return { ok: true as const, runId: active.id as string, reused: true };
 
+    if (o.mode === "live") {
+      const [{ my_email_confirmed: confirmed }] = await tx`select public.my_email_confirmed()`;
+      if (!confirmed) return { ok: false as const, error: "Confirm your email address before running live research. Demo runs work without it.", status: 403 };
+    }
     const [{ research_runs_today: today }] = await tx`select research_runs_today(${ws})`;
     const [w] = await tx`select research_runs_daily_limit, research_runs_per_user_daily, research_budget_usd_monthly from workspaces where id = ${ws}`;
     if (today >= w.research_runs_daily_limit) return { ok: false as const, error: `This workspace has reached its limit of ${w.research_runs_daily_limit} research runs in 24 hours.`, status: 429 };

@@ -25,6 +25,7 @@ import { scoreClaim } from "./quality";
 import { providerRegistry, type ProviderInfo } from "./registry";
 import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, type Coverage, type QlooObservation, type Report, type SynthClaim } from "./synthesize";
 import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
+import { platformHeadroomUsd } from "../spend";
 
 export type AffinityOutcome =
   | { ok: true; observations: number; failures: number; summary: string | null; notes?: string[] }
@@ -61,9 +62,20 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
 
   const headroom = await withUser(userId, async (tx) => {
     const [w] = await tx`select research_budget_usd_monthly as cap, public.research_spend_this_month(${ws}) as spent from workspaces where id = ${ws}`;
-    return Number(w.cap) - Number(w.spent);
+    // Other live runs in this workspace may still spend up to their own cap: set that aside, so
+    // concurrent runs on different projects can't each spend the same remaining budget.
+    const others = await tx`
+      select r.depth, r.budget, coalesce((select sum(coalesce(s.cost_usd_actual, s.cost_usd_estimated, 0)) from research_sources s where s.run_id = r.id), 0) as spent
+      from research_runs r
+      where r.workspace_id = ${ws} and r.id <> ${runId} and r.mode = 'live' and r.depth is not null and r.status in ('queued', 'running')`;
+    const reserved = others.reduce((sum, o) => {
+      const cap = { ...DEPTH_PROFILES[o.depth as Depth], ...((o.budget as Partial<BudgetLimits>) ?? {}) }.maxUsd;
+      return sum + Math.max(0, cap - Number(o.spent));
+    }, 0);
+    return Number(w.cap) - Number(w.spent) - reserved;
   });
-  const budget = new Budget(limits, Math.max(0, headroom));
+  const platform = isDemo ? null : await platformHeadroomUsd();
+  const budget = new Budget(limits, Math.max(0, platform === null ? headroom : Math.min(headroom, platform)));
   const providerFailures: { provider: string; error: string }[] = [];
   let stopReason = "sufficient_coverage";
   const docs: Doc[] = [];

@@ -9,7 +9,9 @@ import { DemoBadge, EmptyState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle, Surface } from "@/components/ui/surface";
+import { PendingInvitations } from "@/components/workspace/pending-invitations";
 import { getDashboard } from "@/lib/data/dashboard";
+import { listMyInvitations } from "@/lib/data/workspace-admin";
 import { openDemoWorkspaceAction } from "@/app/(app)/actions";
 import { demoModeAllowed } from "@/lib/env";
 import { currentStage, listProjects, stageStates } from "@/lib/data/projects";
@@ -27,12 +29,13 @@ function greeting() {
 
 export default async function DashboardPage() {
   const ctx = await getCtx();
-  const [projects, d] = await Promise.all([listProjects(ctx), getDashboard(ctx)]);
+  const [projects, d, invitations] = await Promise.all([listProjects(ctx), getDashboard(ctx), listMyInvitations(ctx)]);
   const canCreate = can(ctx.workspace.role, "project.create");
   const [featured, ...rest] = projects;
 
   return (
     <div className="mx-auto max-w-[1520px] px-4 pb-24 pt-8 sm:px-8">
+      <PendingInvitations invitations={invitations} />
       <section className="grid gap-6 lg:grid-cols-[1fr_1.35fr] [&>*]:min-w-0">
         <div className="flex flex-col justify-between gap-8 py-4">
           <div>

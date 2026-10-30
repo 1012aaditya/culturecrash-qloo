@@ -156,7 +156,7 @@ function InviteForm() {
           if (!r.ok) return setStatus({ error: r.error, field: r.fieldErrors?.email });
           setStatus({ success: r.message });
           setEmail("");
-          toast({ tone: "success", title: r.data?.outcome === "added" ? "Member added" : "Invitation recorded" });
+          toast({ tone: "success", title: "Invitation sent" });
           router.refresh();
         });
       }}

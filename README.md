@@ -128,6 +128,11 @@ policies because only the server writes to it.
 4. Environment: `DATABASE_URL` (the transaction pooler on port 6543 is fine — prepared statements are
    disabled), `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
    `APP_BASE_URL`.
+5. Turn off the auto-generated REST API. The app talks to Postgres directly and never uses it, but it is
+   on by default and would let anyone with the public anon key and a login skip the app's permission
+   checks. Migration `…1300_security_hardening.sql` already makes every Data API request fail (a
+   `pgrst.db_pre_request` hook); also remove `public` under **Settings → API → Exposed schemas** (or turn
+   the Data API off) in the dashboard.
 
 ## Configure providers
 
@@ -146,6 +151,9 @@ policies because only the server writes to it.
   `REDDIT_COMMERCIAL_ACCESS=approved` (only once Reddit has approved commercial use). Wikipedia and
   client documents need nothing. Check them with `npx tsx --env-file=.env.local scripts/research-smoke.ts`.
   Workspaces can turn web research off in Settings → Integrations.
+- **Spending ceiling**: `PLATFORM_SPEND_CAP_USD` caps estimated research spend across **all** workspaces per
+  calendar month. Every workspace uses this server's provider keys, so set it before opening signup; once
+  it is reached, live research pauses (demo runs still work). Live research also requires a confirmed email.
 - **Billing**: not configured. Plans are pilot-only and no payment flow exists.
 
 ## Deploy (Vercel)

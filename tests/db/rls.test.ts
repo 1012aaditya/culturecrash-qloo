@@ -56,8 +56,10 @@ d("Row Level Security and workspace isolation", () => {
     A = await user("alice@a.test");
     B = await user("bob@b.test");
     V = await user("vera@a.test");
-    // Vera joins Alice's workspace as a viewer (via Alice, an owner).
+    // Vera joins Alice's workspace as a viewer: Alice (an owner) invites, Vera accepts.
     await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'vera@a.test', 'viewer')`);
+    const [inv] = await as(V.id, (tx) => tx`select id from my_pending_invitations()`);
+    await as(V.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`);
     projectA = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'A secret launch', ${A.id}) returning id`))[0].id;
     projectB = (await as(B.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${B.ws}, 'B secret launch', ${B.id}) returning id`))[0].id;
   });
@@ -221,5 +223,64 @@ d("Row Level Security and workspace isolation", () => {
     expect(Number((await as(A.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBeCloseTo(0.005);
     expect(Number((await as(B.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBe(0);
     expect((await as(B.id, (tx) => tx`select research_runs_today_by_user(${A.ws}, ${A.id}) as n`))[0].n).toBe(0);
+  });
+
+  it("profile email can't be changed by its owner, so invitations can't be hijacked", async () => {
+    // Bob tries to take over an invitation addressed to someone else's email.
+    await denied(as(B.id, (tx) => tx`update profiles set email = 'newhire@a.test' where id = ${B.id}`));
+    expect(await as(B.id, (tx) => tx`update profiles set full_name = 'Bob B' where id = ${B.id} returning id`)).toHaveLength(1);
+    await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'newhire@a.test', 'member')`);
+    expect(await as(B.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    expect(await as(B.id, (tx) => tx`select * from workspace_members where workspace_id = ${A.ws} and user_id = ${B.id}`)).toHaveLength(0);
+  });
+
+  it("invitations add nobody until a confirmed invitee accepts", async () => {
+    const D = await user("dan@d.test");
+    const [{ invite_member: outcome }] = await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'dan@d.test', 'member')`);
+    expect(outcome).toBe("invited"); // the same answer whether or not the address has an account
+    expect(await as(D.id, (tx) => tx`select * from workspaces where id = ${A.ws}`)).toHaveLength(0);
+    const [inv] = await as(D.id, (tx) => tx`select id, workspace_name from my_pending_invitations()`);
+    expect(inv.workspace_name).toBeTruthy();
+    // Nobody else can answer it.
+    await expect(as(B.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`)).rejects.toThrow(/invitation not found/);
+    // An unconfirmed account sees nothing and can't accept.
+    await sql`update auth.users set email_confirmed_at = null where id = ${D.id}`;
+    expect(await as(D.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    await expect(as(D.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`)).rejects.toThrow(/invitation not found/);
+    await sql`update auth.users set email_confirmed_at = now() where id = ${D.id}`;
+    await as(D.id, (tx) => tx`select respond_to_invitation(${inv.id}, false)`);
+    expect(await as(D.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    expect(await as(D.id, (tx) => tx`select * from workspaces where id = ${A.ws}`)).toHaveLength(0);
+  });
+
+  it("only owners change limits and retention; nobody edits plan or demo flags directly", async () => {
+    await as(A.id, (tx) => tx`update workspace_members set role = 'admin' where workspace_id = ${A.ws} and user_id = ${V.id}`);
+    await denied(as(V.id, (tx) => tx`update workspaces set research_runs_daily_limit = 1000 where id = ${A.ws}`));
+    await denied(as(A.id, (tx) => tx`update workspaces set plan = 'agency', is_demo = true where id = ${A.ws}`));
+    await denied(as(V.id, (tx) => tx`select set_research_limits(${A.ws}, 9999, 200)`));
+    await denied(as(V.id, (tx) => tx`select set_data_retention(${A.ws}, 30)`));
+    await as(A.id, (tx) => tx`select set_research_limits(${A.ws}, 40, 20)`);
+    await as(A.id, (tx) => tx`select set_data_retention(${A.ws}, 90)`);
+    const [w] = await as(A.id, (tx) => tx`select research_budget_usd_monthly, research_runs_per_user_daily, data_retention_days from workspaces where id = ${A.ws}`);
+    expect([Number(w.research_budget_usd_monthly), w.research_runs_per_user_daily, w.data_retention_days]).toEqual([40, 20, 90]);
+    expect(await as(V.id, (tx) => tx`update workspaces set name = 'Renamed by admin' where id = ${A.ws} returning id`)).toHaveLength(1);
+    await as(A.id, (tx) => tx`update workspace_members set role = 'viewer' where workspace_id = ${A.ws} and user_id = ${V.id}`);
+  });
+
+  it("a user can own at most three workspaces", async () => {
+    const E = await user("erin@e.test");
+    await as(E.id, (tx) => tx`select create_workspace('Second')`);
+    await as(E.id, (tx) => tx`select create_workspace('Third')`);
+    await expect(as(E.id, (tx) => tx`select create_workspace('Fourth')`)).rejects.toThrow(/at most three/);
+  });
+
+  it("notifications can't be planted for a teammate or point off-site", async () => {
+    // Vera (viewer) can't notify Alice, even as herself.
+    await denied(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, actor_id, kind, title) values (${A.ws}, ${A.id}, ${V.id}, 'report_shared', 'Verify your account')`));
+    await expect(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title, href) values (${A.ws}, ${V.id}, 'report_shared', 'x', ${"/" + String.fromCharCode(92) + "evil.test"})`)).rejects.toThrow(/check constraint/);
+  });
+
+  it("the Data API pre-request hook refuses every call", async () => {
+    await expect(as(A.id, (tx) => tx`select data_api_disabled()`)).rejects.toThrow(/Data API is disabled/);
   });
 });

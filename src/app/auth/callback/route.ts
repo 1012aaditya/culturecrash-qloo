@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { supabaseServer } from "@/lib/auth/supabase";
+import { safeInternalPath } from "@/lib/safe-path";
 
 /** Supabase email verification / recovery: exchange the PKCE code for a session. */
 export async function GET(request: NextRequest) {
   const url = request.nextUrl;
   const code = url.searchParams.get("code");
-  const nextParam = url.searchParams.get("next") ?? "/dashboard";
-  const next = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "/dashboard";
+  const next = safeInternalPath(url.searchParams.get("next"));
   if (code) {
     try {
       const supabase = await supabaseServer();

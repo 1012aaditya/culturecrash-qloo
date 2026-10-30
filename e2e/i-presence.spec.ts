@@ -10,13 +10,12 @@ test("Scenario I — teammates see who is on a project and which field they are 
   await a.goto("/settings/team");
   await a.fill("#invite-email", bobEmail);
   await a.getByRole("button", { name: /^Invite/ }).click();
-  await expect(a.getByText(/now has access as member/)).toBeVisible();
+  await expect(a.getByText(/Invitation (emailed|recorded)/)).toBeVisible();
   const projectId = await createCampaign(a, "Shared launch");
 
-  // Bob switches to Isla's workspace through the notification and opens the brief.
-  await b.reload();
-  await b.getByRole("button", { name: /Notifications, 1 unread/ }).click();
-  await b.getByRole("menuitem", { name: /You were added to/ }).click();
+  // Bob accepts the invitation on his dashboard (which switches to Isla's workspace) and opens the brief.
+  await b.goto("/dashboard");
+  await b.getByRole("button", { name: /^Accept/ }).click();
   await b.waitForURL(/\/dashboard/);
   await b.goto(`/projects/${projectId}/brief`);
   await b.locator("#audience").click();

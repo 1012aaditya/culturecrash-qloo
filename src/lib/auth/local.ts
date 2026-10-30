@@ -9,13 +9,14 @@ import type { AuthResult, SessionUser } from "./types";
 /**
  * LOCAL AUTH MODE — for development and automated tests against plain Postgres,
  * where Supabase Auth (GoTrue) is not running. Enabled only with AUTH_MODE=local and
- * refused on Vercel production deployments. Supabase Auth is the production provider.
+ * refused on every Vercel deployment, previews included (no email confirmation here).
+ * Supabase Auth is the production provider.
  */
 export const LOCAL_SESSION_COOKIE = "cc_local_session";
 
 function secret() {
   const e = env();
-  if (e.VERCEL_ENV === "production") throw new ConfigurationError("Local auth is disabled in production");
+  if (e.VERCEL_ENV || process.env.VERCEL) throw new ConfigurationError("Local auth is disabled on Vercel deployments");
   if (!e.SESSION_SECRET) throw new ConfigurationError("SESSION_SECRET is required for AUTH_MODE=local");
   return new TextEncoder().encode(e.SESSION_SECRET);
 }

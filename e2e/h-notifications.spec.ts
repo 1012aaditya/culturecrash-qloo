@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createCampaign, fillBrief, runDemoResearch, signUp, unique } from "./helpers";
 
-test("Scenario H — in-app notifications: research finished and added to a workspace", async ({ browser }) => {
+test("Scenario H — in-app notifications for research, and accepting a workspace invitation", async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
   const b = await (await browser.newContext()).newPage();
   const bobEmail = unique("h-b");
@@ -23,14 +23,14 @@ test("Scenario H — in-app notifications: research finished and added to a work
   await a.waitForURL(new RegExp(`/projects/${projectId}/research\\?run=`));
   await expect(a.getByRole("button", { name: /^Notifications$/ })).toBeVisible();
 
-  // Adding an existing user notifies them in the new workspace; opening it switches workspace.
+  // Inviting an existing user never adds them silently: they accept on their dashboard, which switches workspace.
   await a.goto("/settings/team");
   await a.fill("#invite-email", bobEmail);
   await a.getByRole("button", { name: /^Invite/ }).click();
-  await expect(a.getByText(/now has access as member/)).toBeVisible();
-  await b.reload();
-  await b.getByRole("button", { name: /Notifications, 1 unread/ }).click();
-  await b.getByRole("menuitem", { name: /You were added to Hana Owner Agency/ }).click();
+  await expect(a.getByText(/Invitation (emailed|recorded)/)).toBeVisible();
+  await b.goto("/dashboard");
+  await expect(b.getByText(/invited you to Hana Owner Agency/)).toBeVisible();
+  await b.getByRole("button", { name: /^Accept/ }).click();
   await b.waitForURL(/\/dashboard/);
   await expect(b.getByText("Hana Owner Agency").first()).toBeVisible();
 });

@@ -87,13 +87,19 @@ describe("Watch plan", () => {
     expect(topics.query).toBe('"Nike" "running shoes" OR sustainability');
   });
   it("never skips a scheduled day, whenever the last check ran", () => {
-    // A manual check in the afternoon is still followed by tomorrow's 06:00 run…
-    const afternoon = nextRunAfter("daily", new Date("2026-10-30T16:20:00Z"));
-    expect(nextCheckAt(afternoon).toISOString()).toBe("2026-10-31T06:00:00.000Z");
-    // …and the scheduled run (anywhere in its hour) by the next day's.
-    expect(nextCheckAt(nextRunAfter("daily", new Date("2026-10-30T06:05:00Z"))).toISOString()).toBe("2026-10-31T06:00:00.000Z");
-    expect(nextCheckAt(nextRunAfter("daily", new Date("2026-10-30T06:55:00Z"))).toISOString()).toBe("2026-10-31T06:00:00.000Z");
-    expect(nextCheckAt(nextRunAfter("weekly", new Date("2026-10-30T06:10:00Z"))).toISOString()).toBe("2026-11-06T06:00:00.000Z");
+    const next = (iso: string, f: "daily" | "weekly" = "daily") => nextCheckAt(nextRunAfter(f, new Date(iso))).toISOString();
+    // Manual checks at any hour are followed by the next morning's run…
+    expect(next("2026-10-30T16:20:00Z")).toBe("2026-10-31T06:00:00.000Z");
+    expect(next("2026-10-30T19:41:00Z")).toBe("2026-10-31T06:00:00.000Z"); // the live case that used to skip a day
+    expect(next("2026-10-30T23:59:00Z")).toBe("2026-10-31T06:00:00.000Z");
+    // …unless that run is under six hours away; then the one after.
+    expect(next("2026-10-31T01:00:00Z")).toBe("2026-11-01T06:00:00.000Z");
+    // The scheduled run itself (anywhere in its hour) is followed by the next day's.
+    expect(next("2026-10-30T06:05:00Z")).toBe("2026-10-31T06:00:00.000Z");
+    expect(next("2026-10-30T06:55:00Z")).toBe("2026-10-31T06:00:00.000Z");
+    expect(next("2026-10-30T06:10:00Z", "weekly")).toBe("2026-11-06T06:00:00.000Z");
+    // Due half an hour before the run, so the run's "due within the hour" window always catches it.
+    expect(nextRunAfter("daily", new Date("2026-10-30T19:41:00Z")).toISOString()).toBe("2026-10-31T05:30:00.000Z");
   });
 });
 

@@ -89,13 +89,21 @@ export const clipExcerpt = (raw: string) => {
 /** The hour (UTC) of the daily cron in vercel.json. Hobby fires it somewhere inside that hour. */
 export const CRON_HOUR_UTC = 6;
 
+/** At least this long between two checks of the same watch. */
+const MIN_GAP_HOURS = { daily: 6, weekly: 6 * 24 + 12 } as const;
+
 /**
- * When a watch is next due. Half a day short of a full period, so whatever time the last check ran —
- * the scheduled run or a manual check in the afternoon — the next scheduled run picks it up and a day is
- * never skipped, while two checks are still at least 12 hours apart.
+ * When a watch is next due: the first scheduled run (CRON_HOUR_UTC) at least MIN_GAP after the last
+ * check, minus half an hour so that run's "due within the hour" window always includes it. A check at
+ * any time of day — the scheduled run itself, or a manual check at 19:41 UTC — is therefore followed
+ * by the very next suitable scheduled run, and a day is never skipped.
  */
 export function nextRunAfter(frequency: "daily" | "weekly", from: Date): Date {
-  return new Date(from.getTime() + (frequency === "weekly" ? 7 * DAY : DAY) - 12 * 3_600_000);
+  const earliest = new Date(from.getTime() + MIN_GAP_HOURS[frequency] * 3_600_000);
+  const slot = new Date(earliest);
+  slot.setUTCHours(CRON_HOUR_UTC, 0, 0, 0);
+  if (slot.getTime() < earliest.getTime()) slot.setUTCDate(slot.getUTCDate() + 1);
+  return new Date(slot.getTime() - 30 * 60_000);
 }
 
 /** The scheduled run that will actually pick the watch up: the first cron slot from an hour before it's due. */

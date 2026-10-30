@@ -33,7 +33,8 @@ export async function signUpAction(_: FormState, form: FormData): Promise<FormSt
   }
   if (!result.ok) return { error: result.error };
   if (result.needsEmailConfirmation) {
-    return { message: "Check your inbox to verify your email, then sign in." };
+    // Supabase sends nothing (and says nothing) when the address already has an account, so say so here.
+    return { message: "Check your inbox for a link to confirm your email — it works on any device. No email? If this address already has an account, sign in or use “Forgot password?” instead." };
   }
   redirect("/dashboard?welcome=1");
 }

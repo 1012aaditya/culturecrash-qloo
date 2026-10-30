@@ -24,7 +24,7 @@ const BRAND_CONTEXT = [
   "quarter", "q1", "q2", "q3", "q4", "guidance", "forecast", "results", "retail", "retailer", "store", "stores", "ecommerce", "acquisition", "layoffs",
   "launch", "launches", "release", "releases", "drop", "collection", "collab", "collaboration", "partnership", "partners", "edition", "limited",
   "product", "products", "unveils", "debuts", "colorway", "colourway", "restock", "available", "price", "sale", "sneaker", "sneakers", "shoe",
-  "shoes", "boots", "kicks", "trainers", "footwear", "apparel", "clothing", "sportswear", "streetwear", "fashion", "kit", "jersey", "tee",
+  "shoes", "boot", "boots", "kicks", "trainers", "footwear", "apparel", "clothing", "sportswear", "streetwear", "fashion", "kit", "jersey", "tee",
   "hoodie", "running", "review", "campaign", "ad", "ads", "advert", "commercial", "marketing", "sponsor", "sponsorship", "ambassador", "athlete",
   "signature", "endorsement", "football", "soccer", "basketball", "nba", "nfl", "olympics", "footballer", "player", "wearables", "outfit",
 ];
@@ -32,14 +32,15 @@ const BRAND_CONTEXT = [
 /**
  * Words that point at another meaning of a brand name: a racehorse, a car, a singer, a game, an animal or a
  * goddess. An item is hidden as a name clash only when such words are present and outnumber the brand
- * words — absence of evidence is not enough, so stories in other languages aren't hidden by mistake.
- * Words with an everyday brand meaning too ("trainer" is a shoe, "mountain" a bike) are left out.
+ * words (a tie keeps it visible) — absence of evidence is not enough, so stories in other languages aren't hidden by mistake.
+ * Words with an everyday brand meaning too ("trainer" is a shoe, "mountain" a bike, "hybrid" a sneaker-boot)
+ * are left out.
  */
 const OTHER_MEANING = [
   // horses and racing
   "horse", "horses", "jockey", "jockeys", "thoroughbred", "filly", "colt", "stallion", "racecourse", "breeders", "derby", "furlong",
   // cars
-  "car", "cars", "suv", "hatchback", "crossover", "rally", "rally1", "ford", "engine", "horsepower", "hybrid", "dealership", "mpg", "vehicle",
+  "car", "cars", "suv", "hatchback", "crossover", "rally", "rally1", "ford", "engine", "horsepower", "dealership", "mpg", "vehicle",
   // music and entertainment
   "song", "songs", "singer", "album", "concert", "lyrics", "karaoke", "music", "musica", "cantante", "lagu", "cancion", "tour",
   // games and military
@@ -72,7 +73,7 @@ export function classify(item: Classifiable, ctx: { targetNames: string[]; conte
   const brand = new Set([...BRAND_CONTEXT, ...ctx.context.flatMap(tokens)]);
   const brandHits = [...words].filter((w) => brand.has(w)).length;
   const otherHits = [...words].filter((w) => OTHER.has(w)).length;
-  if (otherHits > 0 && otherHits >= brandHits) {
+  if (otherHits > brandHits) {
     return { relevance: "name_clash", reason: "Seems to be about something else with the same name (for example a person, a car or a horse)." };
   }
   return { relevance: "relevant", reason: null };

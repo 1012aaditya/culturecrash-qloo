@@ -28,8 +28,11 @@ describe("relevance: hidden only with evidence", () => {
       "Top 10 vibrant PUMA kicks on sale from $12 right now (Up to 66% off)",
       "Nike Kobe 3 Low Protro 'Mamba Eterno' Release Date",
       "Puma sponsors the Ferrari racing team for another season",
+      // Live, 30 Oct: "hybrid" here is a sneaker-boot, not a car.
+      "Nike’s Fan-favorite Air Max Boot Got a New Futuristic Foamposite Update",
     ]) expect(news(title), title).toBe("relevant");
     expect(video("Who’s the Greatest Adidas Footballer of All Time?")).toBe("relevant");
+    expect(news("Nike’s Fan-favorite Air Max Boot Got a New Futuristic Foamposite Update", "Nike is introducing its latest sneaker boot hybrid, the Goadome Low Foam SP")).toBe("relevant");
     // A listing pattern never hides a video; two watched companies in one story always count.
     expect(video("Mens size 10 Nike haul, free returns")).toBe("relevant");
     expect(news("Nike vs Adidas: which horse-racing sponsor wins?", "Jockeys, horses")).toBe("relevant");

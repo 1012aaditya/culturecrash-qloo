@@ -155,7 +155,9 @@ d("Watch Milestone 1 (A–H)", () => {
     expect(calls.filter((c) => c.provider === "exa")).toHaveLength(3);
     const [w] = await sql`select * from watches where id = ${watchId}`;
     expect(w.last_success_at).not.toBeNull();
-    expect(w.next_run_at.getTime()).toBeGreaterThan(Date.now() + 11 * 3_600_000);
+    // Next due: half an hour before the first scheduled run at least six hours from now.
+    const { nextRunAfter } = await import("@/lib/watch/plan");
+    expect(Math.abs(w.next_run_at.getTime() - nextRunAfter("daily", new Date()).getTime())).toBeLessThan(60_000);
     // Every call is in the cost ledger, linked to the job.
     const ledger = await sql`select provider, cost_usd_estimated, cached, status from research_sources where watch_job_id = ${jobs[0].id}`;
     expect(ledger).toHaveLength(9);

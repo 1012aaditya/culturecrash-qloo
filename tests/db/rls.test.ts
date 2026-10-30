@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCopilotTool } from "@/lib/ai/copilot-tools";
+import { buildSnapshot } from "@/lib/reports/snapshot";
 
 const admin = process.env.TEST_DATABASE_ADMIN_URL;
 const d = admin ? describe : describe.skip;
@@ -177,10 +178,14 @@ d("Row Level Security and workspace isolation", () => {
   it("copilot tools only see what the caller can see", async () => {
     await as(A.id, (tx) => tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim) values (${projectA}, ${A.ws}, 'hypothesis', 'Gen Z loves vinyl listening bars')`);
     const own = await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
-    expect(own.evidenceIds).toHaveLength(1);
+    expect(own.result).toHaveLength(1);
+    // A hypothesis is readable context but never citable as evidence.
+    expect(own.evidenceIds).toHaveLength(0);
+    await as(A.id, (tx) => tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim) values (${projectA}, ${A.ws}, 'external_source', 'Vinyl listening bars opened in three cities')`);
+    expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }))).evidenceIds).toHaveLength(1);
     // Bob passes Alice's project id directly: RLS returns nothing.
     const other = await as(B.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
-    expect(other.evidenceIds).toHaveLength(0);
+    expect(other.result).toHaveLength(0);
     expect(await as(B.id, (tx) => runCopilotTool(tx, projectA, "list_opportunities", {}))).toMatchObject({ result: [] });
     // Bad input and unknown tools are rejected without querying.
     expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "" }))).result).toMatchObject({ error: "Invalid input" });
@@ -282,5 +287,26 @@ d("Row Level Security and workspace isolation", () => {
 
   it("the Data API pre-request hook refuses every call", async () => {
     await expect(as(A.id, (tx) => tx`select data_api_disabled()`)).rejects.toThrow(/Data API is disabled/);
+  });
+
+  it("report snapshots leave out rejected evidence and hypotheses, and always include what they cite", async () => {
+    const ids = await as(A.id, async (tx) => {
+      await tx`insert into campaign_briefs (project_id, workspace_id, brand) values (${projectA}, ${A.ws}, 'Lumen') on conflict do nothing`;
+      const ins = (type: string, claim: string, review: string) =>
+        tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim, review_status) values (${projectA}, ${A.ws}, ${type}::evidence_type, ${claim}, ${review}::review_status) returning id`;
+      const [rejected] = await ins("external_source", "A source a strategist marked wrong", "rejected");
+      const [good] = await ins("external_source", "Vogue India: Gen Z in Mumbai follow K-beauty creators", "approved");
+      await tx`insert into opportunities (project_id, workspace_id, title, description, evidence_ids, claims, generator)
+        values (${projectA}, ${A.ws}, 'K-beauty creators', 'x', ${[rejected.id, good.id]},
+          ${tx.json([{ statement: "Gen Z in Mumbai follow K-beauty creators", evidenceIds: [good.id], support: "verified" }] as never)}, 'template')`;
+      return { rejected: rejected.id as string, good: good.id as string };
+    });
+    const snap = await as(A.id, (tx) => buildSnapshot(tx, projectA, ["evidence", "opportunities"], "Test report"));
+    const evIds = snap.evidence.map((e) => e.id);
+    expect(evIds).toContain(ids.good);
+    expect(evIds).not.toContain(ids.rejected);
+    expect(snap.evidence.some((e) => e.type === "hypothesis" || e.type === "ai_interpretation")).toBe(false);
+    expect(snap.opportunities[0].claims?.[0].support).toBe("verified");
+    expect(snap.limitations.join(" ")).not.toMatch(/No public-web research provider was configured/);
   });
 });

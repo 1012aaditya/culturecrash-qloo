@@ -40,6 +40,14 @@ function Sec({ k, n, children }: { k: string; n: number; children: React.ReactNo
 
 function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: number; createdAt: string }) {
   const on = (k: string) => s.sections.includes(k as never);
+  // Citations use the numbering of the Key evidence list.
+  const evIndex = new Map(s.evidence.map((e, i) => [e.id, i + 1]));
+  const refs = (ids: string[] | undefined) => {
+    const ns = (ids ?? []).map((id) => evIndex.get(id)).filter(Boolean);
+    return ns.length ? ` [${ns.join(", ")}]` : "";
+  };
+  const claimLine = (c: { statement: string; evidenceIds: string[]; support?: string }) =>
+    `${c.support === "verified" ? "•" : c.support === "weak" ? "- (weakly supported)" : "- (interpretation)"} ${c.statement}${refs(c.evidenceIds)}`;
   let n = 0;
   const date = new Date(createdAt).toISOString().slice(0, 10);
   return (
@@ -103,8 +111,8 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
         )}
         {on("evidence") && (
           <Sec k="evidence" n={++n}>
-            {s.findings.map((f, i) => <Text key={i} style={st.p}>{f.kind === "observation" ? "Observed: " : "AI interpretation: "}{f.statement}</Text>)}
-            {s.evidence.slice(0, 25).map((e, i) => <Text key={e.id} style={st.small}>[{i + 1}] {e.claim} ({EVIDENCE_LABEL[e.type]?.label ?? e.type})</Text>)}
+            {s.findings.map((f, i) => <Text key={i} style={st.p}>{f.kind === "observation" ? "Observed: " : "AI interpretation: "}{f.statement}{refs(f.evidenceIds)}</Text>)}
+            {s.evidence.map((e, i) => <Text key={e.id} style={st.small}>[{i + 1}] {e.claim} ({EVIDENCE_LABEL[e.type]?.label ?? e.type})</Text>)}
           </Sec>
         )}
         {on("opportunities") && (
@@ -113,7 +121,8 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
             {s.opportunities.map((o) => (
               <View key={o.title} style={st.card} wrap={false}>
                 <Text style={st.h3}>{o.title}</Text>
-                <Text style={st.p}>{o.description}</Text>
+                <Text style={st.p}>{o.description}{o.claims?.length ? "" : refs(o.evidenceIds)}</Text>
+                {o.claims?.map((c, j) => <Text key={j} style={st.small}>{claimLine(c)}</Text>)}
                 {o.unknowns && <Text style={st.small}>Unknown: {o.unknowns}</Text>}
                 {o.validation && <Text style={st.small}>Validate by: {o.validation}</Text>}
               </View>
@@ -126,7 +135,9 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
               <View key={d.name} style={st.card} wrap={false}>
                 <Text style={st.num}>Direction 0{i + 1}{d.selected ? " · selected" : ""}{d.exploratory ? " · exploratory" : ""}</Text>
                 <Text style={st.h3}>{d.name}</Text>
-                <Text style={[st.p, { fontFamily: "Times-Italic", fontSize: 11 }]}>{d.content.positioningStatement}</Text>
+                <Text style={[st.p, { fontFamily: "Times-Italic", fontSize: 11 }]}>{d.content.positioningStatement}{d.content.claims?.length ? "" : refs(d.content.evidenceIds)}</Text>
+                {d.content.claims?.length ? <Text style={st.small}>Grounding: {d.content.claims.filter((c) => c.support === "verified").length} of {d.content.claims.length} statements verified against their sources</Text> : null}
+                {d.content.claims?.map((c, j) => <Text key={j} style={st.small}>{claimLine(c)}</Text>)}
                 <Text style={st.p}>Rationale: {d.content.strategicRationale}</Text>
                 <Text style={st.small}>Trade-offs: {d.content.tradeOffs}</Text>
                 <Text style={st.small}>Uncertainties: {d.content.uncertainties}</Text>
@@ -148,7 +159,8 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
         {on("creative") && (
           <Sec k="creative" n={++n}>
             {s.creativeBrief ? CREATIVE_SECTIONS.map(([k, label]) => (
-              <View key={k} style={{ marginBottom: 6 }} wrap={false}><Text style={{ fontFamily: "Helvetica-Bold" }}>{label}</Text><Text>{s.creativeBrief!.content[k]}</Text></View>
+              <View key={k} style={{ marginBottom: 6 }} wrap={false}><Text style={{ fontFamily: "Helvetica-Bold" }}>{label}</Text><Text>{s.creativeBrief!.content[k]}</Text>
+                {s.creativeBrief!.grounding?.filter((g) => g.section === k).map((c, j) => <Text key={j} style={st.small}>{claimLine(c)}</Text>)}</View>
             )) : <Text>No creative brief.</Text>}
           </Sec>
         )}

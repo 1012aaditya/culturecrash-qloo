@@ -178,7 +178,14 @@ export async function deleteExperimentAction(experimentId: string): Promise<R> {
   try {
     const ctx = await getCtx();
     assertCan(ctx.workspace.role, "data.delete");
-    const projectId = await withUser(ctx.user.id, async (tx) => (await tx`delete from experiments where id = ${experimentId} returning project_id`)[0]?.project_id as string | undefined);
+    const projectId = await withUser(ctx.user.id, async (tx) => {
+      const [x] = await tx`delete from experiments where id = ${experimentId} returning project_id`;
+      // Its hypothesis and recorded results were evidence about a test that no longer exists: remove them
+      // too, so they can't keep appearing in reports or be cited (they link back only through raw_metadata).
+      if (x) await tx`delete from evidence_items where project_id = ${x.project_id} and raw_metadata->>'experiment_id' = ${experimentId}
+        and evidence_type in ('hypothesis', 'experiment_result')`;
+      return x?.project_id as string | undefined;
+    });
     if (!projectId) return { ok: false, error: "Experiment not found or you lack permission." };
     revalidatePath(`/projects/${projectId}/experiments`);
     return { ok: true };

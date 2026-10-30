@@ -1,4 +1,5 @@
 import { ArtPlate } from "@/components/art/plate";
+import { ClaimList, GroundingScore, ReceiptChip, type Receipt } from "@/components/evidence/evidence-receipt";
 import { DemoBadge } from "@/components/states";
 import { CREATIVE_SECTIONS } from "@/lib/ai/schemas";
 import { EVIDENCE_LABEL } from "@/lib/evidence-labels";
@@ -21,7 +22,11 @@ function Section({ id, n, children, className }: { id: string; n: number; childr
 export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; version: number; createdAt: string }) {
   const on = (k: string) => s.sections.includes(k as never);
   const evIndex = new Map(s.evidence.map((e, i) => [e.id, i + 1]));
-  const cite = (ids: string[]) => ids.map((id) => evIndex.get(id)).filter(Boolean).map((n) => <sup key={n} className="ml-0.5 text-violet">[{n}]</sup>);
+  const numbers = Object.fromEntries(evIndex);
+  // Each [n] opens a receipt with the exact stored evidence text, also on shared read-only links.
+  const receipts: Record<string, Receipt> = Object.fromEntries(s.evidence.map((e) => [e.id, { id: e.id, claim: e.claim, type: e.type, source: e.source, url: e.url, retrievedAt: e.retrievedAt }]));
+  const cite = (ids: string[] | undefined, statement: string) =>
+    (ids ?? []).filter((id) => evIndex.has(id)).map((id) => <ReceiptChip key={id} receipt={receipts[id]} n={evIndex.get(id)!} statement={statement} />);
   let n = 0;
   return (
     <article className="mx-auto max-w-[980px] rounded-[36px] bg-[#fbfaf7] shadow-card print:shadow-none">
@@ -105,11 +110,11 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
           <Section id="evidence" n={++n}>
             {s.findings.length > 0 && (
               <ul className="mb-6 space-y-2 text-[14px]">
-                {s.findings.map((f, i) => <li key={i} className="flex gap-3"><span className={cn("mt-1.5 h-3 w-0.5 shrink-0", f.kind === "observation" ? "bg-ink" : "bg-violet")} /><span><span className="text-[11px] uppercase tracking-wider text-muted">{f.kind === "observation" ? "Observed" : "AI interpretation"} · </span>{f.statement}</span></li>)}
+                {s.findings.map((f, i) => <li key={i} className="flex gap-3"><span className={cn("mt-1.5 h-3 w-0.5 shrink-0", f.kind === "observation" ? "bg-ink" : "bg-violet")} /><span><span className="text-[11px] uppercase tracking-wider text-muted">{f.kind === "observation" ? "Observed" : "AI interpretation"} · </span>{f.statement}{cite(f.evidenceIds, f.statement)}</span></li>)}
               </ul>
             )}
             <ol className="space-y-2 text-[13px]">
-              {s.evidence.slice(0, 25).map((e, i) => (
+              {s.evidence.map((e, i) => (
                 <li key={e.id} className="grid grid-cols-[36px_1fr] gap-2"><span className="tabular-nums text-faint">[{i + 1}]</span><span>{e.claim} <span className="text-[11px] text-muted">— {EVIDENCE_LABEL[e.type]?.label ?? e.type}{e.review !== "unreviewed" ? `, ${e.review.replace("_", " ")}` : ""}</span></span></li>
               ))}
             </ol>
@@ -122,8 +127,9 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
                 {s.opportunities.map((o) => (
                   <div key={o.title} className="break-inside-avoid rounded-cc-lg border border-line bg-paper p-5">
                     <p className="cc-eyebrow text-[10px] text-muted">Hypothesis · {o.status}</p>
-                    <h3 className="mt-1 font-serif text-2xl">{o.title}{cite(o.evidenceIds)}</h3>
+                    <h3 className="mt-1 font-serif text-2xl">{o.title}{!o.claims?.length && cite(o.evidenceIds, o.description)}</h3>
                     <p className="mt-2 text-[13px] leading-relaxed">{o.description}</p>
+                    {(o.claims?.length ?? 0) > 0 && <ClaimList className="mt-3 text-[12px] leading-snug" claims={o.claims!} receipts={receipts} numbers={numbers} />}
                     {o.unknowns && <p className="mt-2 text-[12px] text-muted"><b className="font-medium">Unknown:</b> {o.unknowns}</p>}
                     {o.validation && <p className="mt-1 text-[12px] text-muted"><b className="font-medium">Validate by:</b> {o.validation}</p>}
                   </div>
@@ -138,9 +144,10 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
               <div className="space-y-6">
                 {s.directions.map((d, i) => (
                   <div key={d.name} className="break-inside-avoid grid gap-4 md:grid-cols-[200px_1fr]">
-                    <div><p className="font-mono text-[11px] text-faint">Direction 0{i + 1}{d.selected ? " · selected" : ""}{d.exploratory ? " · exploratory" : ""}</p><h3 className="mt-1 font-serif text-2xl">{d.name}</h3></div>
+                    <div><p className="font-mono text-[11px] text-faint">Direction 0{i + 1}{d.selected ? " · selected" : ""}{d.exploratory ? " · exploratory" : ""}</p><h3 className="mt-1 font-serif text-2xl">{d.name}</h3><div className="mt-2"><GroundingScore claims={d.content.claims} /></div></div>
                     <div className="space-y-2 text-[13px] leading-relaxed">
-                      <p className="font-serif text-[18px]">“{d.content.positioningStatement}”{cite(d.content.evidenceIds)}</p>
+                      <p className="font-serif text-[18px]">“{d.content.positioningStatement}”{!d.content.claims?.length && cite(d.content.evidenceIds, d.content.positioningStatement)}</p>
+                      {(d.content.claims?.length ?? 0) > 0 && <div><p className="text-[11px] uppercase tracking-wider text-muted">What this rests on</p><ClaimList className="mt-1.5" claims={d.content.claims} receipts={receipts} numbers={numbers} /></div>}
                       <p><b className="font-medium">Rationale.</b> {d.content.strategicRationale}</p>
                       <p><b className="font-medium">Trade-offs.</b> {d.content.tradeOffs}</p>
                       <p className="text-muted"><b className="font-medium">Uncertainties.</b> {d.content.uncertainties}</p>
@@ -169,7 +176,16 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
           <Section id="creative" n={++n}>
             {s.creativeBrief ? (
               <dl className="space-y-4 text-[14px]">
-                {CREATIVE_SECTIONS.map(([k, label]) => <div key={k} className="grid gap-2 md:grid-cols-[200px_1fr]"><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap leading-relaxed">{s.creativeBrief!.content[k]}</dd></div>)}
+                {CREATIVE_SECTIONS.map(([k, label]) => {
+                  const grounded = s.creativeBrief!.grounding?.filter((g) => g.section === k) ?? [];
+                  return (
+                    <div key={k} className="grid gap-2 md:grid-cols-[200px_1fr]"><dt className="font-medium">{label}</dt>
+                      <dd className="whitespace-pre-wrap leading-relaxed">{s.creativeBrief!.content[k]}
+                        {grounded.length > 0 && <ClaimList className="mt-2 whitespace-normal text-[12px] text-muted" claims={grounded} receipts={receipts} numbers={numbers} />}
+                      </dd>
+                    </div>
+                  );
+                })}
                 <p className="text-[12px] text-faint">{s.creativeBrief.generatedBy} · revision {s.creativeBrief.revision}</p>
               </dl>
             ) : <p className="text-muted">No creative brief yet.</p>}

@@ -2,11 +2,13 @@ import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
+import { ClaimList, GroundingScore } from "@/components/evidence/evidence-receipt";
 import { DemoBadge, EmptyState } from "@/components/states";
 import { CreativeBriefEditor } from "@/components/strategy/creative-brief-editor";
 import { GenerateButton } from "@/components/strategy/generate-button";
 import { Button } from "@/components/ui/button";
 import { generatorLabel } from "@/lib/ai";
+import { CREATIVE_SECTIONS } from "@/lib/ai/schemas";
 import { withUser } from "@/lib/db";
 import { loadCreativeBrief } from "@/lib/data/creative";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -32,7 +34,8 @@ export default async function CreativeBriefPage({ params }: PageProps<"/projects
       </div>
     );
   }
-  const { cb, evidence } = data;
+  const { cb, evidence, grounding, receipts } = data;
+  const sectionLabel = Object.fromEntries(CREATIVE_SECTIONS);
   return (
     <article className="mx-auto max-w-[1100px]">
       <header className="relative overflow-hidden rounded-[36px] bg-charcoal p-10 text-white md:p-14">
@@ -53,6 +56,23 @@ export default async function CreativeBriefPage({ params }: PageProps<"/projects
       <div className="mt-8 rounded-[32px] border border-line bg-paper px-6 md:px-12">
         <CreativeBriefEditor briefId={cb.id} content={cb.content} revision={cb.revision} canEdit={canEdit} llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)} />
       </div>
+      {grounding.length > 0 && (
+        <section className="mt-8 rounded-[32px] border border-line bg-paper p-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="cc-display text-3xl">What this brief rests on</h2>
+            <GroundingScore claims={grounding} />
+          </div>
+          <p className="mt-1 text-[13px] text-muted">The factual statements behind the brief, checked against the evidence each one cites. Open a [number] to see the source text.</p>
+          <div className="mt-5 space-y-5 text-[13px] leading-relaxed">
+            {[...new Set(grounding.map((g) => g.section))].map((sec) => (
+              <div key={sec} className="grid gap-2 md:grid-cols-[200px_1fr]">
+                <p className="font-medium">{sectionLabel[sec] ?? sec}</p>
+                <ClaimList claims={grounding.filter((g) => g.section === sec)} receipts={receipts} projectId={projectId} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <section className="mt-8 rounded-[32px] border border-line bg-paper p-8">
         <h2 className="cc-display text-3xl">Supporting evidence</h2>
         <p className="mt-1 text-[13px] text-muted">Observations linked to the selected direction. Affinity values describe taste correlations, not causation.</p>

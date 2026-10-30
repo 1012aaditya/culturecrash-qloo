@@ -14,12 +14,13 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import type { DirectionContent } from "@/lib/ai/schemas";
+import { ClaimList, GroundingScore, type Receipt } from "@/components/evidence/evidence-receipt";
 import { editDirectionAction, reviseDirectionAction, selectDirectionAction } from "@/lib/strategy/actions";
 import { cn, timeAgo } from "@/lib/utils";
 
 export type DirectionView = {
   id: string; slot: number; revision: number; name: string; content: DirectionContent; status: string; isExploratory: boolean; revisionNote: string | null;
-  createdAt: string; evidence: { id: string; claim: string }[]; revisionCount: number; comments: { id: string; body: string; author: string; createdAt: string }[];
+  createdAt: string; evidence: Receipt[]; revisionCount: number; comments: { id: string; body: string; author: string; createdAt: string }[];
 };
 
 const THEMES: PlateTheme[] = ["culture", "fashion", "music"];
@@ -66,6 +67,7 @@ function Territory({ d, projectId, canEdit, llm, className, wide, theme, generat
             <Badge tone="glass">Direction 0{d.slot}</Badge>
             {selected && <Badge tone="violet"><CheckCircle2 /> Selected</Badge>}
             {d.isExploratory && <Badge tone="peach">Exploratory</Badge>}
+            <GroundingScore claims={c.claims} tone="dark" />
             {isDemo && <DemoBadge label="Demo" />}
           </div>
           <div className="absolute inset-x-6 bottom-6">
@@ -75,6 +77,12 @@ function Territory({ d, projectId, canEdit, llm, className, wide, theme, generat
         </header>
         <div className="space-y-5 p-6">
           <blockquote className="border-l-2 border-violet pl-4 font-serif text-[22px] leading-snug">“{c.positioningStatement}”</blockquote>
+          {(c.claims?.length ?? 0) > 0 && (
+            <div className="rounded-cc-sm bg-ink/[0.03] p-4 text-[13px] leading-relaxed">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted">What this rests on</p>
+              <ClaimList claims={c.claims} receipts={Object.fromEntries(d.evidence.map((e) => [e.id, e]))} projectId={projectId} />
+            </div>
+          )}
           <div className={cn("grid gap-5 text-[13px]", wide && "md:grid-cols-2")}>
             <Block title="Strategic rationale">{c.strategicRationale}</Block>
             <Block title="Audience context">{c.audienceContext}</Block>

@@ -32,8 +32,12 @@ export type Observation = {
   entityType: string | null;
   affinity: number | null;
   role: string | null;
+  /** Provider or web domain the evidence came from. */
+  source?: string | null;
 };
 
+/** Template claims quote the stored evidence verbatim, so they introduce no new facts. */
+const quoteClaims = (ev: Observation[]) => ev.map((o) => ({ statement: o.claim, evidenceIds: [o.id] }));
 const fmt = (n: number | null) => (n === null ? "no affinity value" : `affinity ${n.toFixed(2)}`);
 const brandOf = (b: BriefInput) => b.brand || b.name;
 const listNames = (o: Observation[], n = 3) => o.slice(0, n).map((x) => x.entityName).filter(Boolean).join(", ");
@@ -106,6 +110,7 @@ export function templateOpportunities(brief: BriefInput, obs: Observation[]): Op
       validationStep: `Test a ${type}-led creative concept against the current positioning with the target audience before committing budget.`,
       evidenceIds: top.map((o) => o.id),
       entityNames: top.map((o) => o.entityName!).filter(Boolean),
+      claims: quoteClaims(top),
     };
   });
   if (t.length >= 2) {
@@ -118,6 +123,7 @@ export function templateOpportunities(brief: BriefInput, obs: Observation[]): Op
       validationStep: "Run qualitative concept reads using mood boards built from these tags.",
       evidenceIds: t.slice(0, 4).map((x) => x.id),
       entityNames: t.slice(0, 4).map((x) => x.entityName!),
+      claims: quoteClaims(t.slice(0, 4)),
     });
   }
   return { opportunities: out };
@@ -132,8 +138,9 @@ export function templateStrategy(brief: BriefInput, obs: Observation[], opportun
   const audience = brief.audience || "the target audience (not yet defined in the brief)";
   const nonCategory = types.find(([type]) => type !== "brand") ?? types[0];
   const brandList = types.find(([type]) => type === "brand")?.[1] ?? [];
-  const common = (ev: Observation[]): Pick<DirectionContent, "evidenceIds" | "isExploratory" | "consumerTension"> => ({
+  const common = (ev: Observation[]): Pick<DirectionContent, "evidenceIds" | "isExploratory" | "consumerTension" | "claims"> => ({
     evidenceIds: ev.map((o) => o.id),
+    claims: quoteClaims(ev),
     isExploratory: exploratory || ev.length === 0,
     consumerTension: "",
   });

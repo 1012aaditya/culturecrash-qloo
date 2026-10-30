@@ -41,7 +41,7 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "get_strategy",
-    description: "Get the current strategy version's positioning directions (latest revision of each) with core idea, positioning, consumer tension, uncertainties, assumptions to test and the evidence ids they cite.",
+    description: "Get the current strategy version's positioning directions (latest revision of each) with core idea, positioning, consumer tension, uncertainties, assumptions to test and the evidence ids they cite (search_evidence returns their text; only cite ids whose text you have read).",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -57,6 +57,9 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
 ];
 
 const clip = (s: unknown, n = 400) => (typeof s === "string" ? (s.length > n ? `${s.slice(0, n)}…` : s) : s);
+/** Only these may be cited as evidence; hypotheses and AI interpretations are readable context, not support. */
+const CITABLE = new Set(["provider_observation", "external_source", "experiment_result", "approved_conclusion"]);
+
 const like = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 /** Runs one tool. Returns JSON-serialisable data plus the evidence ids it exposed (for citation checks). */
@@ -77,7 +80,7 @@ export async function runCopilotTool(tx: Tx, projectId: string, name: string, ra
         order by ev.normalized_value desc nulls last, ev.created_at desc limit ${(input.limit as number | undefined) ?? 12}`;
       return {
         result: rows.map((r) => ({ id: r.id, type: r.evidence_type, claim: clip(r.claim), entity: r.entity, entityType: r.entity_type, affinity: r.normalized_value === null ? null : Number(r.normalized_value), review: r.review_status, demo: r.is_demo })),
-        evidenceIds: rows.map((r) => r.id as string),
+        evidenceIds: rows.filter((r) => CITABLE.has(r.evidence_type as string) && r.review_status !== "rejected").map((r) => r.id as string),
       };
     }
     case "get_entity": {
@@ -100,7 +103,8 @@ export async function runCopilotTool(tx: Tx, projectId: string, name: string, ra
         where project_id = ${projectId} ${input.include_dismissed ? tx`` : tx`and status <> 'dismissed'`} order by updated_at desc limit 15`;
       return {
         result: rows.map((r) => ({ title: r.title, status: r.status, whyItMatters: clip(r.why_it_matters), unknowns: clip(r.unknowns), validationStep: clip(r.validation_step), evidenceIds: r.evidence_ids })),
-        evidenceIds: rows.flatMap((r) => r.evidence_ids as string[]),
+        // Ids listed here come without their text, so they aren't citable until search_evidence returns them.
+        evidenceIds: [],
       };
     }
     case "get_strategy": {
@@ -111,7 +115,7 @@ export async function runCopilotTool(tx: Tx, projectId: string, name: string, ra
       if (!rows.length) return { result: { error: "No strategy directions yet." }, evidenceIds: [] };
       return {
         result: rows.map((r) => ({ name: r.name, status: r.status, exploratory: r.is_exploratory, coreIdea: clip(r.content?.coreIdea), positioning: clip(r.content?.positioningStatement), consumerTension: clip(r.content?.consumerTension), uncertainties: clip(r.content?.uncertainties), assumptionsToTest: r.content?.assumptionsToTest ?? [], evidenceIds: r.evidence_ids })),
-        evidenceIds: rows.flatMap((r) => r.evidence_ids as string[]),
+        evidenceIds: [],
       };
     }
     case "list_experiments": {

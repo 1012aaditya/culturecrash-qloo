@@ -5,9 +5,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
 import { latestCompletedRun, readObservations } from "@/lib/ai/context";
+import { checkStatements, citedIds } from "@/lib/ai/grounding";
 import {
-  comparisonSchema, creativeBriefSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, redTeamCritiqueSchema, sectionRevisionSchema, strategySchema,
-  type ComparisonOutput, type CreativeBriefContent, type CreativeSectionKey, type DirectionContent, type RedTeamCritique,
+  comparisonSchema, creativeBriefOutputSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, redTeamCritiqueSchema, sectionRevisionSchema, strategySchema,
+  type ComparisonOutput, type CreativeBriefContent, type CreativeGrounding, type CreativeSectionKey, type DirectionContent, type RedTeamCritique,
 } from "@/lib/ai/schemas";
 import { templateComparison, templateCreativeBrief, templateOpportunities, templateStrategy, type BriefInput, type Observation } from "@/lib/ai/template";
 import { withUser, type Tx } from "@/lib/db";
@@ -38,7 +39,25 @@ function llmMessage(e: unknown) {
 
 const briefJson = (b: BriefInput) =>
   JSON.stringify({ name: b.name, brand: b.brand, product: b.product, category: b.category, market: b.market, audience: b.audience, objective: b.objective, existingPositioning: b.existingPositioning, competitors: b.competitors, brandGuidelines: b.brandGuidelines?.slice(0, 1500), timeframe: b.timeframe, budgetRange: b.budgetRange });
-const obsJson = (o: Observation[]) => JSON.stringify(o.map((x) => ({ id: x.id, entity: x.entityName, type: x.entityType, affinity: x.affinity, role: x.role })));
+// The model gets each item's text, not just its id: it can only cite what it has actually read.
+const clip = (t: string, n = 280) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+const obsJson = (o: Observation[]) =>
+  JSON.stringify(o.map((x) => ({ id: x.id, text: clip(x.claim), entity: x.entityName, type: x.entityType, affinity: x.affinity, role: x.role, source: x.source ?? null })));
+/** id → the text a citation is checked against. */
+const evidenceText = (o: Observation[]) => new Map(o.map((x) => [x.id, [x.entityName, x.claim].filter(Boolean).join(" — ")]));
+
+const CITE_RULES =
+  "List the factual statements you rely on in `claims`, one fact each, and cite in each the ids of the evidence items whose text says it. " +
+  "Only cite an id if its text supports that exact statement; a statement with no supporting evidence gets an empty evidenceIds list and is shown as interpretation. " +
+  "Never write evidence ids inside other text fields.";
+
+/** Checks a direction's claims against the evidence text and derives its citations and exploratory flag from them. */
+function groundDirection(d: DirectionContent, evidence: Map<string, string>) {
+  const claims = checkStatements(d.claims, evidence);
+  const evidenceIds = [...new Set([...citedIds(claims), ...d.evidenceIds.filter((id) => evidence.has(id))])];
+  const isExploratory = d.isExploratory || !claims.some((c) => c.support === "verified");
+  return { ...d, claims, evidenceIds, isExploratory };
+}
 
 async function startTask(tx: Tx, ctx: Ctx, projectId: string, kind: "strategy_generation" | "creative_brief", label: string) {
   const [t] = await tx`insert into background_tasks (workspace_id, project_id, kind, label, status, created_by, started_at, attempts)
@@ -71,7 +90,7 @@ export async function generateOpportunitiesAction(projectId: string): Promise<Re
       const r = await generateStructured({
         schema: opportunitiesSchema,
         prompt: [
-          "Propose 3-5 cultural/strategic opportunities to INVESTIGATE for this campaign. Each is a hypothesis, not a proven market gap. Every opportunity must cite at least one evidence id and say what remains unknown and how to validate it.",
+          `Propose 3-5 cultural/strategic opportunities to INVESTIGATE for this campaign. Each is a hypothesis, not a proven market gap. Every opportunity must rest on at least one cited statement and say what remains unknown and how to validate it. ${CITE_RULES}`,
           tag("brief", briefJson(input.brief)),
           tag("evidence", obsJson(input.obs)),
         ].join("\n\n"),
@@ -82,8 +101,11 @@ export async function generateOpportunitiesAction(projectId: string): Promise<Re
       return { ok: false, error: llmMessage(e) };
     }
   }
-  const valid = new Set(input.obs.map((o) => o.id));
-  const usable = out.opportunities.map((o) => ({ ...o, evidenceIds: o.evidenceIds.filter((id) => valid.has(id)) })).filter((o) => o.evidenceIds.length > 0);
+  const evidence = evidenceText(input.obs);
+  const usable = out.opportunities.map((o) => {
+    const claims = checkStatements(o.claims, evidence);
+    return { ...o, claims, evidenceIds: [...new Set([...citedIds(claims), ...o.evidenceIds.filter((id) => evidence.has(id))])] };
+  }).filter((o) => o.evidenceIds.length > 0);
   if (!usable.length) return { ok: false, error: "No opportunity could be tied to stored evidence, so none were saved." };
 
   const ws = ctx.workspace.workspaceId;
@@ -92,9 +114,9 @@ export async function generateOpportunitiesAction(projectId: string): Promise<Re
     await tx`delete from opportunities where project_id = ${projectId} and status = 'new'`;
     for (const o of usable) {
       const ents = await tx`select ce.id from evidence_items ev join cultural_entities ce on ce.id = any(ev.entity_ids) where ev.id = any(${o.evidenceIds})`;
-      await tx`insert into opportunities (project_id, workspace_id, run_id, title, description, why_it_matters, unknowns, strategic_use, validation_step, evidence_ids, entity_ids, generator, is_demo)
+      await tx`insert into opportunities (project_id, workspace_id, run_id, title, description, why_it_matters, unknowns, strategic_use, validation_step, evidence_ids, entity_ids, claims, generator, is_demo)
         values (${projectId}, ${ws}, ${input.run.id}, ${o.title.slice(0, 200)}, ${o.description}, ${o.whyItMatters}, ${o.unknowns}, ${o.strategicUse}, ${o.validationStep},
-          ${o.evidenceIds}, ${ents.map((e) => e.id as string)}, ${generator}, ${input.run.mode === "demo"})`;
+          ${o.evidenceIds}, ${ents.map((e) => e.id as string)}, ${tx.json(o.claims as never)}, ${generator}, ${input.run.mode === "demo"})`;
     }
     await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "generated", objectType: "opportunity", summary: `generated ${usable.length} opportunity hypotheses` });
   });
@@ -139,7 +161,7 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
       const r = await generateStructured({
         schema: strategySchema,
         prompt: [
-          "Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence; cite evidence ids. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources.",
+          `Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources. ${CITE_RULES}`,
           tag("brief", briefJson(input.brief)),
           tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
         ].join("\n\n"),
@@ -154,18 +176,16 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
   } else {
     directions = templateStrategy(input.brief, input.obs, input.opps.map((o) => o.title as string)).directions;
   }
-  const valid = new Set(input.obs.map((o) => o.id));
+  const evidence = evidenceText(input.obs);
   const ws = ctx.workspace.workspaceId;
   const version = await withUser(ctx.user.id, async (tx) => {
     const [{ v }] = await tx`select coalesce(max(version), 0) + 1 as v from strategy_versions where project_id = ${projectId}`;
     const [sv] = await tx`insert into strategy_versions (project_id, workspace_id, version, run_id, generator, is_demo, created_by)
       values (${projectId}, ${ws}, ${v}, ${input.run?.id ?? null}, ${generator}, ${demo}, ${ctx.user.id}) returning id`;
     for (const [i, d] of directions.entries()) {
-      const parsed = directionSchema.parse(d);
-      const ev = parsed.evidenceIds.filter((id) => valid.has(id));
-      const content = { ...parsed, evidenceIds: ev, isExploratory: parsed.isExploratory || ev.length === 0 };
+      const content = groundDirection(directionSchema.parse(d), evidence);
       await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, name, content, evidence_ids, is_exploratory, created_by)
-        values (${sv.id}, ${projectId}, ${ws}, ${i + 1}, ${content.name.slice(0, 200)}, ${tx.json(content as never)}, ${ev}, ${content.isExploratory}, ${ctx.user.id})`;
+        values (${sv.id}, ${projectId}, ${ws}, ${i + 1}, ${content.name.slice(0, 200)}, ${tx.json(content as never)}, ${content.evidenceIds}, ${content.isExploratory}, ${ctx.user.id})`;
     }
     await trackEvent(tx, { workspaceId: ws, userId: ctx.user.id, event: "strategy_generated", projectId, metadata: { version: v, generator } });
     await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "generated", objectType: "strategy", objectId: sv.id, summary: `generated strategy version ${v} (three directions)` });
@@ -187,9 +207,13 @@ async function newRevision(tx: Tx, ctx: Ctx, directionId: string, patch: Partial
   // Always branch from the latest revision of this slot so history stays linear.
   const [latest] = await tx`select * from strategy_directions where version_id = ${d.version_id} and slot = ${d.slot} order by revision desc limit 1`;
   const content = directionSchema.parse({ ...latest.content, ...patch });
+  // The evidence columns are derived from the content being saved, never copied from the previous
+  // revision, so the evidence trail, creative brief and reports all agree on what this revision cites.
+  const evidenceIds = [...new Set([...citedIds(content.claims), ...content.evidenceIds])];
+  const isExploratory = content.claims.length ? !content.claims.some((c) => c.support === "verified") : content.isExploratory || evidenceIds.length === 0;
   const [row] = await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, revision, parent_id, name, content, evidence_ids, is_exploratory, status, revision_note, created_by)
-    values (${latest.version_id}, ${latest.project_id}, ${latest.workspace_id}, ${latest.slot}, ${latest.revision + 1}, ${latest.id}, ${content.name}, ${tx.json(content as never)},
-      ${latest.evidence_ids}, ${latest.is_exploratory}, 'draft', ${note.slice(0, 500)}, ${ctx.user.id}) returning id, project_id`;
+    values (${latest.version_id}, ${latest.project_id}, ${latest.workspace_id}, ${latest.slot}, ${latest.revision + 1}, ${latest.id}, ${content.name}, ${tx.json({ ...content, evidenceIds, isExploratory } as never)},
+      ${evidenceIds}, ${isExploratory}, 'draft', ${note.slice(0, 500)}, ${ctx.user.id}) returning id, project_id`;
   // A selected direction is never overwritten: it stays selected until someone selects the new revision.
   if (latest.status === "draft") await tx`update strategy_directions set status = 'superseded' where id = ${latest.id}`;
   await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId: row.project_id, verb: "edited", objectType: "direction", objectId: row.id, summary: `saved revision ${latest.revision + 1} of “${content.name}”` });
@@ -215,23 +239,23 @@ export async function reviseDirectionAction(directionId: string, instruction: st
   if (!isCtx(ctx)) return ctx;
   if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE} You can still edit every field directly and a new version will be saved.` };
   const ctxData = await withUser(ctx.user.id, async (tx) => {
-    const [d] = await tx`select * from strategy_directions where id = ${directionId}`;
+    const [d] = await tx`select d.*, v.run_id from strategy_directions d join strategy_versions v on v.id = d.version_id where d.id = ${directionId}`;
     if (!d) return null;
-    return { d, brief: (await loadBrief(tx, d.project_id))!, obs: await readObservations(tx, d.project_id, { limit: 60 }) };
+    // Citations are checked against the research run this strategy version was built from, not whatever ran last.
+    return { d, brief: (await loadBrief(tx, d.project_id))!, obs: d.run_id ? await readObservations(tx, d.project_id, { runId: d.run_id, limit: 60 }) : [] };
   });
   if (!ctxData) return { ok: false, error: "Direction not found." };
   let revised: DirectionContent;
   try {
     const r = await generateStructured({
       schema: directionSchema,
-      prompt: ["Revise this positioning direction according to the user's request. Keep everything not affected by the request unchanged. Keep evidence ids only if still relevant; never add unsupported claims.", tag("brief", briefJson(ctxData.brief)), tag("evidence", JSON.stringify({ direction: ctxData.d.content, observations: JSON.parse(obsJson(ctxData.obs)) })), tag("user_request", text)].join("\n\n"),
+      prompt: [`Revise this positioning direction according to the user's request. Keep everything not affected by the request unchanged. Keep a claim's evidence ids only if still relevant; never add unsupported claims. ${CITE_RULES}`, tag("brief", briefJson(ctxData.brief)), tag("evidence", JSON.stringify({ direction: ctxData.d.content, observations: JSON.parse(obsJson(ctxData.obs)) })), tag("user_request", text)].join("\n\n"),
     });
     revised = r.data;
   } catch (e) {
     return { ok: false, error: llmMessage(e) };
   }
-  const valid = new Set(ctxData.obs.map((o) => o.id));
-  revised.evidenceIds = revised.evidenceIds.filter((id) => valid.has(id));
+  revised = groundDirection(revised, evidenceText(ctxData.obs));
   const row = await withUser(ctx.user.id, (tx) => newRevision(tx, ctx, directionId, revised, `AI revision: ${text}`));
   revalidatePath(`/projects/${row!.project_id}/strategy`);
   return { ok: true, data: { id: row!.id } };
@@ -287,22 +311,27 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
   const input = await withUser(ctx.user.id, async (tx) => {
     const [p] = await tx`select selected_direction_id from projects where id = ${projectId}`;
     if (!p?.selected_direction_id) return null;
-    const [d] = await tx`select d.*, v.is_demo from strategy_directions d join strategy_versions v on v.id = d.version_id where d.id = ${p.selected_direction_id}`;
+    const [d] = await tx`select d.*, v.is_demo, v.run_id from strategy_directions d join strategy_versions v on v.id = d.version_id where d.id = ${p.selected_direction_id}`;
     const brief = (await loadBrief(tx, projectId))!;
     const taskId = await startTask(tx, ctx, projectId, "creative_brief", `Creative brief · ${brief.name}`);
-    return { d, brief, obs: await readObservations(tx, projectId, { limit: 40 }), taskId };
+    return { d, brief, obs: d.run_id ? await readObservations(tx, projectId, { runId: d.run_id, limit: 40 }) : [], taskId };
   });
   if (!input) return { ok: false, error: "Select a strategy direction first." };
   const direction = input.d.content as DirectionContent;
   let content: CreativeBriefContent = templateCreativeBrief(input.brief, direction);
+  // Template briefs carry over the direction's verified statements as their audience-context grounding.
+  let grounding: CreativeGrounding = (direction.claims ?? []).filter((c) => c.support === "verified").map((c) => ({ ...c, section: "audienceContext" as const }));
   let generator = input.d.is_demo ? "demo-template" : TEMPLATE_GENERATOR;
   if (!input.d.is_demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
       const r = await generateStructured({
-        schema: creativeBriefSchema,
-        prompt: ["Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'.", tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
+        schema: creativeBriefOutputSchema,
+        prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. The section texts are client-facing: never write evidence ids in them. In \`grounding\`, list the factual statements the brief relies on, each with its section and the ids of the evidence items whose text supports it.`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
       });
-      content = r.data;
+      const { grounding: g, ...prose } = r.data;
+      content = prose;
+      const evidence = evidenceText(input.obs);
+      grounding = g.map((c) => ({ ...checkStatements([c], evidence)[0], section: c.section }));
       generator = r.generator;
     } catch (e) {
       await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
@@ -310,8 +339,8 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
     }
   }
   const id = await withUser(ctx.user.id, async (tx) => {
-    const [cb] = await tx`insert into creative_briefs (project_id, workspace_id, direction_id, content, generator, is_demo, created_by, updated_by)
-      values (${projectId}, ${ctx.workspace.workspaceId}, ${input.d.id}, ${tx.json(content as never)}, ${generator}, ${input.d.is_demo}, ${ctx.user.id}, ${ctx.user.id}) returning id`;
+    const [cb] = await tx`insert into creative_briefs (project_id, workspace_id, direction_id, content, grounding, generator, is_demo, created_by, updated_by)
+      values (${projectId}, ${ctx.workspace.workspaceId}, ${input.d.id}, ${tx.json(content as never)}, ${tx.json(grounding as never)}, ${generator}, ${input.d.is_demo}, ${ctx.user.id}, ${ctx.user.id}) returning id`;
     await trackEvent(tx, { workspaceId: ctx.workspace.workspaceId, userId: ctx.user.id, event: "creative_brief_generated", projectId });
     await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "generated", objectType: "creative_brief", objectId: cb.id, summary: `generated a creative brief from “${input.d.name}”` });
     return cb.id as string;

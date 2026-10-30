@@ -39,6 +39,14 @@ export const researchInterpretationSchema = z.object({
 });
 export type ResearchInterpretation = z.infer<typeof researchInterpretationSchema>;
 
+/** One factual statement plus the evidence it rests on. `support` is set by the server's check, never by the model. */
+export const groundedClaimSchema = z.object({
+  statement: z.string().describe("One factual statement this item depends on, in plain words. One fact per statement."),
+  evidenceIds: z.array(z.string()).describe("ids of the evidence items whose text supports this exact statement; empty if it is your interpretation"),
+  support: z.enum(["verified", "weak", "uncited"]).optional().describe("Leave unset: the server fills this in after checking the evidence"),
+});
+export type GroundedClaim = z.infer<typeof groundedClaimSchema>;
+
 export const opportunitiesSchema = z.object({
   opportunities: z.array(z.object({
     title: z.string(),
@@ -49,6 +57,7 @@ export const opportunitiesSchema = z.object({
     validationStep: z.string(),
     evidenceIds: z.array(z.string()),
     entityNames: z.array(z.string()),
+    claims: z.array(groundedClaimSchema).default([]).describe("The 2-5 factual statements this opportunity rests on, each with its own evidence ids"),
   })),
 });
 export type OpportunitiesOutput = z.infer<typeof opportunitiesSchema>;
@@ -70,6 +79,7 @@ export const directionSchema = z.object({
   assumptionsToTest: z.array(z.string()),
   suggestedExperiment: z.string(),
   isExploratory: z.boolean(),
+  claims: z.array(groundedClaimSchema).default([]).describe("The 3-6 factual statements this direction rests on, each with the evidence ids that support it"),
 });
 export type DirectionContent = z.infer<typeof directionSchema>;
 
@@ -107,6 +117,16 @@ export const creativeBriefSchema = z.object(
   Object.fromEntries(CREATIVE_SECTIONS.map(([k]) => [k, z.string()])) as Record<CreativeSectionKey, z.ZodString>,
 );
 export type CreativeBriefContent = Record<CreativeSectionKey, string>;
+
+export const creativeGroundingSchema = z.array(groundedClaimSchema.extend({
+  section: z.enum(CREATIVE_SECTIONS.map(([k]) => k) as [CreativeSectionKey, ...CreativeSectionKey[]]),
+}));
+export type CreativeGrounding = z.infer<typeof creativeGroundingSchema>;
+
+/** What the model returns: client-facing prose (no ids) plus the citations for it, kept apart. */
+export const creativeBriefOutputSchema = creativeBriefSchema.extend({
+  grounding: creativeGroundingSchema.describe("The factual statements the brief relies on (especially audience context and reasons to believe), each tagged with its section and evidence ids"),
+});
 
 export const sectionRevisionSchema = z.object({ text: z.string() });
 

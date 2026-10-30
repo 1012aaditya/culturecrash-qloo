@@ -125,14 +125,14 @@ policies because only the server writes to it.
    `bucket_id = 'brief-documents' and public.is_workspace_member(((storage.foldername(name))[1])::uuid)`.
    Without the bucket, uploads still work: extracted text is saved and the UI notes that the original file
    was not stored. With the bucket, the browser uploads files straight to Storage through a one-time
-   signed URL (Vercel limits a function request to 4.5 MB), and migration `…1710_brief_storage.sql`
+   signed URL (Vercel limits a function request to 4.5 MB), and migration `…20261031000600_brief_storage.sql`
    (applied with the others) allows image uploads and lets uploaders delete their own files.
 4. Environment: `DATABASE_URL` (the transaction pooler on port 6543 is fine — prepared statements are
    disabled), `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
    `APP_BASE_URL`.
 5. Turn off the auto-generated REST API. The app talks to Postgres directly and never uses it, but it is
    on by default and would let anyone with the public anon key and a login skip the app's permission
-   checks. Migration `…1300_security_hardening.sql` already makes every Data API request fail (a
+   checks. Migration `…20261031000100_security_hardening.sql` already makes every Data API request fail (a
    `pgrst.db_pre_request` hook); also remove `public` under **Settings → API → Exposed schemas** (or turn
    the Data API off) in the dashboard.
 

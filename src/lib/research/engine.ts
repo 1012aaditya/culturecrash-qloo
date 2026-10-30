@@ -59,6 +59,30 @@ export function extractAgeCohort(text: string | null | undefined): string | unde
   return undefined;
 }
 
+function normalizeName(name: string) {
+  return name
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Qloo's /search always returns its nearest names, so a new brand ("SKinC") would silently resolve to a
+ * different company ("SkinCeuticals"). Only a result whose name matches the brief, ignoring case, accents,
+ * punctuation, spacing and "&"/"and", is used as a signal.
+ */
+export function pickMatchingEntity<T extends { name: string }>(query: string, candidates: T[]): T | undefined {
+  const q = normalizeName(query);
+  if (!q) return undefined;
+  return candidates.find((c) => {
+    const n = normalizeName(c.name);
+    return n === q || n.replace(/ /g, "") === q.replace(/ /g, "");
+  });
+}
+
 export function buildPlan(b: BriefInput): ResearchPlan {
   const seeds: ResearchPlan["seedQueries"] = [];
   if (b.brand) seeds.push({ query: b.brand, kind: "brand" });
@@ -194,6 +218,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     let hardFailures = 0; // network/timeout/5xx — a 403 on one entity type does not count
     const emptyTypes: string[] = [];
     const unmatchedInterests: string[] = [];
+    const unmatchedSeeds: { query: string; kind: string; closest: string | null }[] = [];
     let firstError: QlooError | null = null;
     const record = async (call: Partial<QlooCall<unknown>> & { endpoint: string; params: Record<string, string> }) => withUser(userId, (tx) => recordSource(tx, runId, ws, provider, call));
     const guard = async <T,>(endpoint: string, params: Record<string, string>, fn: () => Promise<QlooCall<T>>): Promise<{ call: QlooCall<T>; sourceId: string } | null> => {
@@ -220,9 +245,17 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     const seeds: { entity: NormalizedEntity; sourceId: string; kind: string; query: string }[] = [];
     for (const s of plan.seedQueries) {
       const res = await guard("/search", { query: s.query }, () => client.search(s.query, ["urn:entity:brand"], 3));
-      const top = res?.call.data[0];
-      if (res && top) seeds.push({ entity: top, sourceId: res.sourceId, kind: s.kind, query: s.query });
+      if (!res) continue;
+      const match = pickMatchingEntity(s.query, res.call.data);
+      if (match) seeds.push({ entity: match, sourceId: res.sourceId, kind: s.kind, query: s.query });
+      else unmatchedSeeds.push({ query: s.query, kind: s.kind, closest: res.call.data[0]?.name ?? null });
     }
+    const seedNotes = unmatchedSeeds.map((u) => {
+      const closest = u.closest ? ` (closest Qloo name: “${u.closest}”)` : "";
+      return u.kind === "brand"
+        ? `The brand “${u.query}” is not in Qloo’s catalogue${closest}, so it was not used as a signal. For a new brand, competitors and audience interests describe its audience.`
+        : `The competitor “${u.query}” did not match a Qloo brand by name${closest}, so it was not used as a signal. Check the spelling or use the brand’s full name.`;
+    });
     for (const q of plan.interestQueries ?? []) {
       const res = await guard("/v2/tags", { "filter.query": q }, () => client.searchTags(q, 3));
       const top = res?.call.data.find((t) => !(t.type ?? "").startsWith("urn:tag:genre:")) ?? res?.call.data[0];
@@ -239,7 +272,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     const tagIds = seeds.filter((s) => s.kind === "interest").map((s) => s.entity.providerId);
     if (!seedIds.length && !tagIds.length && !plan.location) {
       if (failures) throw firstError;
-      if (embedded) return { ok: false, skipped: true, code: "no_signal", message: "No brand, competitor, interest or market could be resolved in Qloo, so no affinity query was made." };
+      if (embedded) return { ok: false, skipped: true, code: "no_signal", message: "No brand, competitor, interest or market could be resolved in Qloo, so no affinity query was made.", notes: seedNotes };
       await withUser(userId, async (tx) => {
         await tx`update research_runs set status = 'completed', completed_at = now(),
           interpretation = ${tx.json({ summary: "No brand, competitor, audience interest or market could be used as a research signal, so no provider query was made. Add one to the brief and run research again.", findings: [], contradictions: [], missingInformation: ["A research signal (brand, competitors, audience interests or market)."], followUpQuestions: [] })},
@@ -367,7 +400,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
             ${provider}, ${s.entity.providerId}, now(), ${tx.json({ source_id: s.sourceId, role: "seed" })}, ${[ent.id]}, ${isDemo}, ${userId},
             ${s.kind === "interest"
               ? "Interest matching uses the top /v2/tags result; check the tag reflects what the brief meant."
-              : "Entity resolution uses the provider’s top search match; check it refers to the intended brand."}) returning id`;
+              : "Entity resolution requires the provider’s name to match the brief; check it refers to the intended brand."}) returning id`;
         obs.push({ id: ev.id, claim: "", entityName: s.entity.name, entityType: s.entity.type, affinity: null, role: "seed" });
       }
       for (const r of results) {
@@ -485,6 +518,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       interpretation = templateInterpretation(brief!, observations, seedNames);
     }
 
+    interpretation.missingInformation.push(...seedNotes);
     if (unmatchedInterests.length) {
       interpretation.missingInformation.push(`No Qloo tag matched these audience interests, so they were not used as signals: ${unmatchedInterests.join(", ")}. Try a broader or more common wording.`);
     }
@@ -511,7 +545,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       await trackEvent(tx, { workspaceId: ws, userId, event: "research_run_completed", projectId: run.project_id, metadata: { mode: run.mode, results: observations.length, failures } });
       await logActivity(tx, { workspaceId: ws, actorId: userId, projectId: run.project_id, verb: "completed", objectType: "research_run", objectId: runId, summary: `completed ${isDemo ? "a demonstration" : "a live"} research run (${observations.length} observations)` });
     });
-    return { ok: true, observations: observations.length, failures, summary: interpretation.summary ?? null };
+    return { ok: true, observations: observations.length, failures, summary: interpretation.summary ?? null, notes: seedNotes };
   } catch (e) {
     const err = e instanceof QlooError ? e : null;
     console.error("[research] qloo stage failed", runId, err?.code ?? (e instanceof Error ? e.message : "unknown"));

@@ -280,6 +280,20 @@ html { scroll-behavior: smooth; }
   animation: cc-shimmer 1.6s linear infinite;
 }
 
+/* Inspiration boards: cards build in, in reading order (delay set per card); AI frames develop like a photo.
+   The animation runs on the card, not React Flow's wrapper, whose transform positions it. */
+@keyframes cc-node-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.cc-node-in > * { animation: cc-node-in 0.6s var(--cc-ease-out) both; animation-delay: var(--cc-delay, 0ms); }
+@keyframes cc-develop {
+  from { filter: blur(16px) saturate(0) brightness(1.25); opacity: 0.35; }
+  60% { filter: blur(2px) saturate(0.7); opacity: 1; }
+  to { filter: none; opacity: 1; }
+}
+.cc-develop { animation: cc-develop 1.8s ease-out both; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -287,7 +301,7 @@ html { scroll-behavior: smooth; }
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  .cc-reveal, .cc-scroll-progress { animation: none !important; }
+  .cc-reveal, .cc-scroll-progress, .cc-node-in > *, .cc-develop { animation: none !important; }
   .cc-lift:hover, .cc-zoom:hover > *, .cc-depth-1, .cc-depth-2, .cc-depth-3 { transform: none !important; }
 }
 

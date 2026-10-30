@@ -108,6 +108,7 @@ export async function getWatchView(ctx: Ctx, clientId: string): Promise<WatchVie
         and d.provider in ('serper', 'exa') and coalesce(d.published_at, d.retrieved_at) > now() - interval '31 days'`;
     // History is loaded in chunks; together they're "running" until every chunk has finished.
     const [backfill] = await tx`select count(*)::int as chunks, count(*) filter (where status in ('queued', 'running'))::int as pending,
+        count(*) filter (where status = 'running' and heartbeat_at > now() - interval '5 minutes')::int as active,
         count(*) filter (where status = 'failed')::int as failed, coalesce(sum(added), 0)::int as added, max(finished_at) as finished_at
       from watch_jobs where watch_id = ${w.id} and run_key like 'backfill:d%'`;
     const byId = new Map(targets.map((t) => [t.id, t]));
@@ -132,7 +133,8 @@ export async function getWatchView(ctx: Ctx, clientId: string): Promise<WatchVie
         topic: r.watch_topic, importance: r.watch_importance, eventLead: r.watch_event_lead, copies: r.copies, at: new Date(r.at).getTime(),
       })).filter((r) => r.targetId), targets.map((t) => ({ id: t.id, name: t.name, role: t.role }))),
       history: backfill?.chunks ? {
-        status: backfill.pending ? "running" : backfill.failed === backfill.chunks ? "failed" : backfill.failed ? "partially_completed" : "completed",
+        // "stalled": chunks are left but no worker has checked in for five minutes, so it can be resumed.
+        status: backfill.pending ? (backfill.active ? "running" : "stalled") : backfill.failed === backfill.chunks ? "failed" : backfill.failed ? "partially_completed" : "completed",
         added: backfill.added, finishedAt: iso(backfill.finished_at),
       } : null,
       sources: sources.map((p) => ({

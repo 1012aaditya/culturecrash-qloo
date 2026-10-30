@@ -186,7 +186,7 @@ export async function loadHistoryAction(clientId: string): Promise<Result> {
         where watch_id = ${w.id} and run_key like 'backfill:%' and status = 'running' and coalesce(heartbeat_at, started_at) < now() - interval '5 minutes'`;
       // Chunks the daily run queued but hasn't reached yet are started now too.
       const [{ waiting }] = await tx`select count(*)::int as waiting from watch_jobs where watch_id = ${w.id} and run_key like 'backfill:%' and status = 'queued'`;
-      return added || waiting > 0;
+      return added || waiting > 0; // includes stalled chunks just put back in the queue
     });
     if (!start) return { ok: false, error: "History is already loaded or loading for this watch." };
     after(() => runHistoryWorkers());

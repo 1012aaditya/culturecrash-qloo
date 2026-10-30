@@ -229,7 +229,8 @@ function HistoryNote({ view, canEdit }: { view: WatchView; canEdit: boolean }) {
   const [pending, start] = React.useTransition();
   const h = view.history;
   const d = view.dashboard!;
-  const loading = h?.status === "running" || (h?.status === "queued" && pending);
+  const loading = h?.status === "running" || pending;
+  const stalled = h?.status === "stalled";
   if (h?.status === "completed" || h?.status === "partially_completed") {
     return <p className="flex items-center gap-1.5 text-[12px] text-muted"><History className="size-3.5" /> Based on {d.total} stories over the last {Math.min(d.historyDays, 30)} days, including the 30-day history loaded <Ago value={h.finishedAt} />.</p>;
   }
@@ -237,7 +238,9 @@ function HistoryNote({ view, canEdit }: { view: WatchView; canEdit: boolean }) {
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-cc-lg border border-violet/25 bg-lilac/30 px-5 py-3.5 text-[13px]">
       <p className="flex items-center gap-2">
         <TrendingUp className="size-4 text-violet" />
-        {loading ? "Loading the last 30 days of news… the charts fill in within a couple of minutes." : `Charts use ${d.historyDays} ${d.historyDays === 1 ? "day" : "days"} of data so far. Load the last 30 days to see trends now.`}
+        {loading ? "Loading the last 30 days of news… the charts fill in within a few minutes."
+          : stalled ? "Loading the last 30 days stopped part-way. Resume it to finish the history."
+          : `Charts use ${d.historyDays} ${d.historyDays === 1 ? "day" : "days"} of data so far. Load the last 30 days to see trends now.`}
       </p>
       {canEdit && !loading && (
         <Button size="sm" variant="accent" disabled={pending} onClick={() => start(async () => {
@@ -245,7 +248,7 @@ function HistoryNote({ view, canEdit }: { view: WatchView; canEdit: boolean }) {
           toast(r.ok ? { tone: "success", title: "Loading history", description: r.message } : { tone: "error", title: r.error });
           router.refresh();
         })}>
-          <History /> Load last 30 days
+          <History /> {stalled ? "Resume loading" : "Load last 30 days"}
         </Button>
       )}
     </div>

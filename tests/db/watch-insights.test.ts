@@ -163,6 +163,20 @@ d("Watch insights: history, AI labels and the dashboard", () => {
     expect(view!.hidden.filter((h) => h.kind === "off_topic").length).toBeGreaterThan(0);
   });
 
+  it("offers to resume history whose workers stopped responding, and resumes it", async () => {
+    const { getWatchView } = await import("@/lib/watch/data");
+    const { loadHistoryAction } = await import("@/lib/watch/actions");
+    // Simulate the live failure: a chunk left "running" by a worker that died ten minutes ago.
+    await sql`update watch_jobs set status = 'running', heartbeat_at = now() - interval '10 minutes', started_at = now() - interval '10 minutes'
+      where watch_id = ${watchId} and run_key = 'backfill:d0-5'`;
+    expect((await getWatchView({ user: { id: U.id }, workspace: { workspaceId: U.ws } } as never, clientId))!.history!.status).toBe("stalled");
+    expect(await loadHistoryAction(clientId)).toMatchObject({ ok: true });
+    await vi.waitFor(async () => {
+      expect((await sql`select status from watch_jobs where watch_id = ${watchId} and run_key = 'backfill:d0-5'`)[0].status).toBe("completed");
+    }, { timeout: 60_000, interval: 500 });
+    expect((await getWatchView({ user: { id: U.id }, workspace: { workspaceId: U.ws } } as never, clientId))!.history!.status).toBe("completed");
+  }, 90_000);
+
   it("loads history only once, and labels only new stories on later runs", async () => {
     const { loadHistoryAction } = await import("@/lib/watch/actions");
     expect(await loadHistoryAction(clientId)).toMatchObject({ ok: false, error: /already/ });

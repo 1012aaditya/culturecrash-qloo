@@ -41,7 +41,7 @@ async function watchFor(uid: string, ws: string, company: string, competitors: s
 }
 
 // ---- Fake providers -------------------------------------------------------------------------------
-const ctl = { fullNikePage: false, alwaysFail: false, failFirstSearchOf: null as null | "exa" | "all", failSearches: 1 };
+const ctl = { fullNikePage: false, alwaysFail: false, failFirstSearchOf: null as null | "exa" | "all", failSearches: 1, hangExa: false };
 const fetchesFor = new Map<string, number>();
 const calls: { provider: string; q: string; page?: number }[] = [];
 const news = (name: string, n: number, from = 0) => Array.from({ length: n }, (_, i) => ({
@@ -73,6 +73,7 @@ const fakeFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   if (url.startsWith("https://api.exa.ai")) {
     calls.push({ provider: "exa", q: body.query });
+    if (ctl.hangExa) return new Promise<Response>(() => {}); // never answers, ignoring every timeout
     const failedExa = failure(`exa:${body.query}`);
     if (failedExa) return failedExa;
     const name = String(body.query).split(" ")[0];
@@ -109,7 +110,7 @@ d("Watch Milestone 2: persistent monitoring", () => {
       if (/storage\.(buckets|objects)/.test(text)) continue;
       await sql.unsafe(text);
     }
-    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "0" });
+    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "0", WATCH_TASK_TIMEOUT_MS: "1500" });
     globalThis.__ccSql = undefined;
     vi.stubGlobal("fetch", fakeFetch);
     O = await user("olivia@o.test");
@@ -128,7 +129,7 @@ d("Watch Milestone 2: persistent monitoring", () => {
     await root?.unsafe(`drop database if exists ${DB} with (force)`);
     await root?.end();
   });
-  beforeEach(() => { calls.length = 0; fetchesFor.clear(); Object.assign(ctl, { fullNikePage: false, alwaysFail: false, failFirstSearchOf: null, failSearches: 1 }); });
+  beforeEach(() => { calls.length = 0; fetchesFor.clear(); Object.assign(ctl, { fullNikePage: false, alwaysFail: false, failFirstSearchOf: null, failSearches: 1, hangExa: false }); });
 
   it("keeps every sighting, so a story found again tomorrow is recorded without being stored twice", async () => {
     const { watchId } = await watchFor(O.id, O.ws, "Nike", ["Adidas"]);
@@ -181,6 +182,19 @@ d("Watch Milestone 2: persistent monitoring", () => {
     expect(exa.map((r) => r.status)).toEqual(["error", "ok"]);
     expect(await sql`select 1 from research_documents where watch_id = ${watchId} and provider = 'exa'`).toHaveLength(1);
   });
+
+  it("gives up on a search that never answers, and finishes the run with the rest", async () => {
+    ctl.hangExa = true;
+    const { watchId } = await watchFor(O.id, O.ws, "Kappa");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await runDay("2026-11-04", [watchId]);
+    const [job] = await sql`select status, error_message from watch_jobs where watch_id = ${watchId}`;
+    expect(job.status).toBe("partially_completed"); // finished, not stuck "running"
+    expect(job.error_message).toMatch(/failed/);
+    expect(await sql`select 1 from research_documents where watch_id = ${watchId} and provider = 'serper'`).not.toHaveLength(0);
+    expect(errors.mock.calls.some(([m]) => /gave up after 1500 ms, stuck at: search/.test(String(m)))).toBe(true);
+    errors.mockRestore();
+  }, 30_000);
 
   it("gives a run that failed outright one more attempt the same day, without counting it as a failure", async () => {
     // Every search fails twice: on the first attempt and on its in-run retry, so the whole run fails.

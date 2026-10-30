@@ -39,6 +39,8 @@ const schema = z.object({
   YOUTUBE_DAILY_UNIT_CAP: z.coerce.number().int().min(0).default(8000),
   // Days of news history a new watch is filled in with (0 = off).
   WATCH_BACKFILL_DAYS: z.coerce.number().int().min(0).max(60).default(30),
+  // A single Watch search (cache, budget, provider call, save) that takes longer than this is given up on.
+  WATCH_TASK_TIMEOUT_MS: z.coerce.number().int().min(1000).default(60_000),
   REDDIT_CLIENT_ID: opt(z.string().min(8)),
   REDDIT_CLIENT_SECRET: opt(z.string().min(8)),
   // Reddit requires approval for commercial use of its Data API; set to "approved" only once granted.

@@ -24,6 +24,17 @@ export type JobOutcome = { status: "completed" | "partially_completed" | "failed
 const SEARCH_CONCURRENCY = 4;
 const TIME_LIMIT = "Stopped at the time limit; the rest runs next time.";
 
+/** Resolves to the promise's value, or null if it hasn't settled within `ms` (the promise is then abandoned). */
+async function withWatchdog<T>(p: Promise<T>, ms: number, onTimeout: () => void): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => { onTimeout(); resolve(null); }, ms); });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Runs `fn` over `items`, at most `limit` at a time. */
 async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
   let next = 0;
@@ -78,7 +89,15 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
   const results = new Map<string, { ok: boolean; config: boolean; provider: string }>();
 
   const attempt = async (task: WatchTask) => {
-    const r = await runTask(ctx, task);
+    const step = { name: "" };
+    const r = await withWatchdog(runTask(ctx, task, step), env().WATCH_TASK_TIMEOUT_MS, () => {
+      // Seen live: a search never settled and held a whole history chunk until the function timed out.
+      console.error(`[watch] task ${task.key} of job ${job.id} gave up after ${env().WATCH_TASK_TIMEOUT_MS} ms, stuck at: ${step.name}`);
+    });
+    if (!r) {
+      results.set(task.key, { ok: false, config: false, provider: task.provider });
+      return true;
+    }
     if (r.budgetStop) { stop = r.budgetStop; return false; }
     if (r.skipped) return true;
     found += r.found;
@@ -135,21 +154,25 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
 
 type TaskResult = { ok: boolean; config: boolean; found: number; added: number; full: boolean; budgetStop?: string; skipped?: boolean };
 
-async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; country: string | null; targets: WatchTarget[]; known: Known }, task: WatchTask): Promise<TaskResult> {
+async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; country: string | null; targets: WatchTarget[]; known: Known }, task: WatchTask, step: { name: string } = { name: "" }): Promise<TaskResult> {
   const { job, ws, userId, country, targets, known } = ctx;
   const e = env();
+  step.name = "cache";
   const price = task.provider === "serper" ? e.SERPER_USD_PER_REQUEST : task.provider === "exa" ? e.EXA_USD_PER_REQUEST : 0;
   const cached = await withUser(userId, async (tx) => {
     await tx`update watch_jobs set heartbeat_at = now() where id = ${job.id}`;
     return cacheGet<Hit[]>(tx, ws, task.provider, cacheKeyFor(task, country));
   });
   if (!cached) {
+    step.name = "budget";
     const budgetStop = (await withUser(userId, (tx) => overBudget(tx, ws, price))) ?? (await overPlatformCap(price));
     if (budgetStop) return { ok: false, config: false, found: 0, added: 0, full: false, budgetStop };
     // YouTube is free but rationed: skip it (without failing anything) once today's quota share is used.
     if (task.provider === "youtube" && !(await youtubeQuotaLeft(101))) return { ok: true, config: false, found: 0, added: 0, full: false, skipped: true };
   }
+  step.name = "search";
   const call = cached ? fromCache(cached, task, country) : await search(task, country);
+  step.name = "save";
   const searched = targets.find((t) => t.id === task.targetId)!;
   const n = await withUser(userId, async (tx) => {
     // Searches run in parallel, but saving is one at a time per watch: two saves inserting overlapping

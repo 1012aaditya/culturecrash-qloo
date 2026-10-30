@@ -2,6 +2,7 @@ import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
+import { VisualDirectionPanel } from "@/components/boards/direction-boards";
 import { ClaimList, GroundingScore } from "@/components/evidence/evidence-receipt";
 import { DemoBadge, EmptyState } from "@/components/states";
 import { CreativeBriefEditor } from "@/components/strategy/creative-brief-editor";
@@ -89,6 +90,7 @@ export default async function CreativeBriefPage({ params, searchParams }: PagePr
           </div>
         </section>
       )}
+      <VisualDirectionPanel projectId={projectId} directionId={cb.direction_id ?? null} />
       <section className="mt-8 rounded-[32px] border border-line bg-paper p-8">
         <h2 className="cc-display text-3xl">Supporting evidence</h2>
         <p className="mt-1 text-[13px] text-muted">Observations linked to the selected direction. Affinity values describe taste correlations, not causation.</p>

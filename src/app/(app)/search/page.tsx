@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import type { ComponentType } from "react";
 import Link from "next/link";
-import { Building2, FileText, FlaskConical, FolderOpen, Lightbulb, ListChecks, Search, SearchX } from "lucide-react";
+import { Building2, FileText, FlaskConical, FolderOpen, LayoutGrid, Lightbulb, ListChecks, Search, SearchX } from "lucide-react";
 import { EmptyState } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { getCtx } from "@/lib/data/workspace";
@@ -17,6 +17,7 @@ const TYPES: { key: SearchHit["type"]; label: string; plural: string; icon: Comp
   { key: "strategy", label: "Strategy", plural: "Strategies", icon: Lightbulb },
   { key: "report", label: "Report", plural: "Reports", icon: FileText },
   { key: "experiment", label: "Experiment", plural: "Experiments", icon: FlaskConical },
+  { key: "board", label: "Board", plural: "Boards", icon: LayoutGrid },
 ];
 const isType = (v: string): v is SearchHit["type"] => TYPES.some((t) => t.key === v);
 
@@ -54,7 +55,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
           defaultValue={q}
           autoFocus={!q}
           maxLength={120}
-          placeholder="Campaigns, clients, evidence, strategies, reports, experiments…"
+          placeholder="Campaigns, clients, evidence, strategies, reports, experiments, boards…"
           className="h-11 min-w-0 flex-1 bg-transparent text-[15px] placeholder:text-faint focus:outline-none"
         />
         {active && <input type="hidden" name="type" value={active} />}

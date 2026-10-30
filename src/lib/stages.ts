@@ -21,7 +21,7 @@ export const STAGES = [
     label: "Create",
     summary: "Develop positioning alternatives, messaging and the creative brief.",
     detail: "Three strategically distinct directions, transparent comparison, versioned edits and an editable creative brief.",
-    routes: ["strategy", "creative-brief"],
+    routes: ["strategy", "creative-brief", "boards"],
   },
   {
     key: "test",

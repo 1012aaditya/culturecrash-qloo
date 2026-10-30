@@ -8,6 +8,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // A second dev server (e.g. a local-auth server for e2e tests) must not share `.next`: NEXT_PUBLIC_* values
+  // are inlined into cached chunks, and a shared cache sent the main server into a reload loop.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Server-only packages that must not be bundled.
   serverExternalPackages: ["postgres", "@react-pdf/renderer", "mammoth", "unpdf"],
   turbopack: {

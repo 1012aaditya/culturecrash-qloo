@@ -1,5 +1,5 @@
 import "server-only";
-import { Document, Font, Link, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { Document, Font, Image, Link, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
 
 // Keep words whole: editorial titles should never be auto-hyphenated.
 Font.registerHyphenationCallback((word) => [word]);
@@ -40,7 +40,7 @@ function Sec({ k, n, children }: { k: string; n: number; children: React.ReactNo
   );
 }
 
-function ReportPdf({ s, version, createdAt, pageNumbers }: { s: ReportSnapshot; version: number; createdAt: string; pageNumbers: boolean }) {
+function ReportPdf({ s, version, createdAt, pageNumbers, images }: { s: ReportSnapshot; version: number; createdAt: string; pageNumbers: boolean; images: Map<string, Buffer> }) {
   const on = (k: string) => s.sections.includes(k as never);
   // Citations use the numbering of the Key evidence list.
   const evIndex = new Map(s.evidence.map((e, i) => [e.id, i + 1]));
@@ -185,6 +185,11 @@ function ReportPdf({ s, version, createdAt, pageNumbers }: { s: ReportSnapshot; 
             )) : <Text>No creative brief.</Text>}
           </Sec>
         )}
+        {on("visual") && (
+          <Sec k="visual" n={++n}>
+            {s.visualWorld ? <VisualWorldPdf v={s.visualWorld} images={images} /> : <Text>{s.visualWorld === undefined ? "This report version was created before boards could be included." : "No inspiration board is linked to the selected direction."}</Text>}
+          </Sec>
+        )}
         {on("experiments") && (
           <Sec k="experiments" n={++n}>
             {s.experiments.length === 0 && <Text>No experiments planned.</Text>}
@@ -222,13 +227,55 @@ function ReportPdf({ s, version, createdAt, pageNumbers }: { s: ReportSnapshot; 
   );
 }
 
-export async function renderReportPdf(s: ReportSnapshot, version: number, createdAt: string) {
+export async function renderReportPdf(s: ReportSnapshot, version: number, createdAt: string, images: Map<string, Buffer> = new Map()) {
   try {
-    return await renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers />);
+    return await renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers images={images} />);
   } catch (e) {
     // react-pdf 4.9 bug: for some page layouts, re-laying out `render` (page number) nodes leaves a child
     // unpositioned and pdfkit throws "unsupported number: -1.9e21". Retry without page numbers.
     if (!(e instanceof Error && e.message.startsWith("unsupported number"))) throw e;
-    return renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers={false} />);
+    return renderToBuffer(<ReportPdf s={s} version={version} createdAt={createdAt} pageNumbers={false} images={images} />);
   }
+}
+
+const RIGHTS = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset" } as const;
+
+function VisualWorldPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualWorld"]>; images: Map<string, Buffer> }) {
+  return (
+    <View>
+      <Text style={st.p}>From the inspiration board “{v.boardName}” ({v.cardCount} cards).{v.coverage.sourceable > 0 ? ` ${v.coverage.sourced} of ${v.coverage.sourceable} references carry a source.` : ""}</Text>
+      {v.palette.length > 0 && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 10 }} wrap={false}>
+          {v.palette.map((c) => (
+            <View key={c.hex} style={{ flexDirection: "row", alignItems: "center", marginRight: 14, marginBottom: 4 }}>
+              <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: c.hex, borderWidth: 0.5, borderColor: C.line, marginRight: 5 }} />
+              <Text style={{ fontSize: 8.5 }}>{c.name} <Text style={{ fontFamily: "Courier", color: C.muted }}>{c.hex}</Text></Text>
+            </View>
+          ))}
+        </View>
+      )}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" }}>
+        {v.images.map((img) => {
+          const data = images.get(img.thumbPath ?? img.path) ?? images.get(img.path);
+          return (
+            <View key={img.path} style={{ width: "31.5%", marginBottom: 10 }} wrap={false}>
+              {/* eslint-disable-next-line jsx-a11y/alt-text -- react-pdf Image has no alt; the caption below names the image */}
+              {data ? <Image src={{ data, format: "jpg" }} style={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 4 }} /> : (
+                <View style={{ height: 110, borderRadius: 4, backgroundColor: "#F2EFEA", justifyContent: "center", padding: 6 }}><Text style={[st.small, { textAlign: "center" }]}>{img.alt || img.title || "Image unavailable"}</Text></View>
+              )}
+              {img.title ? <Text style={{ fontSize: 8.5, fontFamily: "Helvetica-Bold", marginTop: 3 }}>{img.title}</Text> : null}
+              <Text style={[st.small, img.rights === "reference" ? { color: "#8a3d22" } : {}]}>{RIGHTS[img.rights]}</Text>
+              {img.sourceUrl ? <Link src={img.sourceUrl} style={[st.small, { color: C.violet }]}>{img.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}</Link> : <Text style={st.small}>No source recorded</Text>}
+            </View>
+          );
+        })}
+      </View>
+      {v.notes.length > 0 && (
+        <View style={{ marginTop: 4 }}>
+          <Text style={st.eyebrow}>Board notes</Text>
+          {v.notes.map((t, i) => <Text key={i} style={[st.p, { marginTop: 4 }]}>{t}</Text>)}
+        </View>
+      )}
+    </View>
+  );
 }

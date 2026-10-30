@@ -12,6 +12,7 @@ export const REPORT_SECTIONS = [
   ["selected", "Selected strategy"],
   ["objections", "Client objections & answers"],
   ["creative", "Creative brief"],
+  ["visual", "Visual world"],
   ["experiments", "Experiment plan"],
   ["limitations", "Limitations & open questions"],
   ["sources", "Sources & appendix"],
@@ -20,6 +21,15 @@ export type ReportSectionKey = (typeof REPORT_SECTIONS)[number][0];
 
 /** A pitch-ready report: the recommendation, the taste map behind it, and the hardest objections already answered. */
 export const PITCH_PACK_SECTIONS: ReportSectionKey[] = ["cover", "executive", "landscape", "selected", "objections", "directions", "evidence", "limitations", "sources"];
+
+export type VisualWorld = {
+  boardName: string;
+  palette: { hex: string; name: string }[];
+  images: { path: string; thumbPath: string | null; title: string; alt: string; sourceUrl: string | null; rights: "reference" | "licensed" | "own" }[];
+  notes: string[];
+  cardCount: number;
+  coverage: { sourceable: number; sourced: number };
+};
 
 export type ReportSnapshot = {
   title: string;
@@ -40,6 +50,8 @@ export type ReportSnapshot = {
   directions: { name: string; selected: boolean; exploratory: boolean; revision: number; content: DirectionContent }[];
   strategyGeneratedBy: string | null;
   selected: { name: string; content: DirectionContent; revision: number } | null;
+  /** The inspiration board linked to the selected direction. Images are stored as private paths and signed when shown. */
+  visualWorld?: VisualWorld | null;
   creativeBrief: { content: CreativeBriefContent; generatedBy: string; revision: number; grounding?: (GroundedClaim & { section: string })[] } | null;
   objections?: { verdict: string; summary: string; generatedBy: string; items: { direction: string; objection: string; weakestEvidence: string; competitor: string; question: string; answer: string }[] } | null;
   experiments: { name: string; hypothesis: string; method: string | null; primaryMetric: string; threshold: string | null; status: string; interpretation: string | null; nextAction: string | null; results: { variant: string | null; metric: string; value: number; n: number | null }[] }[];

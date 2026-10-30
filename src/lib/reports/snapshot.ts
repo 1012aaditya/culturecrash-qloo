@@ -5,6 +5,7 @@ import type { Tx } from "@/lib/db";
 import { loadBrief } from "@/lib/data/briefs";
 import type { Report as DeepReport } from "@/lib/research/deep/synthesize";
 import { AFFINITY_LIMITATION, type ResearchPlan } from "@/lib/research/engine";
+import { visualWorld, type BoardNode } from "@/lib/boards/visual-world";
 import { REPORT_SECTIONS, type ReportSectionKey, type ReportSnapshot } from "./types";
 
 /**
@@ -21,7 +22,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   const seeds = run ? await tx`select name, properties->>'query' as query, properties->>'kind' as kind from cultural_entities where run_id = ${run.id} and role = 'seed' order by retrieved_at, name` : [];
   const opps = await tx`select title, description, why_it_matters, unknowns, validation_step, status, generator, evidence_ids, claims from opportunities where project_id = ${projectId} and status <> 'dismissed' order by (status = 'saved') desc limit 8`;
   const [p] = await tx`select selected_direction_id from projects where id = ${projectId}`;
-  const [selected] = p?.selected_direction_id ? await tx`select id, version_id, name, content, revision from strategy_directions where id = ${p.selected_direction_id}` : [];
+  const [selected] = p?.selected_direction_id ? await tx`select id, version_id, slot, name, content, revision from strategy_directions where id = ${p.selected_direction_id}` : [];
   // Alternatives come from the same strategy version as the selected direction, so the report never
   // pairs a recommendation with alternatives it wasn't chosen from.
   const [version] = selected
@@ -33,6 +34,9 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   const [otherBrief] = selected && !cb ? await tx`select 1 from creative_briefs where project_id = ${projectId} limit 1` : [];
   // The latest Devil's Advocate review of this strategy version, if one was run.
   const [crit] = version ? await tx`select critique, generator from strategy_critiques where version_id = ${version.id} order by created_at desc limit 1` : [];
+  // The most recently edited board linked to the selected direction (any revision of it: boards link by version and slot).
+  const [board] = selected ? await tx`select b.name, b.content->'nodes' as nodes from inspiration_boards b join strategy_directions d on d.id = b.direction_id
+    where b.project_id = ${projectId} and d.version_id = ${selected.version_id} and d.slot = ${selected.slot} order by b.updated_at desc limit 1` : [];
   const [{ docs: externalDocs }] = run ? await tx`select count(*)::int as docs from research_documents where run_id = ${run.id}` : [{ docs: 0 }];
   const experiments = await tx`select x.id, x.name, x.hypothesis, x.method, x.primary_metric, x.decision_threshold, x.status, x.interpretation, x.next_action,
     coalesce((select json_agg(json_build_object('variant', v.label, 'metric', r.metric, 'value', r.value, 'n', r.sample_size) order by r.created_at)
@@ -113,6 +117,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
       verdict: (crit.critique as RedTeamCritique).overallVerdict.replace(/_/g, " "), summary: (crit.critique as RedTeamCritique).executiveSummary, generatedBy: generatorLabel(crit.generator),
       items: (crit.critique as RedTeamCritique).critiques.map((c) => ({ direction: c.directionName, objection: c.fatalFlaw, weakestEvidence: c.weakestEvidence ?? "", competitor: c.nearestCompetitor ?? "", question: c.toughestClientQuestion, answer: c.suggestedDefense })),
     } : null,
+    visualWorld: board ? visualWorld(board.name as string, (board.nodes ?? []) as BoardNode[]) : null,
     creativeBrief: cb ? { content: cb.content as CreativeBriefContent, generatedBy: generatorLabel(cb.generator), revision: cb.revision, grounding: cb.grounding ?? [] } : null,
     experiments: experiments.map((x) => ({ name: x.name, hypothesis: x.hypothesis, method: x.method, primaryMetric: x.primary_metric, threshold: x.decision_threshold, status: x.status, interpretation: x.interpretation, nextAction: x.next_action, results: x.results })),
     limitations,

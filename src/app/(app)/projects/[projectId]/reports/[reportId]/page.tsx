@@ -5,6 +5,7 @@ import { Download } from "lucide-react";
 import { NewVersion, ShareDialog } from "@/components/reports/report-controls";
 import { ReportDocument } from "@/components/reports/report-document";
 import { Button } from "@/components/ui/button";
+import { signPaths } from "@/lib/boards/data";
 import { withUser } from "@/lib/db";
 import { getProjectContext } from "@/lib/data/project-context";
 import { isUuid } from "@/lib/data/projects";
@@ -32,6 +33,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/p
   const want = Number(sp.v) || null;
   const v = data.versions.find((x) => x.version === want) ?? data.versions[0];
   const snap = v.snapshot as ReportSnapshot;
+  const boardImages = Object.fromEntries(await signPaths((snap.visualWorld?.images ?? []).map((i) => i.thumbPath ?? i.path)));
   const stale = data.latestRunId && snap.refs.runId !== data.latestRunId;
   return (
     <div>
@@ -49,7 +51,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/p
         </div>
       </div>
       {stale && <p className="cc-no-print mb-4 rounded-cc-sm bg-warning/10 p-3 text-[13px] text-warning">Research has changed since this version was created. This version is unchanged; create a new version to include the latest run.</p>}
-      <ReportDocument s={snap} version={v.version} createdAt={new Date(v.created_at).toISOString()} />
+      <ReportDocument s={snap} boardImages={boardImages} version={v.version} createdAt={new Date(v.created_at).toISOString()} />
     </div>
   );
 }

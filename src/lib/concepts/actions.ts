@@ -248,10 +248,13 @@ export async function visualFuturesAction(projectId: string): Promise<R<{ boardI
     const result = await withUser(ctx.user.id, async (tx) => {
       const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, created_by, updated_by)
         values (${projectId}, ${ws}, ${`Visual futures · strategy v${facts.version}`}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
-      const { nodes, world } = storyLayout(facts.version, story);
+      const { nodes, world, touch } = storyLayout(facts.version, story);
       const jobs: NewJob[] = facts.directions.flatMap((d) => (plan.shots.get(d.slot) ?? fallback(d)).slice(0, 2).map((shot): NewJob => ({
         workflow: "w1-concept", params: { prompt: shot.prompt, seed: seed(), width: shot.width, height: shot.height }, directionId: d.id,
-        provenance: provenanceFor(facts.cc, d, facts.evidence.get(d.id) ?? [], shot.prompt, { title: shot.title, why: shot.why || undefined, placement: { group: world.get(d.slot) } }),
+        provenance: provenanceFor(facts.cc, d, facts.evidence.get(d.id) ?? [], shot.prompt, {
+          title: shot.title, why: shot.why || undefined,
+          placement: { group: world.get(d.slot), touch: touch.get(d.slot), copy: plan.copy.get(d.slot) ?? { headline: d.name, line: d.coreIdea.slice(0, 200) } },
+        }),
       })));
       const parsed = parseBoardContent({ nodes, viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
       if (!parsed) throw new Error("visual futures layout failed validation");

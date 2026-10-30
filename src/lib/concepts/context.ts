@@ -15,7 +15,7 @@ export type Provenance = {
   title?: string;
   why?: string;
   /** Where the card goes on the board: inside a group, or beside the card it improves on. */
-  placement?: { group?: string; anchor?: string };
+  placement?: { group?: string; anchor?: string; touch?: string; copy?: { headline: string; line: string } };
   improvement?: { fromLevel: string; fromRationale: string; diagnosis: string; changes: string[] };
 };
 

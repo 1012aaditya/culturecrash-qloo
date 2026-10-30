@@ -3,10 +3,10 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ArrowUpRight, Copy, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, Route, ScanEye, Sparkles, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Bookmark, Copy, Heart, MessageCircle, MoreHorizontal, Play, Send, Smartphone, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, Route, ScanEye, Sparkles, Wand2 } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
-import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, NoteData } from "@/lib/boards/schema";
+import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, MockupData, NoteData } from "@/lib/boards/schema";
 import { safeUrl } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 
@@ -21,12 +21,14 @@ export type BoardContext = {
   presenting: boolean;
   /** AI variations of an image card (null when no GPU PC is set up for this server). */
   makeVariations: ((cardId: string) => void) | null;
+  /** Shows an image card as touchpoint mockups (post, story, playlist, billboard). */
+  makeMockups: (cardId: string) => void;
   /** The art-director loop for weak AI frames, and the cards being improved. */
   improve: ((cardId: string) => void) | null; improvePending: ReadonlySet<string>;
   /** Opens an AI concept's evidence trail. */
   openTrail: (cardId: string) => void;
 };
-export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false, makeVariations: null, improve: null, improvePending: new Set(), openTrail: () => {} });
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false, makeVariations: null, makeMockups: () => {}, improve: null, improvePending: new Set(), openTrail: () => {} });
 
 /** Comment count on a card; opens the card's thread. */
 function CommentBadge({ id }: { id: string }) {
@@ -112,7 +114,7 @@ const IMPROVED_FROM: Record<string, string> = { partial: "partial fit", off: "of
 
 export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit, onMediaError, checkFit, fitPending, presenting, makeVariations, improve, improvePending, openTrail } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError, checkFit, fitPending, presenting, makeVariations, makeMockups, improve, improvePending, openTrail } = React.useContext(BoardCtx);
   const rights = data.rights ?? "reference";
   const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
@@ -172,6 +174,11 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
           {selected && canEdit && !presenting && makeVariations && data.path && (
             <button type="button" onClick={() => makeVariations(id)} className="nodrag ml-1 inline-flex items-center gap-1 rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] font-medium text-ink hover:bg-ink/10">
               <Copy className="size-3" /> Variations
+            </button>
+          )}
+          {selected && canEdit && !presenting && data.path && (
+            <button type="button" onClick={() => makeMockups(id)} className="nodrag ml-1 inline-flex items-center gap-1 rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] font-medium text-ink hover:bg-ink/10">
+              <Smartphone className="size-3" /> Mockups
             </button>
           )}
           {data.fit ? !presenting && <FitChip fit={data.fit} /> : selected && canEdit && data.thumbPath && (
@@ -319,4 +326,81 @@ export function EvidenceNode({ id, data, selected }: NodeProps<Node<EvidenceCard
   );
 }
 
-export const nodeTypes = { image: ImageNode, note: NoteNode, link: LinkNode, entity: EntityNode, group: GroupNode, evidence: EvidenceNode };
+/**
+ * A touchpoint mockup: the frame and headline shown the way people would meet them. Formats are generic
+ * (no platform logos or trademarks); a small chip keeps it honest that this is an AI concept mockup.
+ */
+export function MockupNode({ data, selected }: NodeProps<Node<MockupData>>) {
+  const { onMediaError } = React.useContext(BoardCtx);
+  const accent = data.accent ?? "#8064f5";
+  const handle = (data.brand || "brand").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
+  const img = (cls: string) => data.thumbUrl || data.url ? <img src={data.thumbUrl ?? data.url} alt={data.headline || "Concept frame"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className={cn("object-cover", cls)} /> : <div className={cn("bg-ivory", cls)} />;
+  const chip = <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-white">Mockup · AI concept</span>;
+  const shell = cn("relative h-full w-full overflow-hidden shadow-card transition-shadow", selected && "shadow-[0_0_0_3px_rgba(128,100,245,0.35)]");
+  return (
+    <>
+      <Resizer selected={selected} locked={data.locked} keepAspectRatio />
+      {data.format === "post" && (
+        <div className={cn(shell, "flex flex-col rounded-[14px] border border-line bg-white text-[#111]")}>
+          {chip}
+          <div className="flex items-center gap-2 px-2.5 py-2">
+            <span className="flex size-7 items-center justify-center rounded-full text-[11px] font-semibold text-white" style={{ background: accent }}>{handle.slice(0, 1).toUpperCase()}</span>
+            <span className="min-w-0 flex-1 leading-tight"><span className="block truncate text-[12px] font-semibold">{handle}</span><span className="text-[10px] text-[#777]">Sponsored</span></span>
+            <MoreHorizontal className="size-4 text-[#777]" />
+          </div>
+          {img("aspect-square w-full min-h-0 flex-1")}
+          <div className="flex items-center gap-3 px-2.5 pt-2 text-[#222]"><Heart className="size-4" /><MessageCircle className="size-4" /><Send className="size-4" /><Bookmark className="ml-auto size-4" /></div>
+          <p className="line-clamp-2 px-2.5 pb-2.5 pt-1 text-[11.5px] leading-snug"><span className="font-semibold">{handle}</span> {data.headline}{data.line ? ` ${data.line}` : ""}</p>
+        </div>
+      )}
+      {data.format === "story" && (
+        <div className={cn(shell, "rounded-[22px] bg-black")}>
+          {img("absolute inset-0 h-full w-full")}
+          <div className="absolute inset-x-2 top-2 flex gap-1">{[1, 0, 0].map((f, i) => <span key={i} className={cn("h-0.5 flex-1 rounded-full", f ? "bg-white" : "bg-white/40")} />)}</div>
+          <div className="absolute left-2.5 top-4 flex items-center gap-1.5 text-white">
+            <span className="flex size-6 items-center justify-center rounded-full text-[10px] font-semibold" style={{ background: accent }}>{handle.slice(0, 1).toUpperCase()}</span>
+            <span className="text-[11px] font-semibold drop-shadow">{handle}</span><span className="text-[10px] text-white/80">Sponsored</span>
+          </div>
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-3 pt-16 text-white">
+            <p className="cc-display text-[19px] leading-[1.05]">{data.headline}</p>
+            {data.line && <p className="mt-1.5 line-clamp-3 text-[11px] leading-snug text-white/85">{data.line}</p>}
+            <span className="mt-2.5 inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-semibold" style={{ color: accent }}>Learn more</span>
+          </div>
+          <span className="pointer-events-none absolute right-2 top-10 z-10 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-white">Mockup · AI concept</span>
+        </div>
+      )}
+      {data.format === "playlist" && (
+        <div className={cn(shell, "flex flex-col rounded-[14px] bg-[#141414] p-2.5 text-white")}>
+          {chip}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-[8px]">
+            {img("absolute inset-0 h-full w-full")}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
+            <p className="absolute bottom-2 left-2.5 right-2.5 cc-display text-[22px] leading-[1.02]">{data.headline}</p>
+            <span className="absolute left-2.5 top-2 text-[9px] font-semibold uppercase tracking-[0.18em]" style={{ color: accent }}>{data.brand || "Playlist"}</span>
+          </div>
+          <div className="flex items-center gap-2 pt-2.5">
+            <span className="min-w-0 flex-1 leading-tight"><span className="block truncate text-[12px] font-semibold">{data.headline}</span><span className="text-[10.5px] text-white/60">Playlist · made for you by {data.brand || "the brand"}</span></span>
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full" style={{ background: accent }}><Play className="ml-0.5 size-3.5 fill-white text-white" /></span>
+          </div>
+        </div>
+      )}
+      {data.format === "billboard" && (
+        <div className={cn(shell, "rounded-[12px] bg-gradient-to-b from-[#f4c9a6] via-[#d7a7b4] to-[#6f6a9e]")}>
+          {chip}
+          <div className="absolute inset-x-0 bottom-0 h-[16%] bg-[#2b2836]" />
+          <div className="absolute bottom-[16%] left-[22%] h-[22%] w-[2.5%] bg-[#2b2836]" /><div className="absolute bottom-[16%] right-[22%] h-[22%] w-[2.5%] bg-[#2b2836]" />
+          <div className="absolute left-[6%] right-[6%] top-[9%] flex h-[56%] overflow-hidden rounded-[3px] border-[5px] border-[#2b2836] bg-white shadow-lg">
+            {img("h-full w-[62%]")}
+            <div className="flex flex-1 flex-col justify-center gap-1.5 px-3" style={{ background: accent }}>
+              <p className="cc-display text-[18px] leading-[1.02] text-white">{data.headline}</p>
+              <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-white/85">{data.brand}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export const nodeTypes = { image: ImageNode, note: NoteNode, link: LinkNode, entity: EntityNode, group: GroupNode, evidence: EvidenceNode, mockup: MockupNode };

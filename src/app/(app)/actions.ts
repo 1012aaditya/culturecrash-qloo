@@ -4,7 +4,8 @@ import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { withUser } from "@/lib/db";
+import { withUser, type Tx } from "@/lib/db";
+import { env } from "@/lib/env";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx, WORKSPACE_COOKIE } from "@/lib/data/workspace";
@@ -103,6 +104,30 @@ export async function setProjectStatusAction(projectId: string, status: "active"
   return { ok: true };
 }
 
+/**
+ * Stored files are removed before the project's rows. Board images must go (members may delete them; a
+ * failure aborts the deletion). Brief documents are best-effort: only admins (or, on newer policies, the
+ * uploader) may delete them, and a member may delete a campaign they own, so that removal must not block.
+ */
+async function removeProjectFiles(tx: Tx, projectId: string) {
+  const e = env();
+  if (e.AUTH_MODE !== "supabase" || !e.NEXT_PUBLIC_SUPABASE_URL) return;
+  const { removeBoardFolders } = await import("@/lib/boards/data");
+  await removeBoardFolders(await tx`select id, workspace_id, project_id from inspiration_boards where project_id = ${projectId}` as never);
+  const docs = (await tx`select storage_path from brief_documents where project_id = ${projectId} and storage_path is not null`).map((r) => r.storage_path as string);
+  if (!docs.length) return;
+  try {
+    const { supabaseServer } = await import("@/lib/auth/supabase");
+    const client = await supabaseServer();
+    for (let i = 0; i < docs.length; i += 100) {
+      const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(docs.slice(i, i + 100));
+      if (error) throw new Error(error.message);
+    }
+  } catch (err) {
+    console.error("[projects] brief file cleanup incomplete", err instanceof Error ? err.message : err);
+  }
+}
+
 export async function deleteProjectAction(projectId: string, confirmName: string): Promise<ActionResult> {
   if (!isUuid(projectId)) return { ok: false, error: "Invalid request." };
   const ctx = await getCtx();
@@ -114,6 +139,7 @@ export async function deleteProjectAction(projectId: string, confirmName: string
       if (p.owner_id !== ctx.user.id) assertCan(ctx.workspace.role, "project.delete");
       else assertCan(ctx.workspace.role, "project.edit");
       if (p.name !== confirmName.trim()) return "mismatch";
+      await removeProjectFiles(tx, projectId);
       const del = await tx`delete from projects where id = ${projectId} returning id`;
       if (!del.length) throw new ForbiddenError("project.delete");
       await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, verb: "deleted", objectType: "project", objectId: null, summary: `deleted campaign “${p.name}” and its research` });

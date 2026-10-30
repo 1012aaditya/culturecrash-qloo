@@ -1,5 +1,6 @@
 import { llmEnabled } from "@/lib/ai/enabled";
 import type { Metadata } from "next";
+import { DirectionBoardsSection } from "@/components/boards/direction-boards";
 import { EmptyState } from "@/components/states";
 import { ComparisonMatrix, RevisionDiff } from "@/components/strategy/compare-view";
 import { TEMPLATE_GENERATOR } from "@/lib/ai";
@@ -53,6 +54,7 @@ export default async function ComparePage({ params, searchParams }: PageProps<"/
           <ComparisonMatrix projectId={projectId} versionId={s.current.id} names={dirs.map((d) => d.name)} initial={templateComparison(dirs, extra.brief)} initialGenerator={TEMPLATE_GENERATOR} llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)} />
         </div>
       )}
+      {s.current && <DirectionBoardsSection projectId={projectId} directions={s.directions.map((d) => ({ id: d.id, name: d.name, slot: d.slot }))} />}
     </div>
   );
 }

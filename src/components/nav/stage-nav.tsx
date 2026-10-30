@@ -17,7 +17,7 @@ export type StageInfo = { state: StageState; missing: string | null };
 const tabs: Record<StageKey, { href: string; label: string }[]> = {
   explore: [{ href: "brief", label: "Brief" }, { href: "research", label: "Research canvas" }, { href: "research/history", label: "Run history" }],
   interpret: [{ href: "opportunities", label: "Opportunities & evidence" }],
-  create: [{ href: "strategy", label: "Strategy studio" }, { href: "strategy/compare", label: "Compare" }, { href: "creative-brief", label: "Creative brief" }],
+  create: [{ href: "strategy", label: "Strategy studio" }, { href: "strategy/compare", label: "Compare" }, { href: "creative-brief", label: "Creative brief" }, { href: "boards", label: "Inspiration boards" }],
   test: [{ href: "experiments", label: "Experiments" }],
   track: [{ href: "reports", label: "Reports" }],
 };
@@ -74,7 +74,7 @@ export function StageNav({ projectId, stages }: { projectId: string; stages: Rec
       {active && tabs[active].length > 1 && (
         <div role="tablist" aria-label={`${active} views`} className="flex gap-1 overflow-x-auto">
           {tabs[active].map((t) => {
-            const on = sub === t.href || (t.href === "research" && sub === "research");
+            const on = sub === t.href || (t.href === "research" && sub === "research") || (t.href === "boards" && sub.startsWith("boards/"));
             return (
               <Link key={t.href} role="tab" aria-selected={on} href={`/projects/${projectId}/${t.href}`} className={cn("rounded-full px-3.5 py-1.5 text-[13px] whitespace-nowrap", on ? "bg-ink text-white" : "text-muted hover:bg-ink/5 hover:text-ink")}>
                 {t.label}

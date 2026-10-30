@@ -410,6 +410,9 @@ export async function deleteWorkspaceAction(confirmName: string): Promise<Result
     const paths = await withUser(ctx.user.id, async (tx) =>
       (await tx`select storage_path from brief_documents where workspace_id = ${ws.workspaceId} and storage_path is not null`).map((r) => r.storage_path as string));
     await removeStoredFiles(paths);
+    // Inspiration-board images live in their own bucket; remove them before the rows that point at them.
+    const { removeBoardFolders } = await import("@/lib/boards/data");
+    await removeBoardFolders(await withUser(ctx.user.id, (tx) => tx`select id, workspace_id, project_id from inspiration_boards where workspace_id = ${ws.workspaceId}`) as never);
     await withUser(ctx.user.id, async (tx) => {
       const rows = await tx`delete from workspaces where id = ${ws.workspaceId} returning id`;
       if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });

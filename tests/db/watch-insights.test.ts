@@ -88,7 +88,10 @@ d("Watch insights: history, AI labels and the dashboard", () => {
       await sql.unsafe(text);
     }
     Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: "test-cron-secret-0123456789", SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key",
-      ANTHROPIC_API_KEY: "anthropic-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "30" });
+      ANTHROPIC_API_KEY: "anthropic-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "30",
+      // With a platform cap the budget check makes an extra query; it used to do so inside a transaction,
+      // and parallel history workers exhausted the connection pool and hung (seen live on 30 Oct).
+      PLATFORM_SPEND_CAP_USD: "100", DATABASE_POOL_MAX: "2" });
     delete process.env.YOUTUBE_API_KEY;
     globalThis.__ccSql = undefined;
     vi.stubGlobal("fetch", fakeFetch);

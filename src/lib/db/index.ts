@@ -15,7 +15,7 @@ function client(): postgres.Sql {
   if (!url) throw new ConfigurationError("DATABASE_URL is not configured");
   // prepare:false keeps us compatible with Supabase's transaction pooler (Supavisor).
   globalThis.__ccSql = postgres(url, {
-    max: 10,
+    max: env().DATABASE_POOL_MAX,
     prepare: false,
     idle_timeout: 20,
     connect_timeout: 10,

@@ -144,7 +144,7 @@ async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; count
     return cacheGet<Hit[]>(tx, ws, task.provider, cacheKeyFor(task, country));
   });
   if (!cached) {
-    const budgetStop = await withUser(userId, (tx) => overBudget(tx, ws, price));
+    const budgetStop = (await withUser(userId, (tx) => overBudget(tx, ws, price))) ?? (await overPlatformCap(price));
     if (budgetStop) return { ok: false, config: false, found: 0, added: 0, full: false, budgetStop };
     // YouTube is free but rationed: skip it (without failing anything) once today's quota share is used.
     if (task.provider === "youtube" && !(await youtubeQuotaLeft(101))) return { ok: true, config: false, found: 0, added: 0, full: false, skipped: true };
@@ -220,10 +220,16 @@ async function ledger(tx: Tx, jobId: string, ws: string, task: WatchTask, call: 
 /** The workspace's monthly research budget and the platform-wide ceiling both apply to Watch. */
 async function overBudget(tx: Tx, ws: string, price: number): Promise<string | null> {
   const [w] = await tx`select research_budget_usd_monthly as cap, public.research_spend_this_month(${ws}) as spent from workspaces where id = ${ws}`;
-  if (Number(w.spent) + price > Number(w.cap)) return "Stopped: this workspace's monthly research budget is used up.";
+  return Number(w.spent) + price > Number(w.cap) ? "Stopped: this workspace's monthly research budget is used up." : null;
+}
+
+/**
+ * Checked outside any transaction: it needs its own connection, and asking for one while holding a
+ * transaction let parallel searches exhaust the pool and wait on each other forever (seen live).
+ */
+async function overPlatformCap(price: number): Promise<string | null> {
   const platform = await platformHeadroomUsd();
-  if (platform !== null && platform < price) return "Stopped: this server's monthly spending limit is reached.";
-  return null;
+  return platform !== null && platform < price ? "Stopped: this server's monthly spending limit is reached." : null;
 }
 
 /** Units used today on the server's YouTube key, across all workspaces (the quota resets at midnight Pacific time). */

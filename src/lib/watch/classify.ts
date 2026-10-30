@@ -62,6 +62,9 @@ export async function classifyWatch(ctx: { userId: string; ws: string; watchId: 
   for (let i = 0; i < setup.pending.length && Date.now() < ctx.deadline; i += BATCH) {
     const batch = setup.pending.slice(i, i + BATCH);
     if (await withUser(userId, (tx) => overBudget(tx, ws, estimate))) break;
+    // The platform cap needs its own connection, so it's checked outside the transaction above.
+    const platform = await platformHeadroomUsd();
+    if (platform !== null && platform < estimate) break;
     const started = Date.now();
     try {
       const out = await generateStructured({ schema, model: e.LLM_MODEL_FAST, effort: "low", maxTokens: 4000, prompt: classifyPrompt(batch, setup.companies, ctx.industry) });
@@ -90,9 +93,7 @@ export async function classifyWatch(ctx: { userId: string; ws: string; watchId: 
 
 async function overBudget(tx: Tx, ws: string, usd: number): Promise<boolean> {
   const [w] = await tx`select research_budget_usd_monthly as cap, public.research_spend_this_month(${ws}) as spent from workspaces where id = ${ws}`;
-  if (Number(w.spent) + usd > Number(w.cap)) return true;
-  const platform = await platformHeadroomUsd();
-  return platform !== null && platform < usd;
+  return Number(w.spent) + usd > Number(w.cap);
 }
 
 async function ledger(tx: Tx, jobId: string, ws: string, status: "ok" | "error", ms: number, error: string | null, usd: number, tokensIn: number | null, tokensOut: number | null, count: number) {

@@ -181,6 +181,9 @@ export async function loadHistoryAction(clientId: string): Promise<Result> {
       const [w] = await tx`select id, workspace_id from watches where client_id = ${clientId} and workspace_id = ${ctx.workspace.workspaceId}`;
       if (!w) return false;
       const added = await queueHistory(tx, w.id, w.workspace_id);
+      // Chunks whose worker stopped responding (no heartbeat for 5 minutes) are started again.
+      await tx`update watch_jobs set status = 'queued', attempts = 0, started_at = null
+        where watch_id = ${w.id} and run_key like 'backfill:%' and status = 'running' and coalesce(heartbeat_at, started_at) < now() - interval '5 minutes'`;
       // Chunks the daily run queued but hasn't reached yet are started now too.
       const [{ waiting }] = await tx`select count(*)::int as waiting from watch_jobs where watch_id = ${w.id} and run_key like 'backfill:%' and status = 'queued'`;
       return added || waiting > 0;

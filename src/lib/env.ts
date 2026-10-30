@@ -12,6 +12,9 @@ function opt<T extends z.ZodTypeAny>(schema: T) {
 
 const schema = z.object({
   DATABASE_URL: opt(z.string().url()),
+  // Connections per server instance. Code must never hold one while waiting for another, or a small pool
+  // hangs; the Watch tests run with 2 to prove it.
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
   AUTH_MODE: z.enum(["supabase", "local"]).default("supabase"),
   NEXT_PUBLIC_SUPABASE_URL: opt(z.string().url()),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: opt(z.string().min(10)),

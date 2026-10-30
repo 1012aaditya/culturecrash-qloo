@@ -20,8 +20,6 @@ import { loadKnown, storeItem, type Known } from "./store";
 export type ClaimedJob = { id: string; watch_id: string; workspace_id: string; attempts?: number; run_key?: string };
 export type JobOutcome = { status: "completed" | "partially_completed" | "failed"; found: number; added: number; error: string | null; retryable: boolean };
 
-/** Searches running at once within one job (each spends most of its time waiting on the provider). */
-const SEARCH_CONCURRENCY = 4;
 const TIME_LIMIT = "Stopped at the time limit; the rest runs next time.";
 
 /** Resolves to the promise's value, or null if it hasn't settled within `ms` (the promise is then abandoned). */
@@ -109,7 +107,7 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
 
   // Searches wait on the network, so a few run at once. First pages first: a second page only runs when its
   // first page came back full.
-  const run = (list: WatchTask[]) => pool(list, SEARCH_CONCURRENCY, async (task) => {
+  const run = (list: WatchTask[]) => pool(list, env().WATCH_SEARCH_CONCURRENCY, async (task) => {
     if (stop) return;
     if (task.afterFull && !full.has(task.afterFull)) return; // page 1 wasn't full: no page 2
     if (Date.now() > deadline) { stop = TIME_LIMIT; return; }

@@ -41,6 +41,11 @@ const schema = z.object({
   WATCH_BACKFILL_DAYS: z.coerce.number().int().min(0).max(60).default(30),
   // A single Watch search (cache, budget, provider call, save) that takes longer than this is given up on.
   WATCH_TASK_TIMEOUT_MS: z.coerce.number().int().min(1000).default(60_000),
+  // Parallelism. Heavy parallelism through Supabase's transaction pooler stalled live (30 Oct): a
+  // transaction began and never sent its next statement. Defaults stay close to the daily check, which
+  // runs fine there; raise them only where the database connection is direct.
+  WATCH_SEARCH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+  WATCH_HISTORY_WORKERS: z.coerce.number().int().min(1).max(4).default(1),
   REDDIT_CLIENT_ID: opt(z.string().min(8)),
   REDDIT_CLIENT_SECRET: opt(z.string().min(8)),
   // Reddit requires approval for commercial use of its Data API; set to "approved" only once granted.

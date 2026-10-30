@@ -73,7 +73,7 @@ export async function runWatchCron(opts: { now?: Date; budgetMs?: number; dispat
 }
 
 /** Workers that load a watch's history in parallel inside one request (each history chunk takes about 100 s). */
-export async function runHistoryWorkers(count = 3) {
+export async function runHistoryWorkers(count = env().WATCH_HISTORY_WORKERS) {
   await Promise.allSettled(Array.from({ length: count }, () => runWatchWorker({ budgetMs: 270_000 })));
 }
 

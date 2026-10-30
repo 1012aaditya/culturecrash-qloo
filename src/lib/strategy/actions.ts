@@ -3,7 +3,7 @@
 import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
+import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError, NO_IDS_IN_PROSE, stripEvidenceIds } from "@/lib/ai";
 import { latestCompletedRun, readObservations } from "@/lib/ai/context";
 import {
   comparisonSchema, creativeBriefSchema, CREATIVE_SECTIONS, directionSchema, opportunitiesSchema, redTeamCritiqueSchema, sectionRevisionSchema, strategySchema,
@@ -136,17 +136,25 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
   let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
   if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
-      const r = await generateStructured({
-        schema: strategySchema,
-        prompt: [
-          "Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence; cite evidence ids. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources.",
-          tag("brief", briefJson(input.brief)),
-          tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
-        ].join("\n\n"),
-      });
-      directions = r.data.directions.slice(0, 3);
-      generator = r.generator;
-      if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
+      // With thin evidence the model sometimes drops a direction (live: 2 of 3 attempts), so a short
+      // answer is retried once with a reminder before the action fails.
+      let returned = 3;
+      for (let attempt = 1; ; attempt++) {
+        const r = await generateStructured({
+          schema: strategySchema,
+          prompt: [
+            "Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence; cite evidence ids. If evidence is thin for a direction, still include it: set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources.",
+            ...(attempt > 1 ? [`Your previous answer contained ${returned} direction(s). Return exactly three; mark weakly supported ones exploratory rather than leaving them out.`] : []),
+            tag("brief", briefJson(input.brief)),
+            tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
+          ].join("\n\n"),
+        });
+        directions = r.data.directions.slice(0, 3);
+        generator = r.generator;
+        returned = r.data.directions.length;
+        if (directions.length === 3) break;
+        if (attempt === 2) throw new LLMError("The model did not return three directions", "invalid_output");
+      }
     } catch (e) {
       await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
       return { ok: false, error: llmMessage(e) };
@@ -300,9 +308,9 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
     try {
       const r = await generateStructured({
         schema: creativeBriefSchema,
-        prompt: ["Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'.", tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
+        prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. ${NO_IDS_IN_PROSE}`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
       });
-      content = r.data;
+      content = Object.fromEntries(Object.entries(r.data).map(([k, v]) => [k, stripEvidenceIds(v)])) as CreativeBriefContent;
       generator = r.generator;
     } catch (e) {
       await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
@@ -348,9 +356,9 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
     const r = await generateStructured({
       schema: sectionRevisionSchema,
       maxTokens: 4000,
-      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text.`, tag("evidence", JSON.stringify(cb.content)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
+      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text. ${NO_IDS_IN_PROSE}`, tag("evidence", JSON.stringify(cb.content)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
     });
-    return { ok: true, data: { text: r.data.text } };
+    return { ok: true, data: { text: stripEvidenceIds(r.data.text) } };
   } catch (e) {
     return { ok: false, error: llmMessage(e) };
   }

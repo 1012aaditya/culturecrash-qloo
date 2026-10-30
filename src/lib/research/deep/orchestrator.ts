@@ -6,9 +6,9 @@ import { loadBrief } from "@/lib/data/briefs";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { env } from "@/lib/env";
 import { ensureChunks, searchBrandDocs } from "./brand-docs";
-import { Budget, DEPTH_PROFILES, llmCostUsd, type BudgetLimits } from "./budget";
+import { Budget, DEPTH_PROFILES, llmCostUsd, WEB_TIME_SHARE, type BudgetLimits } from "./budget";
 import { cacheGet, cacheKey, cachePut } from "./cache";
-import { dedupe, independentCount, isRepeatQuery, mergeClaims, tokens } from "./dedupe";
+import { dedupe, independentCount, isRepeatQuery, mergeClaims, takeAcrossQuestions, tokens } from "./dedupe";
 import { extractionPrompt, extractionSchema, rulesExtraction, validateExtraction, type ExtractDoc } from "./extract";
 import { fetchPage } from "./fetch-page";
 import { buildPlanV2, countryCode, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan } from "./planner";
@@ -128,6 +128,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       affinity: r.affinity === null ? null : Number(r.affinity), popularity: r.popularity === null ? null : Number(r.popularity), tier: r.tier,
     })))) : [];
   const qlooPicks = pickQlooEntities(qlooRows, QLOO_PICKS[depth]);
+  budget.ensureSecondsLeft(limits.maxSeconds * WEB_TIME_SHARE);
   await save({ stage: "planning" });
 
   const useLlm = !isDemo && (await llmEnabled(userId, ws));
@@ -314,8 +315,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   }
 
   async function extractClaims(newDocs: Doc[], questions: ResearchQuestion[], llmOn: boolean) {
-    // Only the most relevant new documents go to extraction, within the per-job cap.
-    const batchDocs = newDocs.slice(0, Math.max(0, limits.maxDocsToModel - docsSentToModel));
+    // Only the most relevant new documents go to extraction, within the per-job cap, shared across questions.
+    const batchDocs = takeAcrossQuestions(newDocs, Math.max(0, limits.maxDocsToModel - docsSentToModel));
     docsSentToModel += batchDocs.length;
     const drafts: { draft: ClaimDraft; batch: Doc[]; method: string }[] = [];
     for (const batch of sleepless(batchDocs, 6)) {

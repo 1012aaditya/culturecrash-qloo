@@ -16,6 +16,9 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   const [run] = await tx`select * from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
   const entities = run ? await tx`select name, entity_type, role, affinity, popularity from cultural_entities where run_id = ${run.id} and role <> 'seed' order by affinity desc nulls last` : [];
   const sources = run ? await tx`select endpoint, params, status, http_status, result_count, retrieved_at from research_sources where run_id = ${run.id} order by retrieved_at` : [];
+  // The signals actually sent to Qloo: brief names that Qloo did not match are not signals.
+  const seeds = run ? await tx`select name, properties->>'query' as query, properties->>'kind' as kind from cultural_entities where run_id = ${run.id} and role = 'seed' order by retrieved_at, name` : [];
+  const [{ docs: externalDocs }] = run ? await tx`select count(*)::int as docs from research_documents where run_id = ${run.id}` : [{ docs: 0 }];
   const evidence = await tx`select id, evidence_type, claim, source_provider, source_ref, source_url, retrieved_at, normalized_value, review_status, is_demo from evidence_items
     where project_id = ${projectId} and (run_id = ${run?.id ?? null} or run_id is null) order by (evidence_type = 'approved_conclusion') desc, normalized_value desc nulls last limit 60`;
   const opps = await tx`select title, description, why_it_matters, unknowns, validation_step, status, generator, evidence_ids from opportunities where project_id = ${projectId} and status <> 'dismissed' order by (status = 'saved') desc limit 8`;
@@ -46,7 +49,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
     ...(!run ? ["No completed research run: this report contains no provider data."] : []),
     ...(dirs.some((d) => d.is_exploratory) ? ["One or more positioning directions are marked exploratory because evidence is limited."] : []),
     ...(isDemo ? ["This report includes DEMONSTRATION DATA built from fixture records. It must not be presented as research."] : []),
-    "No public-web research provider was configured; external sources are limited to those entered manually.",
+    ...(run && externalDocs === 0 ? ["No external sources (web, video, community or client documents) were retrieved in this research run; external evidence is limited to sources entered manually."] : []),
   ];
 
   return {
@@ -69,7 +72,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
     },
     methodology: run ? {
       question: run.question as string, mode: run.mode as "live" | "demo", provider: run.provider as string, runAt: new Date(run.created_at).toISOString(), briefRevision: run.brief_revision as number | null,
-      signals: plan?.seedQueries.map((s) => s.query) ?? [], location: plan?.location ?? null, requests: sources.length, failedRequests: sources.filter((s) => s.status === "error").length,
+      signals: seeds.map((s) => (s.query && s.query !== s.name ? `${s.name} (${s.kind ?? "brief"} “${s.query}”)` : (s.name as string))), location: plan?.location ?? null, requests: sources.length, failedRequests: sources.filter((s) => s.status === "error").length,
       interpretationBy: generatorLabel(run.interpretation_generator), notes: plan?.notes ?? [],
     } : null,
     landscape: [...byType.entries()].map(([type, items]) => ({ type, items: items.slice(0, 8) })),

@@ -124,15 +124,24 @@ policies because only the server writes to it.
    belong to:
    `bucket_id = 'brief-documents' and public.is_workspace_member(((storage.foldername(name))[1])::uuid)`.
    Without the bucket, uploads still work: extracted text is saved and the UI notes that the original file
-   was not stored.
+   was not stored. With the bucket, the browser uploads files straight to Storage through a one-time
+   signed URL (Vercel limits a function request to 4.5 MB), and migration `…20261031000600_brief_storage.sql`
+   (applied with the others) allows image uploads and lets uploaders delete their own files.
 4. Environment: `DATABASE_URL` (the transaction pooler on port 6543 is fine — prepared statements are
    disabled), `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
    `APP_BASE_URL`.
+5. Turn off the auto-generated REST API. The app talks to Postgres directly and never uses it, but it is
+   on by default and would let anyone with the public anon key and a login skip the app's permission
+   checks. Migration `…20261031000100_security_hardening.sql` already makes every Data API request fail (a
+   `pgrst.db_pre_request` hook); also remove `public` under **Settings → API → Exposed schemas** (or turn
+   the Data API off) in the dashboard.
 
 ## Configure providers
 
 - **Qloo**: `QLOO_API_KEY` and `QLOO_API_URL` (hackathon keys use `https://hackathon.api.qloo.com`). Then
-  run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`.
+  run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`. **Licence:** `QLOO_API_URL` defaults
+  to the hackathon host. Hackathon keys are not for commercial use: before charging customers, get a
+  commercial Qloo agreement and set `QLOO_API_URL` to the host Qloo gives you.
 - **LLM**: `ANTHROPIC_API_KEY`; `LLM_MODEL` defaults to `claude-opus-5-5`.
 - **Email** (optional): `RESEND_API_KEY`, `EMAIL_FROM` (a sender on a domain verified in Resend) and
   `PILOT_NOTIFY_EMAIL` (where /pricing pilot requests are forwarded). Sends team invitations, plus "research
@@ -146,6 +155,9 @@ policies because only the server writes to it.
   `REDDIT_COMMERCIAL_ACCESS=approved` (only once Reddit has approved commercial use). Wikipedia and
   client documents need nothing. Check them with `npx tsx --env-file=.env.local scripts/research-smoke.ts`.
   Workspaces can turn web research off in Settings → Integrations.
+- **Spending ceiling**: `PLATFORM_SPEND_CAP_USD` caps estimated research spend across **all** workspaces per
+  calendar month. Every workspace uses this server's provider keys, so set it before opening signup; once
+  it is reached, live research pauses (demo runs still work). Live research also requires a confirmed email.
 - **Billing**: not configured. Plans are pilot-only and no payment flow exists.
 
 ## Deploy (Vercel)

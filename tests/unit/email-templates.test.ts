@@ -3,11 +3,11 @@ import { invitationEmail, pilotRequestEmail, researchFinishedEmail } from "@/lib
 
 describe("email templates", () => {
   it("escapes user-supplied values in HTML", () => {
-    const m = invitationEmail({ to: "a@b.test", workspace: "<script>x</script>", inviter: "Ann & Co", role: "member", added: false });
+    const m = invitationEmail({ to: "a@b.test", workspace: "<script>x</script>", inviter: "Ann & Co", role: "member" });
     expect(m.html).not.toContain("<script>x</script>");
     expect(m.html).toContain("&lt;script&gt;");
     expect(m.html).toContain("Ann &amp; Co");
-    expect(m.text).toContain("/signup");
+    expect(m.text).toContain("accept the invitation");
   });
 
   it("labels demo runs and links to the run", () => {

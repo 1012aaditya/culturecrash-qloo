@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getSessionUser } from "@/lib/auth/session";
+import { getPollingUser } from "@/lib/auth/session";
 import { withUser } from "@/lib/db";
 import { isUuid } from "@/lib/data/projects";
 
@@ -16,11 +16,11 @@ export type PresencePeer = { userId: string; name: string; page: string; field: 
 
 /**
  * Heartbeat + read in one request: records where the caller is (page and focused field)
- * and returns the other people active on this project in the last 30 seconds.
+ * and returns the other people active on this project in the last 45 seconds.
  * RLS scopes both the write (own row, own workspace) and the read (workspace members).
  */
 export async function POST(req: Request, { params }: RouteContext<"/api/projects/[projectId]/presence">) {
-  const user = await getSessionUser();
+  const user = await getPollingUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { projectId } = await params;
   if (!isUuid(projectId)) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -35,12 +35,15 @@ export async function POST(req: Request, { params }: RouteContext<"/api/projects
       await tx`delete from presence where user_id = ${user.id} and project_id = ${projectId}`;
       return [];
     }
+    // Only write when something changed or the row is going stale: most beats are reads.
     await tx`insert into presence (user_id, project_id, workspace_id, page, field, updated_at)
       values (${user.id}, ${projectId}, ${p.workspace_id}, ${page}, ${field}, now())
-      on conflict (user_id, project_id) do update set page = excluded.page, field = excluded.field, updated_at = now()`;
+      on conflict (user_id, project_id) do update set page = excluded.page, field = excluded.field, updated_at = now()
+      where presence.page is distinct from excluded.page or presence.field is distinct from excluded.field
+        or presence.updated_at < now() - interval '25 seconds'`;
     return tx`select pr.user_id, coalesce(pf.full_name, pf.email) as name, pr.page, pr.field, pr.updated_at
       from presence pr join profiles pf on pf.id = pr.user_id
-      where pr.project_id = ${projectId} and pr.user_id <> ${user.id} and pr.updated_at > now() - interval '30 seconds'
+      where pr.project_id = ${projectId} and pr.user_id <> ${user.id} and pr.updated_at > now() - interval '45 seconds'
       order by pr.updated_at desc limit 12`;
   });
   if (peers === null) return NextResponse.json({ error: "not found" }, { status: 404 });

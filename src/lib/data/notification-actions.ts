@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { safeInternalPath } from "@/lib/safe-path";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { withUser } from "@/lib/db";
@@ -28,5 +29,5 @@ export async function openNotificationAction(id: string) {
     (await cookies()).set(WORKSPACE_COOKIE, n.workspace_id, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
   }
   revalidatePath("/", "layout");
-  redirect(typeof n.href === "string" && n.href.startsWith("/") && !n.href.startsWith("//") ? n.href : "/dashboard");
+  redirect(safeInternalPath(n.href));
 }

@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Comments } from "@/components/evidence/comments";
 import { ExperimentForm } from "@/components/experiments/experiment-form";
-import { AddVariantForm, InterpretationForm, RecordResultForm } from "@/components/experiments/results";
+import { AddVariantForm, ImportCsvForm, InterpretationForm, RecordResultForm } from "@/components/experiments/results";
 import { Badge } from "@/components/ui/badge";
 import { Surface } from "@/components/ui/surface";
 import { withUser } from "@/lib/db";
 import { getProjectContext } from "@/lib/data/project-context";
 import { isUuid } from "@/lib/data/projects";
+import { compareArms, MIN_EXPOSURES, type Arm, type Comparison } from "@/lib/experiments/stats";
 import { can } from "@/lib/permissions";
 import { formatDate, formatDateTime } from "@/lib/utils";
 
@@ -35,6 +36,17 @@ export default async function ExperimentPage({ params }: PageProps<"/projects/[p
   const primary = results.filter((r) => r.metric === x.primary_metric && r.variant_id);
   const max = Math.max(...primary.map((r) => Math.abs(Number(r.value))), 0);
   const randomised = /random|a\/b|split/i.test(x.method ?? "");
+  // Rate results on the primary metric, summed per variant, compared with the control.
+  const arms = new Map<string, Arm & { control: boolean }>();
+  for (const r of results.filter((r) => r.metric === x.primary_metric && r.variant_id && r.successes !== null && r.sample_size)) {
+    const v = variants.find((vv) => vv.id === r.variant_id);
+    const a = arms.get(r.variant_id) ?? { label: r.label as string, successes: 0, exposures: 0, control: Boolean(v?.is_control) };
+    a.successes += Number(r.successes);
+    a.exposures += Number(r.sample_size);
+    arms.set(r.variant_id, a);
+  }
+  const control = [...arms.values()].find((a) => a.control);
+  const comparisons: Comparison[] = control ? [...arms.values()].filter((a) => a !== control).map((a) => compareArms(control, a)) : [];
   return (
     <div className="grid gap-6 lg:grid-cols-[1.35fr_1fr]">
       <div className="space-y-6">
@@ -63,7 +75,9 @@ export default async function ExperimentPage({ params }: PageProps<"/projects/[p
           <h2 className="cc-eyebrow text-muted">Observed results</h2>
           {results.length === 0 ? <p className="mt-3 text-[13px] text-muted">No results recorded. Nothing about this hypothesis is known yet.</p> : (
             <>
-              {primary.length > 0 && max > 0 && (
+              {comparisons.length > 0 && <ResultsReading comparisons={comparisons} metric={x.primary_metric} threshold={x.decision_threshold} />}
+              {arms.size > 0 && !control && <p className="mt-3 rounded-cc-sm bg-ivory p-3 text-[12px] text-muted">Mark one variant as the control to compare the others against it.</p>}
+              {primary.length > 0 && max > 0 && comparisons.length === 0 && (
                 <figure className="mt-4" aria-label={`${x.primary_metric} by variant`}>
                   <figcaption className="mb-2 text-[12px] text-muted">{x.primary_metric} by variant (observed)</figcaption>
                   <ul className="space-y-2">
@@ -88,7 +102,12 @@ export default async function ExperimentPage({ params }: PageProps<"/projects/[p
               </p>
             </>
           )}
-          {canEdit && (<div className="mt-6 border-t border-line pt-5"><h3 className="mb-3 text-[13px] font-medium">Record a result</h3><RecordResultForm experimentId={experimentId} variants={variants.map((v) => ({ id: v.id, label: v.label }))} metrics={metrics} /></div>)}
+          {canEdit && (
+            <div className="mt-6 space-y-5 border-t border-line pt-5">
+              <div><h3 className="mb-2 text-[13px] font-medium">Import from an ad platform</h3><ImportCsvForm experimentId={experimentId} variants={variants.map((v) => v.label)} /></div>
+              <div><h3 className="mb-3 text-[13px] font-medium">Record a result by hand</h3><RecordResultForm experimentId={experimentId} variants={variants.map((v) => ({ id: v.id, label: v.label }))} metrics={metrics} /></div>
+            </div>
+          )}
         </Surface>
       </div>
       <div className="space-y-6">
@@ -100,6 +119,7 @@ export default async function ExperimentPage({ params }: PageProps<"/projects/[p
           <Surface className="p-6">
             <details>
               <summary className="cursor-pointer text-[13px] font-medium">Edit experiment design</summary>
+              {x.design_locked_at && <p className="mt-3 rounded-cc-sm bg-ivory p-3 text-[12px] text-muted">Locked since the first result ({formatDate(x.design_locked_at)}): the hypothesis, method, primary metric and decision threshold can no longer change, so results can&rsquo;t rewrite the question. Name, timeline and status can still be edited.</p>}
               <div className="mt-4">
                 <ExperimentForm projectId={projectId} experimentId={experimentId} directions={dirs.map((d) => ({ id: d.id, name: d.name }))} initial={{
                   name: x.name, hypothesis: x.hypothesis, rationale: x.rationale ?? "", directionId: x.direction_id ?? "", audience: x.audience ?? "", method: x.method ?? "", primaryMetric: x.primary_metric,
@@ -112,5 +132,39 @@ export default async function ExperimentPage({ params }: PageProps<"/projects/[p
         <Surface className="p-6"><Comments projectId={projectId} targetType="experiment" targetId={experimentId} path={`/projects/${projectId}/experiments/${experimentId}`} canComment={can(ctx.workspace.role, "comment.create")} comments={comments.map((c) => ({ id: c.id, body: c.body, author: c.author ?? "Someone", createdAt: new Date(c.created_at).toISOString() }))} /></Surface>
       </div>
     </div>
+  );
+}
+
+const VERDICT_LABEL: Record<Comparison["verdict"], { label: string; tone: "success" | "danger" | "outline" | "peach" }> = {
+  variant_better: { label: "Variant ahead", tone: "success" },
+  variant_worse: { label: "Variant behind", tone: "danger" },
+  no_clear_difference: { label: "No clear difference yet", tone: "outline" },
+  too_little_data: { label: "Too little data", tone: "peach" },
+};
+const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
+const pts = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)} pts`;
+
+/** What the recorded rates say, variant by variant against the control, in plain words. */
+function ResultsReading({ comparisons, metric, threshold }: { comparisons: Comparison[]; metric: string; threshold: string | null }) {
+  return (
+    <section className="mt-4 space-y-3" aria-label="What the results say">
+      <h3 className="text-[13px] font-medium">What the results say · {metric}</h3>
+      {comparisons.map((c) => (
+        <div key={c.variant} className="rounded-cc-md border border-line bg-paper p-4 text-[13px]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-medium">{c.variant} <span className="font-normal text-muted">vs {c.control}</span></p>
+            <Badge tone={VERDICT_LABEL[c.verdict].tone}>{VERDICT_LABEL[c.verdict].label}</Badge>
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-[12px] sm:grid-cols-4">
+            <div><dt className="text-muted">Control rate</dt><dd className="tabular-nums">{pct(c.controlRate)}</dd></div>
+            <div><dt className="text-muted">Variant rate</dt><dd className="tabular-nums">{pct(c.variantRate)}</dd></div>
+            <div><dt className="text-muted">Difference (95% range)</dt><dd className="tabular-nums">{pts(c.difference)} <span className="text-muted">({pts(c.ci95[0])} to {pts(c.ci95[1])})</span></dd></div>
+            <div><dt className="text-muted">Relative lift</dt><dd className="tabular-nums">{c.lift === null ? "—" : `${c.lift >= 0 ? "+" : ""}${(c.lift * 100).toFixed(1)}%`}</dd></div>
+          </dl>
+          <p className="mt-3 text-[12px] leading-relaxed text-muted">{c.reason}</p>
+        </div>
+      ))}
+      <p className="text-[11px] text-faint">Two-sided two-proportion test at 95% confidence; a comparison is only called once each group has at least {MIN_EXPOSURES} exposures and 10 successes and failures.{threshold ? ` Your pre-agreed decision rule: “${threshold}”.` : ""}</p>
+    </section>
   );
 }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,11 @@ const links = [
   { href: "/pricing", label: "Pricing" },
 ];
 
-export function SiteNav({ signedIn }: { signedIn: boolean }) {
+const signedInHint = () => document.cookie.split("; ").includes("cc_signed_in=1");
+
+export function SiteNav() {
+  // Static pages render signed-out; the browser then reads the hint cookie the proxy keeps current.
+  const signedIn = useSyncExternalStore(() => () => {}, signedInHint, () => false);
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [prevPath, setPrevPath] = useState(pathname);

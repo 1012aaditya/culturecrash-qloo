@@ -60,6 +60,8 @@ export type Hit = {
   snippet: string;
   publisher: string | null;
   publishedAt: string | null;   // ISO, only when the provider supplied one
+  /** How precise publishedAt is; "approximate" when derived from text like "2 days ago". Unset = exact. */
+  publishedPrecision?: "exact" | "day" | "approximate";
   language: string | null;
   metrics: Record<string, number>;   // e.g. views, upvotes — only what the provider returned
   usageRestrictions: string | null;

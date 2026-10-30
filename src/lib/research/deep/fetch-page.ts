@@ -20,15 +20,27 @@ const MAX_TEXT = 20_000;
 const robotsCache = new Map<string, { at: number; disallow: string[] }>();
 
 /** Minimal robots.txt check for the "*" group (and our UA token). Missing robots.txt allows. */
-export async function robotsAllows(url: URL, fetcher: Fetcher): Promise<boolean> {
+export async function robotsAllows(url: URL, fetcher: Fetcher, resolve?: Parameters<typeof assertPublicUrl>[1]): Promise<boolean> {
   const key = url.origin;
   let entry = robotsCache.get(key);
   if (!entry || Date.now() - entry.at > 3_600_000) {
     const disallow: string[] = [];
     try {
-      const res = await fetcher(`${url.origin}/robots.txt`, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(4000), redirect: "follow" });
-      if (res.ok) disallow.push(...parseRobots(await res.text()));
-      else await res.body?.cancel();
+      // Redirects are followed by hand so every hop passes the same public-address check as the page.
+      let target = `${url.origin}/robots.txt`;
+      for (let hop = 0; hop < 3; hop++) {
+        const u = await assertPublicUrl(target, resolve);
+        const res = await fetcher(u.toString(), { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(4000), redirect: "manual" });
+        const location = res.headers.get("location");
+        if (res.status >= 300 && res.status < 400 && location) {
+          await res.body?.cancel();
+          target = new URL(location, u).toString();
+          continue;
+        }
+        if (res.ok) disallow.push(...parseRobots(await res.text()));
+        else await res.body?.cancel();
+        break;
+      }
     } catch {
       // unreachable robots.txt: treat as no restrictions, the page fetch will fail on its own if the host is down
     }
@@ -100,7 +112,7 @@ export async function fetchPage(url: string, opts: { fetcher?: Fetcher; resolve?
   try {
     for (let hop = 0; hop < 4; hop++) {
       const u = await assertPublicUrl(current, opts.resolve);
-      if (hop === 0 && !(await robotsAllows(u, fetcher))) {
+      if (hop === 0 && !(await robotsAllows(u, fetcher, opts.resolve))) {
         return { ...base, status: "blocked_by_robots", finalUrl: current, error: "Disallowed by robots.txt", durationMs: Date.now() - started };
       }
       const res = await fetcher(u.toString(), { headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml,text/plain;q=0.8" }, redirect: "manual", signal: AbortSignal.timeout(9000) });

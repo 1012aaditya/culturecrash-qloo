@@ -71,21 +71,11 @@ export function ExportData() {
   );
 }
 
-export function DeleteAccount({ email, mode, blocking }: { email: string; mode: "local" | "supabase"; blocking: { name: string; members: number }[] }) {
+export function DeleteAccount({ email, blocking }: { email: string; blocking: { name: string; members: number }[] }) {
   const [open, setOpen] = React.useState(false);
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [pending, start] = React.useTransition();
-
-  if (mode !== "local") {
-    return (
-      <p className="rounded-cc-sm border border-line bg-paper p-4 text-[13px] leading-relaxed text-muted">
-        In this deployment accounts are managed by Supabase Auth. Self-service deletion isn’t available yet: export your data above, then ask
-        a workspace administrator to delete your user in the Supabase dashboard (Authentication → Users). Deleting the user removes your
-        profile and memberships; workspace records you created remain with their workspace.
-      </p>
-    );
-  }
 
   return (
     <div className="space-y-3">

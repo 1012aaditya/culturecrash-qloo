@@ -27,6 +27,7 @@ export function ClientHeader({ client, eyebrow, actions }: { client: { id: strin
           tabs={[
             { href: `/workspace/clients/${client.id}`, label: "Client workspace", exact: true },
             { href: `/workspace/clients/${client.id}/brand`, label: "Brand memory" },
+            { href: `/workspace/clients/${client.id}/watch`, label: "Watch" },
           ]}
         />
       </div>

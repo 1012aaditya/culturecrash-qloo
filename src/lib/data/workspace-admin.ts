@@ -67,9 +67,19 @@ export async function listInvitations(ctx: Ctx): Promise<Invitation[]> {
     const rows = await tx`
       select i.id, i.email, i.role, i.created_at, coalesce(p.full_name, p.email) as invited_by
       from workspace_invitations i left join profiles p on p.id = i.invited_by
-      where i.workspace_id = ${ctx.workspace.workspaceId} and i.accepted_at is null and i.revoked_at is null
+      where i.workspace_id = ${ctx.workspace.workspaceId} and i.accepted_at is null and i.revoked_at is null and i.declined_at is null
       order by i.created_at desc`;
     return rows.map((r) => ({ id: r.id, email: r.email, role: r.role, invitedBy: r.invited_by, createdAt: iso(r.created_at)! }));
+  });
+}
+
+export type MyInvitation = { id: string; workspaceName: string; role: Role; invitedBy: string | null; createdAt: string };
+
+/** Invitations addressed to the signed-in user's confirmed email, waiting for them to accept. */
+export async function listMyInvitations(ctx: Ctx): Promise<MyInvitation[]> {
+  return withUser(ctx.user.id, async (tx) => {
+    const rows = await tx`select id, workspace_name, role, invited_by, created_at from public.my_pending_invitations()`;
+    return rows.map((r) => ({ id: r.id, workspaceName: r.workspace_name, role: r.role, invitedBy: r.invited_by, createdAt: iso(r.created_at)! }));
   });
 }
 

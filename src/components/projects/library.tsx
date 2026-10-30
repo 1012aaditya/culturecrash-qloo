@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/field";
 import { currentStage, stageStates, type ProjectSummary } from "@/lib/progress";
 import { STAGES } from "@/lib/stages";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { ProjectActions } from "./project-actions";
 import { StageDots } from "./stage-dots";
 

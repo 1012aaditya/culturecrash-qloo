@@ -52,7 +52,7 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
         projectId,
         context: [
           tag("brief", JSON.stringify({ name: gathered.brief.name, brand: gathered.brief.brand, category: gathered.brief.category, market: gathered.brief.market, audience: gathered.brief.audience, objective: gathered.brief.objective, competitors: gathered.brief.competitors, interests: gathered.brief.interests ?? [] })),
-          tag("evidence", JSON.stringify({ topObservations: top.map((o) => ({ id: o.id, entity: o.entityName, type: o.entityType, affinity: o.affinity, role: o.role })), totalObservations: gathered.observations.length, directions: gathered.dirs.map((d) => d.name), opportunities: gathered.opps })),
+          tag("evidence", JSON.stringify({ topObservations: top.map((o) => ({ id: o.id, text: o.claim.slice(0, 280), entity: o.entityName, type: o.entityType, affinity: o.affinity, role: o.role })), totalObservations: gathered.observations.length, directions: gathered.dirs.map((d) => d.name), opportunities: gathered.opps })),
         ].join("\n\n"),
         question: tag("user_request", JSON.stringify({ previous: gathered.history, question })),
       });

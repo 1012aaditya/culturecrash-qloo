@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { FileText } from "lucide-react";
-import { NewReport } from "@/components/reports/report-controls";
+import { NewReport, PitchPackButton } from "@/components/reports/report-controls";
 import { DemoBadge, EmptyState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { withUser } from "@/lib/db";
@@ -21,13 +21,19 @@ export default async function ReportsPage({ params, searchParams }: PageProps<"/
     (select count(*) from shared_report_links l join report_versions v on v.id = l.report_version_id where v.report_id = r.id and l.revoked_at is null and (l.expires_at is null or l.expires_at > now()))::int as shares
     from reports r left join profiles p on p.id = r.created_by where r.project_id = ${projectId} order by r.updated_at desc`);
   const canCreate = can(ctx.workspace.role, "report.create");
+  const hasObjections = (await withUser(ctx.user.id, (tx) => tx`select 1 from strategy_critiques where project_id = ${projectId} limit 1`)).length > 0;
   return (
     <div>
       <div className="mb-10 grid gap-6 md:grid-cols-[1.3fr_1fr] md:items-end">
         <div><p className="cc-eyebrow text-muted">05 · Track · Reports</p><h1 className="cc-display mt-3 text-5xl md:text-6xl">Deliverables with their working shown.</h1></div>
         <div className="space-y-3 md:justify-self-end">
           <p className="max-w-md text-[14px] text-muted">Every report is a versioned snapshot tied to the research run and strategy version it was built from.</p>
-          {canCreate && <NewReport projectId={projectId} defaultTitle={`${project.name} — cultural strategy`} defaultOpen={sp.new === "1"} />}
+          {canCreate && (
+            <div className="flex flex-wrap gap-2">
+              <NewReport projectId={projectId} defaultTitle={`${project.name} — cultural strategy`} defaultOpen={sp.new === "1"} />
+              <PitchPackButton projectId={projectId} projectName={project.name} hasObjections={hasObjections} />
+            </div>
+          )}
         </div>
       </div>
       {reports.length === 0 ? <EmptyState icon={FileText} title="No reports yet" body="Generate a report to package the brief, research, opportunities, strategy and experiment plan with citations." /> : (

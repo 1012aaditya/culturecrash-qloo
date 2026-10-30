@@ -36,12 +36,12 @@ export default async function StrategyPage({ params, searchParams }: PageProps<"
           <div className="flex flex-wrap gap-2">
             {canEdit && <GenerateButton action={generateStrategyAction.bind(null, projectId)} label={s.current ? "Generate new version" : "Generate three directions"} pendingLabel="Drafting directions…" successTitle="Strategy directions generated" />}
             {s.current && <CompareLink projectId={projectId} />}
-            {s.current && <RedTeamButton projectId={projectId} versionId={s.current.id} />}
+            {s.current && <RedTeamButton projectId={projectId} versionId={s.current.id} llm={llm} canEdit={canEdit} saved={s.critique} />}
             {project.hasSelectedDirection && (project.creativeBriefCount > 0
               ? <Button asChild variant="soft"><Link href={`/projects/${projectId}/creative-brief`}>Open creative brief <ArrowRight /></Link></Button>
               : canEdit && <GenerateButton variant="accent" action={generateCreativeBriefAction.bind(null, projectId)} label="Generate creative brief" pendingLabel="Writing brief…" successTitle="Creative brief created" />)}
           </div>
-          {!llm && <p className="text-[11px] text-faint">No LLM configured: drafts are produced by the template engine from the brief and stored evidence, and are labelled as such.</p>}
+          {!llm && <p className="text-[11px] text-faint">No LLM configured: the studio drafts labelled scaffolds from the brief and stored evidence — starting points for your team to write, not finished directions.</p>}
         </div>
       </div>
       {s.versions.length > 1 && (

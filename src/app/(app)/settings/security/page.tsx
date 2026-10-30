@@ -46,7 +46,7 @@ export default async function SecuritySettingsPage({ searchParams }: PageProps<"
         title="Delete account"
         description="Permanently removes your account. You can’t delete it while you are the only owner of a workspace that has other members."
       >
-        <DeleteAccount email={ctx.user.email} mode={mode} blocking={blocking.map((b) => ({ name: b.name, members: b.members }))} />
+        <DeleteAccount email={ctx.user.email} blocking={blocking.map((b) => ({ name: b.name, members: b.members }))} />
       </SettingsSection>
 
       <SettingsSection title="How your data is protected" description="What this deployment enforces today.">

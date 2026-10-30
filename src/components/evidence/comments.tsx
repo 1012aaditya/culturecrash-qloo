@@ -7,7 +7,6 @@ import { addCommentAction } from "@/lib/data/evidence-actions";
 import { Avatar } from "@/components/nav/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/field";
-import { timeAgo } from "@/lib/utils";
 
 export function Comments({ projectId, targetType, targetId, comments, canComment, path }: {
   projectId: string; targetType: "evidence" | "direction" | "opportunity" | "experiment"; targetId: string; path: string; canComment: boolean;

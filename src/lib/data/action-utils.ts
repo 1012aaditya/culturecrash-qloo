@@ -23,6 +23,8 @@ export function friendly(error: unknown, fallback = "Something went wrong while 
   if (/must keep at least one owner/i.test(msg)) {
     return { ok: false, error: "A workspace must keep at least one owner. Make someone else an owner first." };
   }
+  // Limits raised by the database carry a message written for people (e.g. "You can own at most three workspaces.").
+  if (e?.code === "54000" && msg) return { ok: false, error: msg };
   if (e?.code === "42501") return { ok: false, error: "Your workspace role does not allow this change." };
   if (e?.code === "23505") return { ok: false, error: "That already exists." };
   if (e?.code === "23514" || e?.code === "22023") return { ok: false, error: "That value is not allowed." };

@@ -11,13 +11,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
+import { ClaimList, GroundingScore, type Receipt, type ReceiptClaim } from "@/components/evidence/evidence-receipt";
 import { EVIDENCE_LABEL } from "@/lib/evidence-labels";
 import { setOpportunityStatusAction } from "@/lib/strategy/actions";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export type Opp = {
   id: string; title: string; description: string; whyItMatters: string | null; unknowns: string | null; strategicUse: string | null; validationStep: string | null;
-  status: string; generator: string; generatorLabel: string; isDemo: boolean; evidence: { id: string; claim: string }[]; entityNames: string[]; linkedDirection: string | null;
+  status: string; generator: string; generatorLabel: string; isDemo: boolean; evidence: Receipt[]; claims: ReceiptClaim[]; entityNames: string[]; linkedDirection: string | null;
 };
 export type EvidenceItem = { id: string; type: string; claim: string; review: string; isDemo: boolean; value: number | null; createdAt: string };
 
@@ -68,12 +69,22 @@ export function OpportunityBoard({ projectId, opportunities, evidence, direction
                       <div key={k}><dt className="text-[11px] font-medium uppercase tracking-wider text-muted">{k}</dt><dd className="mt-1 leading-snug">{v}</dd></div>
                     ))}
                   </dl>
-                  <div>
-                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted">Supporting evidence ({o.evidence.length})</p>
-                    <ul className="mt-1.5 space-y-1">
-                      {o.evidence.slice(0, 4).map((e) => <li key={e.id}><Link href={`/projects/${projectId}/evidence/${e.id}`} className="line-clamp-1 text-[12px] text-ink/80 hover:text-violet">• {e.claim}</Link></li>)}
-                    </ul>
-                  </div>
+                  {o.claims.length > 0 ? (
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-muted">What this rests on</p>
+                        <GroundingScore claims={o.claims} />
+                      </div>
+                      <ClaimList className="mt-2 text-[13px] leading-snug" claims={o.claims} receipts={Object.fromEntries(o.evidence.map((e) => [e.id, e]))} projectId={projectId} />
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-wider text-muted">Supporting evidence ({o.evidence.length})</p>
+                      <ul className="mt-1.5 space-y-1">
+                        {o.evidence.slice(0, 4).map((e) => <li key={e.id}><Link href={`/projects/${projectId}/evidence/${e.id}`} className="line-clamp-1 text-[12px] text-ink/80 hover:text-violet">• {e.claim}</Link></li>)}
+                      </ul>
+                    </div>
+                  )}
                   <p className="text-[11px] text-faint">{o.generatorLabel}{o.linkedDirection && ` · linked to “${o.linkedDirection}”`}</p>
                   {canEdit && (
                     <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line pt-4">

@@ -29,7 +29,9 @@ export const getCtx = cache(async (): Promise<Ctx> => {
       select m.workspace_id, w.name, m.role, w.is_demo
       from workspace_members m join workspaces w on w.id = m.workspace_id
       where m.user_id = ${user.id}
-      order by w.is_demo, m.created_at`;
+      -- Without a saved preference, open a workspace with campaigns in it (an invited user's team
+      -- workspace) rather than an empty personal one; demo workspaces last.
+      order by w.is_demo, (exists (select 1 from projects p where p.workspace_id = w.id)) desc, m.created_at`;
     const [profile] = await tx<{ full_name: string | null; email: string; job_title: string | null }[]>`
       select full_name, email, job_title from profiles where id = ${user.id}`;
     const list: Membership[] = memberships.map((m) => ({

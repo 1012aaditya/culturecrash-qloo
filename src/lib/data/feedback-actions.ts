@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { withUser } from "@/lib/db";
+import { safeInternalPath } from "@/lib/safe-path";
 import { friendly, invalid, type Result } from "./action-utils";
 import { getCtx } from "./workspace";
 
@@ -14,7 +15,7 @@ const feedbackSchema = z.object({
     .max(300)
     .optional()
     .nullable()
-    .transform((v) => (v && v.startsWith("/") && !v.startsWith("//") ? v : null)),
+    .transform((v) => (v ? safeInternalPath(v, "") || null : null)),
 });
 
 /** Stores feedback for the product team. RLS: members insert their own rows only. */

@@ -310,7 +310,7 @@ function QlooFoundation({ seeds, picks, observed }: { seeds: string[]; picks: { 
         <ul className="mt-2 flex flex-wrap gap-1.5">
           {picks.map((p) => (
             <li key={p.entityId} className="rounded-full bg-paper px-2.5 py-1 text-[12px] shadow-card">
-              {p.name} <span className="text-muted">· {p.type}{p.affinity !== null ? ` · affinity ${p.affinity.toFixed(2)}` : ""}{p.tier === "white_space" ? " · white space" : ""}</span>
+              {p.name} <span className="text-muted">· {p.type}{p.affinity !== null ? ` · affinity ${p.affinity.toFixed(2)}` : ""}{p.tier === "white_space" ? " · leans to brand" : ""}</span>
             </li>
           ))}
         </ul>

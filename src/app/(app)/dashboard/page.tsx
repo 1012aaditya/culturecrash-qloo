@@ -9,7 +9,9 @@ import { DemoBadge, EmptyState } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle, Surface } from "@/components/ui/surface";
+import { PendingInvitations } from "@/components/workspace/pending-invitations";
 import { getDashboard } from "@/lib/data/dashboard";
+import { listMyInvitations } from "@/lib/data/workspace-admin";
 import { openDemoWorkspaceAction } from "@/app/(app)/actions";
 import { demoModeAllowed } from "@/lib/env";
 import { currentStage, listProjects, stageStates } from "@/lib/data/projects";
@@ -25,14 +27,17 @@ function greeting() {
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
+  const sp = await searchParams;
   const ctx = await getCtx();
-  const [projects, d] = await Promise.all([listProjects(ctx), getDashboard(ctx)]);
+  const [projects, d, invitations] = await Promise.all([listProjects(ctx), getDashboard(ctx), listMyInvitations(ctx)]);
   const canCreate = can(ctx.workspace.role, "project.create");
   const [featured, ...rest] = projects;
 
   return (
     <div className="mx-auto max-w-[1520px] px-4 pb-24 pt-8 sm:px-8">
+      <PendingInvitations invitations={invitations} />
+      {(sp.welcome === "1" || projects.length === 0) && canCreate && <FirstSteps />}
       <section className="grid gap-6 lg:grid-cols-[1fr_1.35fr] [&>*]:min-w-0">
         <div className="flex flex-col justify-between gap-8 py-4">
           <div>
@@ -198,5 +203,37 @@ export default async function DashboardPage() {
         <p className="mt-8 flex items-center gap-2 text-[12px] text-muted"><Sparkles className="size-3.5 text-violet" /> Counts and statuses on this page come from saved records only. <Link href="/help" className="inline-flex items-center gap-1 underline-offset-2 hover:underline">How CultureCrash labels evidence <ArrowRight className="size-3" /></Link></p>
       )}
     </div>
+  );
+}
+
+/** What a new workspace does first, plus a finished sample to look at before starting. */
+function FirstSteps() {
+  const steps = [
+    ["Write the brief", "Brand, audience, market and competitors. Upload brand guidelines if you have them."],
+    ["Run research", "Qloo maps what this audience is into; web, video and community sources explain why — every claim cited."],
+    ["Pick a direction", "Three positioning directions, stress-tested by the Devil’s Advocate, then a pitch pack to share."],
+  ];
+  return (
+    <section aria-label="Get started" className="mb-6 rounded-[28px] border border-line bg-paper p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="cc-eyebrow text-muted">Get started</p>
+          <h2 className="cc-display mt-2 text-3xl">Your first campaign, in three steps.</h2>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild><Link href="/projects/new"><Plus /> Start a campaign</Link></Button>
+          <Button asChild variant="outline"><Link href="/showcase">See a finished sample <ArrowRight /></Link></Button>
+        </div>
+      </div>
+      <ol className="mt-5 grid gap-3 md:grid-cols-3">
+        {steps.map(([title, body], i) => (
+          <li key={title} className="rounded-cc-md bg-ivory p-4">
+            <p className="font-mono text-[11px] text-faint">0{i + 1}</p>
+            <p className="mt-1 text-[14px] font-medium">{title}</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">{body}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

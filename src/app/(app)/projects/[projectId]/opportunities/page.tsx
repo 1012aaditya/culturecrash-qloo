@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { themeForCategory } from "@/components/art/plate";
 import { GenerateButton } from "@/components/strategy/generate-button";
+import type { ReceiptClaim } from "@/components/evidence/evidence-receipt";
 import { OpportunityBoard } from "@/components/strategy/opportunity-board";
 import { generatorLabel } from "@/lib/ai";
 import { withUser } from "@/lib/db";
@@ -17,11 +18,14 @@ export default async function OpportunitiesPage({ params, searchParams }: PagePr
   const data = await withUser(ctx.user.id, async (tx) => ({
     opps: await tx`select o.*, d.name as direction_name from opportunities o left join strategy_directions d on d.id = o.linked_direction_id where o.project_id = ${projectId}
       order by case o.status when 'saved' then 0 when 'investigating' then 1 when 'linked' then 2 when 'new' then 3 else 4 end, o.created_at desc`,
-    evidence: await tx`select id, evidence_type, claim, review_status, is_demo, normalized_value, created_at from evidence_items where project_id = ${projectId} order by created_at desc limit 400`,
+    evidence: await tx`select id, evidence_type, claim, review_status, is_demo, normalized_value, created_at, source_provider, source_url, retrieved_at from evidence_items where project_id = ${projectId} order by created_at desc limit 400`,
     dirs: await tx`select distinct on (version_id, slot) id, name from strategy_directions where project_id = ${projectId} and status <> 'superseded' order by version_id, slot, revision desc`,
     hasRun: (await tx`select 1 from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') limit 1`).length > 0,
   }));
-  const claims = new Map(data.evidence.map((e) => [e.id as string, e.claim as string]));
+  const receipts = new Map(data.evidence.map((e) => [e.id as string, {
+    id: e.id as string, claim: e.claim as string, type: e.evidence_type as string, source: e.source_provider as string | null,
+    url: e.source_url as string | null, retrievedAt: e.retrieved_at ? new Date(e.retrieved_at).toISOString() : null,
+  }]));
   const canEdit = can(ctx.workspace.role, "strategy.edit");
   const action = generateOpportunitiesAction.bind(null, projectId);
   return (
@@ -46,7 +50,8 @@ export default async function OpportunitiesPage({ params, searchParams }: PagePr
         opportunities={data.opps.map((o) => ({
           id: o.id, title: o.title, description: o.description, whyItMatters: o.why_it_matters, unknowns: o.unknowns, strategicUse: o.strategic_use, validationStep: o.validation_step,
           status: o.status, generator: o.generator, generatorLabel: generatorLabel(o.generator), isDemo: o.is_demo, linkedDirection: o.direction_name,
-          evidence: (o.evidence_ids as string[]).map((id) => ({ id, claim: claims.get(id) ?? "Evidence item" })), entityNames: [],
+          evidence: (o.evidence_ids as string[]).map((id) => receipts.get(id) ?? { id, claim: "Evidence item", type: "unknown", source: null, url: null, retrievedAt: null }),
+          claims: (o.claims as ReceiptClaim[] | null) ?? [], entityNames: [],
         }))}
       />
     </div>

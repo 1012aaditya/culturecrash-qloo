@@ -18,7 +18,7 @@ const input = z.object({
   freshness: z.enum(["month", "year", "any"]).default("year"),
 });
 
-export type StartResult = { ok: true; runId: string; reused: boolean } | { ok: false; error: string };
+export type StartResult = { ok: true; runId: string; reused: boolean } | { ok: false; error: string; activeRunId?: string };
 
 export async function startResearchAction(raw: z.input<typeof input>): Promise<StartResult> {
   const parsed = input.safeParse(raw);
@@ -37,7 +37,7 @@ export async function startResearchAction(raw: z.input<typeof input>): Promise<S
     after(() => executeRun(userId, runId));
   }
   revalidatePath(`/projects/${parsed.data.projectId}/research`);
-  return result.ok ? result : { ok: false, error: result.error };
+  return result.ok ? result : { ok: false, error: result.error, activeRunId: result.activeRunId };
 }
 
 export async function cancelResearchAction(projectId: string, runId: string): Promise<{ ok: boolean; error?: string }> {

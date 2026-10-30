@@ -6,14 +6,14 @@ import { AlertCircle, CheckCircle2, CloudOff, FileText, Image as ImageIcon, Load
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import {
-  deleteBriefDocumentAction, proposeBriefFieldsAction, saveBriefAction, uploadBriefDocumentAction, type BriefFields,
+  deleteBriefDocumentAction, finishBriefUploadAction, proposeBriefFieldsAction, saveBriefAction, startBriefUploadAction, uploadBriefDocumentAction, type BriefFields, type UploadResult,
 } from "@/lib/data/brief-actions";
 import type { BriefExtraction } from "@/lib/ai/schemas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 type Doc = { id: string; fileName: string; size: number; status: string; stored: boolean; text: string | null; createdAt: string };
 type Issue = { field: string; severity: "important" | "helpful"; why: string };
@@ -118,11 +118,28 @@ export function BriefEditor({
 
   async function upload(file: File) {
     setBusy("upload");
-    const fd = new FormData();
-    fd.set("projectId", projectId);
-    fd.set("file", file);
-    const res = await uploadBriefDocumentAction(fd);
-    setBusy(null);
+    let res: UploadResult;
+    try {
+      // With Supabase Storage the file goes straight from the browser to Storage through a one-time
+      // signed URL (no 4.5 MB function limit); the server then reads it back and processes it.
+      const ticket = await startBriefUploadAction(projectId, file.name, file.size, file.type);
+      if (!ticket.ok) res = ticket;
+      else if (ticket.mode === "direct") {
+        const { createBrowserClient } = await import("@supabase/ssr");
+        const client = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+        const { error } = await client.storage.from(ticket.bucket).uploadToSignedUrl(ticket.path, ticket.token, file, { contentType: file.type || "application/octet-stream" });
+        res = error ? { ok: false, error: "The file couldn't be sent to storage. Check your connection and try again." } : await finishBriefUploadAction(projectId, ticket.path, file.name, file.type);
+      } else {
+        const fd = new FormData();
+        fd.set("projectId", projectId);
+        fd.set("file", file);
+        res = await uploadBriefDocumentAction(fd);
+      }
+    } catch {
+      res = { ok: false, error: "The upload failed or timed out. Try again." };
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) return toast({ tone: "error", title: "Upload failed", description: res.error });
     toast({ tone: "success", title: res.extracted ? "Document uploaded and text extracted" : "Document uploaded", description: res.extracted ? "Use “Propose fields” to review suggested brief fields." : "Text could not be extracted from this file." });
     router.refresh();
@@ -277,7 +294,11 @@ export function BriefEditor({
                   <div className="flex items-center gap-2">
                     {isImg ? <ImageIcon className="size-4 text-coral" /> : <FileText className="size-4 text-violet" />}
                     <span className="min-w-0 flex-1 truncate font-medium">{d.fileName}</span>
-                    {canEdit && <button onClick={async () => { await deleteBriefDocumentAction(projectId, d.id); router.refresh(); }} aria-label={`Delete ${d.fileName}`} className="text-muted hover:text-danger"><Trash2 className="size-3.5" /></button>}
+                    {canEdit && <button onClick={async () => {
+                      const r = await deleteBriefDocumentAction(projectId, d.id);
+                      if (!r.ok) toast({ tone: "error", title: "Not deleted", description: r.error });
+                      router.refresh();
+                    }} aria-label={`Delete ${d.fileName}`} className="text-muted hover:text-danger"><Trash2 className="size-3.5" /></button>}
                   </div>
                   <p className="mt-1 text-muted">
                     {(d.size / 1024).toFixed(0)} KB · {isImg ? (d.status === "extracted" ? "visual aesthetics extracted (Claude Vision)" : "vision processing failed") : (d.status === "extracted" ? "text extracted" : d.status === "failed" ? "extraction failed" : "unsupported")}

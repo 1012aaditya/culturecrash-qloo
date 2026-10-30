@@ -156,6 +156,25 @@ function ReportPdf({ s, version, createdAt }: { s: ReportSnapshot; version: numb
             ) : <Text>No direction selected.</Text>}
           </Sec>
         )}
+        {on("objections") && (
+          <Sec k="objections" n={++n}>
+            {s.objections ? (
+              <>
+                <Text style={st.p}>{s.objections.verdict}: {s.objections.summary}</Text>
+                {s.objections.items.map((o) => (
+                  <View key={o.direction} style={st.card}>
+                    <Text style={st.h3}>{o.direction}</Text>
+                    <Text style={st.p}>Objection: {o.objection}</Text>
+                    {o.weakestEvidence ? <Text style={st.small}>Weakest evidence: {o.weakestEvidence}</Text> : null}
+                    {o.competitor ? <Text style={st.small}>Who already owns this: {o.competitor}</Text> : null}
+                    <Text style={st.small}>Toughest question: {o.question}</Text>
+                    <Text style={st.p}>Our answer: {o.answer}</Text>
+                  </View>
+                ))}
+              </>
+            ) : <Text>No Devil&apos;s Advocate review has been run on this strategy version.</Text>}
+          </Sec>
+        )}
         {on("creative") && (
           <Sec k="creative" n={++n}>
             {s.creativeBrief ? CREATIVE_SECTIONS.map(([k, label]) => (

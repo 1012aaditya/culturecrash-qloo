@@ -172,6 +172,26 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
             ) : <p className="text-muted">No direction has been selected.</p>}
           </Section>
         )}
+        {on("objections") && (
+          <Section id="objections" n={++n}>
+            {s.objections ? (
+              <div className="space-y-5">
+                <p className="text-[15px] leading-relaxed"><span className="cc-eyebrow mr-2 text-muted">{s.objections.verdict}</span>{s.objections.summary}</p>
+                {s.objections.items.map((o) => (
+                  <div key={o.direction} className="break-inside-avoid rounded-cc-lg border border-line bg-paper p-5 text-[13px] leading-relaxed">
+                    <h3 className="font-serif text-2xl">{o.direction}</h3>
+                    <p className="mt-2"><b className="font-medium">The objection.</b> {o.objection}</p>
+                    {o.weakestEvidence && <p className="mt-1 text-muted"><b className="font-medium">Weakest evidence.</b> {o.weakestEvidence}</p>}
+                    {o.competitor && <p className="mt-1 text-muted"><b className="font-medium">Who already owns this.</b> {o.competitor}</p>}
+                    <p className="mt-2 italic">“{o.question}”</p>
+                    <p className="mt-2"><b className="font-medium">Our answer.</b> {o.answer}</p>
+                  </div>
+                ))}
+                <p className="text-[12px] text-faint">Devil&rsquo;s Advocate review · {s.objections.generatedBy}</p>
+              </div>
+            ) : <p className="text-muted">No Devil&rsquo;s Advocate review has been run on this strategy version.</p>}
+          </Section>
+        )}
         {on("creative") && (
           <Section id="creative" n={++n}>
             {s.creativeBrief ? (

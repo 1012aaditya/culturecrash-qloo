@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCopilotTool } from "@/lib/ai/copilot-tools";
 import { buildSnapshot } from "@/lib/reports/snapshot";
 import { closeRun, sweepStaleRuns, sweepStaleTasks } from "@/lib/research/lifecycle";
+import { PITCH_PACK_SECTIONS } from "@/lib/reports/types";
 
 const admin = process.env.TEST_DATABASE_ADMIN_URL;
 const d = admin ? describe : describe.skip;
@@ -356,5 +357,35 @@ d("Row Level Security and workspace isolation", () => {
     expect(await as(A.id, (tx) => sweepStaleTasks(tx, projectA))).toBe(1);
     expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${t.id}`))[0].status).toBe("failed");
     expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${fresh.id}`))[0].status).toBe("running");
+  });
+
+  it("Devil's Advocate critiques are workspace-private, and rate results can't exceed their exposures", async () => {
+    const [sv] = await as(A.id, (tx) => tx`insert into strategy_versions (project_id, workspace_id, version, generator, created_by) values (${projectA}, ${A.ws}, 99, 'template', ${A.id}) returning id`);
+    await as(A.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'llm:test', ${A.id})`);
+    expect(await as(V.id, (tx) => tx`select id from strategy_critiques where version_id = ${sv.id}`)).toHaveLength(1);
+    expect(await as(B.id, (tx) => tx`select id from strategy_critiques where version_id = ${sv.id}`)).toHaveLength(0);
+    // Viewers can't save one, nobody can save one as someone else, and nobody can write into another workspace.
+    await denied(as(V.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'x', ${V.id})`));
+    await denied(as(B.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'x', ${B.id})`));
+
+    const [x] = await as(A.id, (tx) => tx`insert into experiments (project_id, workspace_id, name, hypothesis, primary_metric) values (${projectA}, ${A.ws}, 'Ritual test', 'Ritual framing converts better than efficacy framing', 'conversion') returning id`);
+    await as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, sample_size, successes) values (${x.id}, ${A.ws}, 'conversion', 0.1, 1000, 100)`);
+    await expect(as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, sample_size, successes) values (${x.id}, ${A.ws}, 'conversion', 1.2, 100, 120)`)).rejects.toThrow(/check constraint/);
+    await expect(as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, successes) values (${x.id}, ${A.ws}, 'conversion', 1, 5)`)).rejects.toThrow(/check constraint/);
+  });
+
+  it("a pitch pack carries the latest Devil's Advocate objections for the strategy it presents", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'Pitch', ${A.id}) returning id`))[0].id as string;
+    await as(A.id, async (tx) => {
+      await tx`insert into campaign_briefs (project_id, workspace_id, brand) values (${P}, ${A.ws}, 'Lumen')`;
+      const [sv] = await tx`insert into strategy_versions (project_id, workspace_id, version, generator, created_by) values (${P}, ${A.ws}, 1, 'llm:test', ${A.id}) returning id`;
+      await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, name, content, created_by) values (${sv.id}, ${P}, ${A.ws}, 1, 'Ritual', ${tx.json({ name: "Ritual", coreIdea: "x", positioningStatement: "y" } as never)}, ${A.id})`;
+      const critique = { overallVerdict: "vulnerable", executiveSummary: "Too close to Competitor A.", critiques: [{ directionSlot: 1, directionName: "Ritual", fatalFlaw: "Competitor A already says this.", weakestEvidence: "One forum thread.", nearestCompetitor: "Competitor A", culturalRisk: "c", competitorCounter: "d", toughestClientQuestion: "Why us?", suggestedDefense: "Own the ritual moment, not the claim." }] };
+      await tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${P}, ${sv.id}, ${tx.json(critique as never)}, 'llm:test', ${A.id})`;
+    });
+    const snap = await as(A.id, (tx) => buildSnapshot(tx, P, PITCH_PACK_SECTIONS, "Pitch pack"));
+    expect(snap.sections).toContain("objections");
+    expect(snap.objections?.verdict).toBe("vulnerable");
+    expect(snap.objections?.items[0]).toMatchObject({ direction: "Ritual", competitor: "Competitor A", question: "Why us?", answer: "Own the ritual moment, not the claim." });
   });
 });

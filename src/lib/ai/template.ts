@@ -129,6 +129,9 @@ export function templateOpportunities(brief: BriefInput, obs: Observation[]): Op
   return { opportunities: out };
 }
 
+/** Template "directions" are scaffolds: three evidence-backed starting points for the team to write up, labelled as such. */
+export const SCAFFOLD_PREFIX = "Scaffold · ";
+
 export function templateStrategy(brief: BriefInput, obs: Observation[], opportunityTitles: string[]): { directions: DirectionContent[] } {
   const res = results(obs);
   const types = [...byType(obs).entries()];
@@ -147,7 +150,8 @@ export function templateStrategy(brief: BriefInput, obs: Observation[], opportun
 
   const adj = nonCategory?.[1].slice(0, 3) ?? [];
   const d1: DirectionContent = {
-    name: adj.length ? `Cultural adjacency — ${capital(nonCategory![0])}` : "Cultural adjacency",
+    name: `${SCAFFOLD_PREFIX}${adj.length ? `Cultural adjacency — ${capital(nonCategory![0])}` : "Cultural adjacency"}`,
+    brandRole: "Participant in a culture the audience already loves (to define)",
     coreIdea: adj.length ? `Position ${brand} inside the ${nonCategory![0]} culture its audience already gravitates to (${adj.map((o) => o.entityName).join(", ")}).` : `Position ${brand} through a cultural interest outside the category.`,
     positioningStatement: `For ${audience}, ${brand} is the ${brief.category ?? "brand"} that belongs in the culture they already love${adj[0] ? `, from ${adj[0].entityName} onwards` : ""}.`,
     audienceContext: `Built from the observed ${nonCategory?.[0] ?? "entity"} affinities for the brief signal${brief.market ? ` in ${brief.market}` : ""}.`,
@@ -165,9 +169,12 @@ export function templateStrategy(brief: BriefInput, obs: Observation[], opportun
 
   const brandsEv = brandList.slice(0, 3);
   const d2: DirectionContent = {
-    name: "Category reframe",
+    name: `${SCAFFOLD_PREFIX}Category reframe`,
+    brandRole: "Standard-setter that changes how the category is judged (to define)",
     coreIdea: `Redefine what ${brief.category ?? "the category"} means for this audience, using the brands they already pair it with${brandsEv.length ? ` (${brandsEv.map((o) => o.entityName).join(", ")})` : ""} as reference points.`,
-    positioningStatement: `${brand} gives ${audience} a ${brief.category ?? "category"} experience defined by ${brief.existingPositioning ? "a sharper version of its existing promise" : "a point of view the category has not claimed"}.`,
+    positioningStatement: brief.existingPositioning
+      ? `To write: sharpen “${brief.existingPositioning.slice(0, 120)}” into a promise for ${audience} that the category hasn't claimed.`
+      : `To write: the point of view on ${brief.category ?? "the category"} that ${brand} can own for ${audience}. The brief has no existing positioning to start from.`,
     audienceContext: brandsEv.length ? "Observed brand affinities suggest the reference set the audience uses when judging the category." : "No brand affinities were returned; reference set is inferred from the brief only.",
     culturalConnections: brandsEv.map((o) => `${o.entityName} (${fmt(o.affinity)})`),
     strategicRationale: "Distinctiveness through reframing: change the criteria by which the category is judged instead of out-claiming competitors.",
@@ -183,7 +190,8 @@ export function templateStrategy(brief: BriefInput, obs: Observation[], opportun
 
   const tagEv = t.slice(0, 4);
   const d3: DirectionContent = {
-    name: "Participation & community",
+    name: `${SCAFFOLD_PREFIX}Participation & community`,
+    brandRole: "Host of a shared ritual or community (to define)",
     coreIdea: `Build ${brand} around a shared sensibility${tagEv.length ? ` (${tagEv.map((o) => o.entityName).join(", ")})` : ""} that the audience can take part in.`,
     positioningStatement: `${brand} is where ${audience} come together around ${tagEv[0]?.entityName?.toLowerCase() ?? "a shared taste"}.`,
     audienceContext: tagEv.length ? "Built from taste tags associated with the signal." : "No tag data was returned; this direction is driven by the brief objective.",

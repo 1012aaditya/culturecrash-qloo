@@ -1,6 +1,6 @@
 import "server-only";
 import { generatorLabel } from "@/lib/ai";
-import type { CreativeBriefContent, DirectionContent, ResearchInterpretation } from "@/lib/ai/schemas";
+import type { CreativeBriefContent, DirectionContent, RedTeamCritique, ResearchInterpretation } from "@/lib/ai/schemas";
 import type { Tx } from "@/lib/db";
 import { loadBrief } from "@/lib/data/briefs";
 import type { Report as DeepReport } from "@/lib/research/deep/synthesize";
@@ -29,6 +29,8 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   // Only a creative brief written from the selected direction belongs in this report.
   const [cb] = selected ? await tx`select content, grounding, generator, revision from creative_briefs where project_id = ${projectId} and direction_id = ${selected.id} order by created_at desc limit 1` : [];
   const [otherBrief] = selected && !cb ? await tx`select 1 from creative_briefs where project_id = ${projectId} limit 1` : [];
+  // The latest Devil's Advocate review of this strategy version, if one was run.
+  const [crit] = version ? await tx`select critique, generator from strategy_critiques where version_id = ${version.id} order by created_at desc limit 1` : [];
   const [{ docs: externalDocs }] = run ? await tx`select count(*)::int as docs from research_documents where run_id = ${run.id}` : [{ docs: 0 }];
   const experiments = await tx`select x.id, x.name, x.hypothesis, x.method, x.primary_metric, x.decision_threshold, x.status, x.interpretation, x.next_action,
     coalesce((select json_agg(json_build_object('variant', v.label, 'metric', r.metric, 'value', r.value, 'n', r.sample_size) order by r.created_at)
@@ -105,6 +107,10 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
     directions: dirs.map((d) => ({ name: d.name, selected: d.status === "selected", exploratory: d.is_exploratory, revision: d.revision, content: d.content as DirectionContent })),
     strategyGeneratedBy: version ? generatorLabel(version.generator) : null,
     selected: sel,
+    objections: crit ? {
+      verdict: (crit.critique as RedTeamCritique).overallVerdict.replace(/_/g, " "), summary: (crit.critique as RedTeamCritique).executiveSummary, generatedBy: generatorLabel(crit.generator),
+      items: (crit.critique as RedTeamCritique).critiques.map((c) => ({ direction: c.directionName, objection: c.fatalFlaw, weakestEvidence: c.weakestEvidence ?? "", competitor: c.nearestCompetitor ?? "", question: c.toughestClientQuestion, answer: c.suggestedDefense })),
+    } : null,
     creativeBrief: cb ? { content: cb.content as CreativeBriefContent, generatedBy: generatorLabel(cb.generator), revision: cb.revision, grounding: cb.grounding ?? [] } : null,
     experiments: experiments.map((x) => ({ name: x.name, hypothesis: x.hypothesis, method: x.method, primaryMetric: x.primary_metric, threshold: x.decision_threshold, status: x.status, interpretation: x.interpretation, nextAction: x.next_action, results: x.results })),
     limitations,

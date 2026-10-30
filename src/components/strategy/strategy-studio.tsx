@@ -85,6 +85,7 @@ function Territory({ d, projectId, canEdit, llm, className, wide, theme, generat
           )}
           <div className={cn("grid gap-5 text-[13px]", wide && "md:grid-cols-2")}>
             <Block title="Strategic rationale">{c.strategicRationale}</Block>
+            {c.brandRole && <Block title="Brand role">{c.brandRole}</Block>}
             <Block title="Audience context">{c.audienceContext}</Block>
             {c.consumerTension && <Block title="Consumer tension">{c.consumerTension}</Block>}
             <Block title="Differentiation">{c.differentiation}</Block>

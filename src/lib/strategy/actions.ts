@@ -51,6 +51,20 @@ const CITE_RULES =
   "Only cite an id if its text supports that exact statement; a statement with no supporting evidence gets an empty evidenceIds list and is shown as interpretation. " +
   "Never write evidence ids inside other text fields.";
 
+/** Two directions whose cited evidence overlaps by more than half (Jaccard), or that give the brand the same role. */
+function overlappingPair(ds: DirectionContent[]): [string, string] | null {
+  const ids = ds.map((d) => new Set([...citedIds(d.claims), ...d.evidenceIds]));
+  for (let i = 0; i < ds.length; i++) {
+    for (let j = i + 1; j < ds.length; j++) {
+      const inter = [...ids[i]].filter((x) => ids[j].has(x)).length;
+      const union = new Set([...ids[i], ...ids[j]]).size;
+      const sameRole = ds[i].brandRole && ds[i].brandRole.trim().toLowerCase() === ds[j].brandRole?.trim().toLowerCase();
+      if ((union > 0 && inter / union > 0.5) || sameRole) return [ds[i].name, ds[j].name];
+    }
+  }
+  return null;
+}
+
 /** Checks a direction's claims against the evidence text and derives its citations and exploratory flag from them. */
 function groundDirection(d: DirectionContent, evidence: Map<string, string>) {
   const claims = checkStatements(d.claims, evidence);
@@ -160,17 +174,31 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
     let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
     if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
       try {
-        const r = await generateStructured({
-          schema: strategySchema,
-          prompt: [
-            `Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources. ${CITE_RULES}`,
-            tag("brief", briefJson(input.brief)),
-            tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
-          ].join("\n\n"),
-        });
-        directions = r.data.directions.slice(0, 3);
-        generator = r.generator;
-        if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
+        // Directions must differ in substance, not wording. If two of them lean on mostly the same
+        // evidence (or the model returns fewer than three), it gets one retry with that feedback.
+        let feedback: string | null = null;
+        for (let attempt = 1; ; attempt++) {
+          const r = await generateStructured({
+            schema: strategySchema,
+            prompt: [
+              `Generate exactly THREE positioning directions that are strategically different. Each must name a different consumer tension (or an empty string if none is supported), give the brand a different role (brandRole), and rest mostly on a different subset of the evidence. Ground them in the brief and evidence. If evidence is thin for a direction, still include it: set isExploratory=true and say so in uncertainties. Do not invent product benefits or sources. ${CITE_RULES}`,
+              ...(feedback ? [feedback] : []),
+              tag("brief", briefJson(input.brief)),
+              tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
+            ].join("\n\n"),
+          });
+          directions = r.data.directions.slice(0, 3);
+          generator = r.generator;
+          const clash = directions.length === 3 ? overlappingPair(directions) : null;
+          if (directions.length === 3 && !clash) break;
+          if (attempt === 2) {
+            if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
+            break; // a second near-duplicate is kept rather than failing; the comparison view shows the overlap
+          }
+          feedback = directions.length !== 3
+            ? `Your previous answer contained ${directions.length} direction(s). Return exactly three; mark weakly supported ones exploratory rather than leaving them out.`
+            : `Your previous directions “${clash![0]}” and “${clash![1]}” rested on mostly the same evidence. Rework one so it starts from a different tension, a different brand role and different evidence.`;
+        }
       } catch (e) {
         await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
         return { ok: false, error: llmMessage(e) };
@@ -383,13 +411,20 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
   const ctx = await authorize("strategy.edit");
   if (!isCtx(ctx)) return ctx;
   if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE} Edit the section directly instead.` };
-  const cb = await withUser(ctx.user.id, async (tx) => (await tx`select content, project_id from creative_briefs where id = ${briefId}`)[0]);
+  const cb = await withUser(ctx.user.id, async (tx) => {
+    const [row] = await tx`select content, grounding, project_id from creative_briefs where id = ${briefId}`;
+    if (!row) return null;
+    // The rewrite sees the campaign brief and the evidence this brief cites, so it can't drift from the facts.
+    const ids = citedIds(row.grounding as { evidenceIds: string[] }[]);
+    const evidence = ids.length ? await tx`select id, claim from evidence_items where id = any(${ids}) and review_status <> 'rejected'` : [];
+    return { content: row.content, brief: await loadBrief(tx, row.project_id), evidence: evidence.map((e) => ({ id: e.id, text: clip(e.claim as string) })) };
+  });
   if (!cb) return { ok: false, error: "Creative brief not found." };
   try {
     const r = await generateStructured({
       schema: sectionRevisionSchema,
       maxTokens: 4000,
-      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text.`, tag("evidence", JSON.stringify(cb.content)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
+      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text.`, tag("brief", cb.brief ? briefJson(cb.brief) : "{}"), tag("creative_brief", JSON.stringify(cb.content)), tag("evidence", JSON.stringify(cb.evidence)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
     });
     return { ok: true, data: { text: r.data.text } };
   } catch (e) {
@@ -397,75 +432,69 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
   }
 }
 
-export async function redTeamStrategyAction(projectId: string, versionId?: string): Promise<Result<{ critique: RedTeamCritique; generator: string }>> {
-  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+export type SavedCritique = { id: string; critique: RedTeamCritique; generator: string; createdAt: string };
+
+/**
+ * Client Devil's Advocate: attacks the current revision of each direction the way a sceptical CMO
+ * would — weakest evidence, the competitor who already owns the position, cultural risk — using the
+ * directions' own checked claims and the evidence text. Saved per strategy version.
+ */
+export async function redTeamStrategyAction(projectId: string, versionId?: string): Promise<Result<SavedCritique>> {
+  if (!isUuid(projectId) || (versionId && !isUuid(versionId))) return { ok: false, error: "Invalid project." };
   const ctx = await authorize("strategy.edit");
   if (!isCtx(ctx)) return ctx;
+  // A critique needs judgement: without a model there is nothing honest to show, so none is invented.
+  if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE} The Devil's Advocate needs an AI model to critique directions.` };
 
   const data = await withUser(ctx.user.id, async (tx) => {
     const brief = await loadBrief(tx, projectId);
     const [sv] = versionId
-      ? await tx`select id, version from strategy_versions where id = ${versionId} and project_id = ${projectId}`
-      : await tx`select id, version from strategy_versions where project_id = ${projectId} order by version desc limit 1`;
-    if (!sv) return null;
-    const directions = await tx`select slot, name, content from strategy_directions where version_id = ${sv.id} order by slot asc`;
-    return { brief, sv, directions };
+      ? await tx`select id, version, run_id from strategy_versions where id = ${versionId} and project_id = ${projectId}`
+      : await tx`select id, version, run_id from strategy_versions where project_id = ${projectId} order by version desc limit 1`;
+    if (!sv || !brief) return null;
+    // The revision people see: the selected one if any, otherwise the latest of each slot.
+    const directions = await tx`select distinct on (slot) id, slot, name, content from strategy_directions where version_id = ${sv.id}
+      order by slot, (status = 'selected') desc, revision desc`;
+    const ids = [...new Set(directions.flatMap((d) => citedIds((d.content as DirectionContent).claims)))];
+    const evidence = ids.length ? await tx`select id, claim from evidence_items where id = any(${ids})` : [];
+    return { brief, sv, directions, evidence: new Map(evidence.map((e) => [e.id as string, clip(e.claim as string, 240)])) };
   });
+  if (!data || data.directions.length === 0) return { ok: false, error: "No strategy directions found to stress-test. Generate directions first." };
 
-  if (!data || data.directions.length === 0) {
-    return { ok: false, error: "No strategy directions found to stress-test. Generate directions first." };
-  }
-
-  const dirs = data.directions.map((d) => ({
-    slot: d.slot as number,
-    name: d.name as string,
-    content: d.content as DirectionContent,
-  }));
-
-  const enabled = await llmEnabled(ctx.user.id, ctx.workspace.workspaceId);
-  if (!enabled) {
-    const fallback: RedTeamCritique = {
-      overallVerdict: "promising_with_caveats",
-      executiveSummary: "These directions offer distinct strategic contrast, but rely on unproven assumptions about audience willingness to adopt non-standard brand codes.",
-      critiques: dirs.slice(0, 3).map((d) => ({
-        directionSlot: d.slot,
-        directionName: d.name,
-        fatalFlaw: `Assumes audience cares deeply about ${d.content.coreIdea} without competitive fatigue.`,
-        culturalRisk: "Risk of appearing like an outsider co-opting subcultural signifiers rather than genuinely participating.",
-        competitorCounter: "Established competitors can leverage broad media spend to frame this position as narrow or gimmicky.",
-        toughestClientQuestion: "“Why would our mainstream customers switch away from established alternatives for this angle?”",
-        suggestedDefense: `Anchor ${d.name} with tangible proof points and a community-first launch before scaling broad broadcast reach.`,
-      })),
+  const dirs = data.directions.map((d) => {
+    const c = d.content as DirectionContent;
+    return {
+      slot: d.slot as number, name: d.name as string, coreIdea: c.coreIdea, positioningStatement: c.positioningStatement, consumerTension: c.consumerTension,
+      brandRole: c.brandRole ?? "", differentiation: c.differentiation, assumptions: c.assumptionsToTest, tradeOffs: c.tradeOffs,
+      // Each statement with how well it held up against its sources, and the source text itself.
+      claims: (c.claims ?? []).map((cl) => ({ statement: cl.statement, support: cl.support ?? "uncited", sources: cl.evidenceIds.map((id) => data.evidence.get(id)).filter(Boolean) })),
     };
-    return { ok: true, data: { critique: fallback, generator: TEMPLATE_GENERATOR } };
-  }
-
+  });
   try {
-    const prompt = [
-      "You are a ruthlessly honest, veteran creative director and adversarial brand strategist conducting a RED-TEAM STRESS TEST on 3 proposed positioning directions before the client pitch.",
-      "Your objective is NOT to validate them. Your objective is to find fatal blind spots, identify cultural risks (inauthenticity, cliché, performative tone), simulate aggressive competitor counter-strikes, and provide the toughest question a skeptical CMO will ask in the meeting.",
-      tag("brief", briefJson(data.brief!)),
-      tag("directions", JSON.stringify(dirs.map((d) => ({
-        slot: d.slot,
-        name: d.name,
-        coreIdea: d.content.coreIdea,
-        positioningStatement: d.content.positioningStatement,
-        consumerTension: d.content.consumerTension,
-        differentiation: d.content.differentiation,
-        assumptions: d.content.assumptionsToTest,
-        tradeOffs: d.content.tradeOffs,
-      })))),
-    ].join("\n\n");
-
     const out = await generateStructured({
       schema: redTeamCritiqueSchema,
-      prompt,
-      maxTokens: 4000,
+      maxTokens: 12000,
+      prompt: [
+        "You are the client's most sceptical CMO, reviewing these positioning directions before the agency pitch. Your job is to find what would make you say no.",
+        "For each direction: name the weakest piece of evidence it rests on (prefer statements marked 'weak' or 'uncited', and quote them); the competitor that already owns or could most easily claim this position (use the brief's competitors and the evidence; say if none is identified); the cultural risk of seeming inauthentic, clichéd or opportunistic; the hardest question you'd ask in the room; and what the agency must do to answer it. Be specific to this brief — no generic advice. Judge only from the material given.",
+        tag("brief", briefJson(data.brief)),
+        tag("directions", JSON.stringify(dirs)),
+      ].join("\n\n"),
     });
-
-    return { ok: true, data: { critique: out.data, generator: out.generator } };
+    const bySlot = new Map(data.directions.map((d) => [d.slot as number, d.id as string]));
+    const critique: RedTeamCritique = {
+      ...out.data,
+      critiques: out.data.critiques.filter((c) => bySlot.has(c.directionSlot)).map((c) => ({ ...c, directionId: bySlot.get(c.directionSlot) })),
+    };
+    const saved = await withUser(ctx.user.id, async (tx) => {
+      const [row] = await tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by)
+        values (${ctx.workspace.workspaceId}, ${projectId}, ${data.sv.id}, ${tx.json(critique as never)}, ${out.generator}, ${ctx.user.id}) returning id, created_at`;
+      await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "reviewed", objectType: "strategy", objectId: data.sv.id, summary: `ran the Devil's Advocate on strategy version ${data.sv.version}` });
+      return row;
+    });
+    revalidatePath(`/projects/${projectId}/strategy`);
+    return { ok: true, data: { id: saved.id as string, critique, generator: out.generator, createdAt: new Date(saved.created_at).toISOString() } };
   } catch (e) {
     return { ok: false, error: llmMessage(e) };
   }
 }
-

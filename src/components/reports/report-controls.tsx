@@ -10,7 +10,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Select } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import { createReportAction, createReportVersionAction, createShareLinkAction, revokeShareLinkAction } from "@/lib/reports/actions";
-import { REPORT_SECTIONS } from "@/lib/reports/types";
+import { PITCH_PACK_SECTIONS, REPORT_SECTIONS } from "@/lib/reports/types";
 import { formatDateTime } from "@/lib/utils";
 
 function SectionPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
@@ -46,6 +46,24 @@ export function NewReport({ projectId, defaultTitle, defaultOpen }: { projectId:
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/** One click to a pitch-ready report: recommendation, taste map and the answered objections. */
+export function PitchPackButton({ projectId, projectName, hasObjections }: { projectId: string; projectName: string; hasObjections: boolean }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [pending, start] = React.useTransition();
+  return (
+    <Button variant="outline" disabled={pending} title={hasObjections ? undefined : "Run the Devil’s Advocate in the strategy studio first to include answered objections."}
+      onClick={() => start(async () => {
+        const r = await createReportAction(projectId, `Pitch pack — ${projectName}`.slice(0, 200), PITCH_PACK_SECTIONS);
+        if (!r.ok) return toast({ tone: "error", title: r.error });
+        toast({ tone: "success", title: "Pitch pack created", description: hasObjections ? "Share it as a link or download the PDF." : "It has no answered objections yet: run the Devil’s Advocate on the strategy, then add a new version." });
+        router.push(`/projects/${projectId}/reports/${r.data!.id}`);
+      })}>
+      {pending ? <Loader2 className="animate-spin" /> : <Share2 />} Create pitch pack
+    </Button>
   );
 }
 

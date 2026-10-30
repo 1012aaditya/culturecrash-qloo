@@ -10,12 +10,16 @@ export const REPORT_SECTIONS = [
   ["opportunities", "Opportunities"],
   ["directions", "Positioning alternatives"],
   ["selected", "Selected strategy"],
+  ["objections", "Client objections & answers"],
   ["creative", "Creative brief"],
   ["experiments", "Experiment plan"],
   ["limitations", "Limitations & open questions"],
   ["sources", "Sources & appendix"],
 ] as const;
 export type ReportSectionKey = (typeof REPORT_SECTIONS)[number][0];
+
+/** A pitch-ready report: the recommendation, the taste map behind it, and the hardest objections already answered. */
+export const PITCH_PACK_SECTIONS: ReportSectionKey[] = ["cover", "executive", "landscape", "selected", "objections", "directions", "evidence", "limitations", "sources"];
 
 export type ReportSnapshot = {
   title: string;
@@ -37,6 +41,7 @@ export type ReportSnapshot = {
   strategyGeneratedBy: string | null;
   selected: { name: string; content: DirectionContent; revision: number } | null;
   creativeBrief: { content: CreativeBriefContent; generatedBy: string; revision: number; grounding?: (GroundedClaim & { section: string })[] } | null;
+  objections?: { verdict: string; summary: string; generatedBy: string; items: { direction: string; objection: string; weakestEvidence: string; competitor: string; question: string; answer: string }[] } | null;
   experiments: { name: string; hypothesis: string; method: string | null; primaryMetric: string; threshold: string | null; status: string; interpretation: string | null; nextAction: string | null; results: { variant: string | null; metric: string; value: number; n: number | null }[] }[];
   limitations: string[];
   openQuestions: string[];

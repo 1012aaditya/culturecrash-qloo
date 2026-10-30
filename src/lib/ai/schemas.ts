@@ -68,6 +68,7 @@ export const directionSchema = z.object({
   positioningStatement: z.string(),
   audienceContext: z.string(),
   consumerTension: z.string().describe("Empty string if not supported by evidence"),
+  brandRole: z.string().default("").describe("The role the brand plays in people's lives in this direction (e.g. host, guide, ally, provocateur) — different for each direction"),
   culturalConnections: z.array(z.string()),
   evidenceIds: z.array(z.string()),
   strategicRationale: z.string(),
@@ -153,10 +154,13 @@ export const redTeamCritiqueSchema = z.object({
     directionSlot: z.number().int().min(1).max(3),
     directionName: z.string(),
     fatalFlaw: z.string().describe("The single biggest point of failure or strategic vulnerability."),
+    weakestEvidence: z.string().default("").describe("The statement this direction rests on that is least supported (quote it), and why a client would doubt it. Prefer statements marked weak or uncited."),
+    nearestCompetitor: z.string().default("").describe("The competitor (from the brief or evidence) that already owns or could most easily claim this position, and how. Say 'none identified in the evidence' if so."),
     culturalRisk: z.string().describe("Risk of being perceived as tone-deaf, cliché, performative, or inauthentic."),
     competitorCounter: z.string().describe("How a rival brand could easily counter, ridicule, or neutralize this position."),
     toughestClientQuestion: z.string().describe("The hardest, most skeptical question a client CMO will ask in the pitch meeting."),
     suggestedDefense: z.string().describe("Actionable advice to fortify and defend this direction."),
+    directionId: z.string().optional().describe("Leave unset: filled in by the server"),
   })),
 });
 export type RedTeamCritique = z.infer<typeof redTeamCritiqueSchema>;

@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { withUser } from "@/lib/db";
+import { withUser, type Tx } from "@/lib/db";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
+import { importResults } from "./csv";
 
 type R<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; fieldErrors?: Record<string, string> };
 const uuid = z.string().refine(isUuid, "invalid id");
@@ -79,6 +80,13 @@ export async function updateExperimentAction(experimentId: string, raw: z.input<
   try {
     const ctx = await guard();
     const d = f.data;
+    const locked = await withUser(ctx.user.id, async (tx) => {
+      const [cur] = await tx`select design_locked_at, hypothesis, method, primary_metric, decision_threshold from experiments where id = ${experimentId}`;
+      if (!cur?.design_locked_at) return false;
+      // Once results exist, changing what was being tested would let the result rewrite the question.
+      return cur.hypothesis !== d.hypothesis || (cur.method ?? null) !== (d.method ?? null) || cur.primary_metric !== d.primaryMetric || (cur.decision_threshold ?? null) !== (d.decisionThreshold ?? null);
+    });
+    if (locked) return { ok: false, error: "The hypothesis, method, primary metric and decision threshold are locked because results have been recorded. Create a new experiment to test something different." };
     const projectId = await withUser(ctx.user.id, async (tx) => {
       const [x] = await tx`update experiments set name = ${d.name}, hypothesis = ${d.hypothesis}, rationale = ${d.rationale ?? null}, direction_id = ${d.directionId ?? null},
         audience = ${d.audience ?? null}, method = ${d.method ?? null}, primary_metric = ${d.primaryMetric}, secondary_metrics = ${d.secondaryMetrics},
@@ -119,31 +127,44 @@ const resultSchema = z.object({
   metric: z.string().trim().min(1).max(200),
   value: z.coerce.number().finite(),
   sampleSize: z.coerce.number().int().min(0).max(1e9).nullable(),
+  /** For rate metrics: how many of sampleSize converted. The value is then the rate. */
+  successes: z.coerce.number().int().min(0).max(1e9).nullable().default(null),
   observedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
   notes: s(2000),
 });
+
+type ResultInput = z.output<typeof resultSchema>;
+
+/** Stores one observed result, its evidence row, and locks the experiment's design. Returns false if the variant isn't in this experiment. */
+async function insertResult(tx: Tx, ctx: Awaited<ReturnType<typeof guard>>, x: { id: string; project_id: string; name: string }, d: ResultInput, source = "manual entry") {
+  const ws = ctx.workspace.workspaceId;
+  const [variant] = d.variantId ? await tx`select label from experiment_variants where id = ${d.variantId} and experiment_id = ${x.id}` : [];
+  if (d.variantId && !variant) return false;
+  const value = d.successes !== null && d.sampleSize ? d.successes / d.sampleSize : d.value;
+  await tx`insert into experiment_results (experiment_id, workspace_id, variant_id, metric, value, sample_size, successes, observed_on, notes, recorded_by)
+    values (${x.id}, ${ws}, ${d.variantId}, ${d.metric}, ${value}, ${d.sampleSize}, ${d.successes}, ${d.observedOn}, ${d.notes ?? null}, ${ctx.user.id})`;
+  const measured = d.successes !== null && d.sampleSize ? `${d.successes} of ${d.sampleSize} (${((d.successes / d.sampleSize) * 100).toFixed(2)}%)` : `${value}${d.sampleSize !== null ? ` (n = ${d.sampleSize})` : ""}`;
+  // normalized_value stays null: a raw count or rate isn't on the 0–1 evidence scale and must not outrank observations.
+  await tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim, source_provider, source_timestamp, retrieved_at, normalized_value, raw_metadata, review_status, created_by, limitations)
+    values (${x.project_id}, ${ws}, 'experiment_result', ${`Experiment “${x.name}”${variant ? `, variant “${variant.label}”` : ""}: ${d.metric} = ${measured}.`},
+      ${source}, ${d.observedOn}, now(), null, ${tx.json({ experiment_id: x.id, variant_id: d.variantId, value, successes: d.successes, exposures: d.sampleSize })}, 'unreviewed', ${ctx.user.id},
+      'Recorded result. Causal conclusions depend on the experiment design.')`;
+  await tx`update experiments set status = case when status in ('draft','planned') then 'running' else status end, design_locked_at = coalesce(design_locked_at, now()) where id = ${x.id}`;
+  return true;
+}
 
 export async function recordResultAction(experimentId: string, raw: z.input<typeof resultSchema>): Promise<R> {
   if (!isUuid(experimentId)) return { ok: false, error: "Invalid experiment." };
   const r = resultSchema.safeParse(raw);
   if (!r.success) return { ok: false, error: "Enter a metric and a numeric value.", fieldErrors: issues(r.error) };
+  const d = r.data;
+  if (d.successes !== null && (d.sampleSize === null || d.successes > d.sampleSize)) return { ok: false, error: "Successes need an exposure count, and can't be more than it." };
   try {
     const ctx = await guard();
     const ws = ctx.workspace.workspaceId;
-    const d = r.data;
     const projectId = await withUser(ctx.user.id, async (tx) => {
-      const [x] = await tx`select project_id, name from experiments where id = ${experimentId}`;
-      if (!x) return null;
-      const [variant] = d.variantId ? await tx`select label from experiment_variants where id = ${d.variantId} and experiment_id = ${experimentId}` : [];
-      if (d.variantId && !variant) return null;
-      await tx`insert into experiment_results (experiment_id, workspace_id, variant_id, metric, value, sample_size, observed_on, notes, recorded_by)
-        values (${experimentId}, ${ws}, ${d.variantId}, ${d.metric}, ${d.value}, ${d.sampleSize}, ${d.observedOn}, ${d.notes ?? null}, ${ctx.user.id})`;
-      await tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim, source_provider, source_timestamp, retrieved_at, normalized_value, raw_metadata, review_status, created_by, limitations)
-        values (${x.project_id}, ${ws}, 'experiment_result',
-          ${`Experiment “${x.name}”${variant ? `, variant “${variant.label}”` : ""}: ${d.metric} = ${d.value}${d.sampleSize !== null ? ` (n = ${d.sampleSize})` : ""}.`},
-          'manual entry', ${d.observedOn}, now(), ${d.value}, ${tx.json({ experiment_id: experimentId, variant_id: d.variantId })}, 'unreviewed', ${ctx.user.id},
-          'Manually recorded result. Causal conclusions depend on the experiment design.')`;
-      await tx`update experiments set status = case when status in ('draft','planned') then 'running' else status end where id = ${experimentId}`;
+      const [x] = await tx`select id, project_id, name from experiments where id = ${experimentId}`;
+      if (!x || !(await insertResult(tx, ctx, x as never, d))) return null;
       await trackEvent(tx, { workspaceId: ws, userId: ctx.user.id, event: "experiment_result_recorded", projectId: x.project_id });
       await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId: x.project_id, verb: "recorded", objectType: "experiment", objectId: experimentId, summary: `recorded a ${d.metric} result for “${x.name}”` });
       return x.project_id as string;
@@ -151,6 +172,37 @@ export async function recordResultAction(experimentId: string, raw: z.input<type
     if (!projectId) return { ok: false, error: "Experiment or variant not found." };
     revalidatePath(`/projects/${projectId}/experiments/${experimentId}`);
     return { ok: true };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Imports successes and exposures per variant from an ad-platform CSV export (Meta, Google, TikTok or similar). */
+export async function importResultsCsvAction(experimentId: string, csv: string): Promise<R<{ imported: number; unmatched: string[] }>> {
+  if (!isUuid(experimentId) || !csv.trim() || csv.length > 2_000_000) return { ok: false, error: "Choose a CSV file under 2 MB." };
+  try {
+    const ctx = await guard();
+    const ws = ctx.workspace.workspaceId;
+    const out = await withUser(ctx.user.id, async (tx) => {
+      const [x] = await tx`select id, project_id, name, primary_metric from experiments where id = ${experimentId}`;
+      if (!x) return { error: "Experiment not found." };
+      const variants = (await tx`select id, label from experiment_variants where experiment_id = ${experimentId}`).map((v) => ({ id: v.id as string, label: v.label as string }));
+      const parsed = importResults(csv, variants);
+      if ("error" in parsed) return parsed;
+      if (!parsed.rows.length) return { error: `No row matched a variant name (${variants.map((v) => v.label).join(", ")}). Rename the variants to match the export, or the ad sets to match the variants.` };
+      const today = new Date().toISOString().slice(0, 10);
+      for (const row of parsed.rows) {
+        await insertResult(tx, ctx, x as never, {
+          variantId: row.variant, metric: x.primary_metric, value: row.successes / Math.max(1, row.exposures), sampleSize: row.exposures, successes: row.successes,
+          observedOn: today, notes: `Imported from CSV: “${parsed.columns.successes}” out of “${parsed.columns.exposures}”.`,
+        }, "csv import");
+      }
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId: x.project_id, verb: "recorded", objectType: "experiment", objectId: experimentId, summary: `imported ${parsed.rows.length} result(s) for “${x.name}” from a CSV export` });
+      return { projectId: x.project_id as string, imported: parsed.rows.length, unmatched: parsed.unmatched };
+    });
+    if ("error" in out) return { ok: false, error: out.error as string };
+    revalidatePath(`/projects/${out.projectId}/experiments/${experimentId}`);
+    return { ok: true, data: { imported: out.imported, unmatched: out.unmatched } };
   } catch (e) {
     return err(e);
   }

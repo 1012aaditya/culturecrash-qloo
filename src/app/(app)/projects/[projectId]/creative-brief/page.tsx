@@ -14,14 +14,17 @@ import { loadCreativeBrief } from "@/lib/data/creative";
 import { getProjectContext } from "@/lib/data/project-context";
 import { can } from "@/lib/permissions";
 import { generateCreativeBriefAction } from "@/lib/strategy/actions";
-import { formatDateTime } from "@/lib/utils";
+import { isUuid } from "@/lib/data/projects";
+import { cn, formatDateTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Creative brief" };
 
-export default async function CreativeBriefPage({ params }: PageProps<"/projects/[projectId]/creative-brief">) {
+export default async function CreativeBriefPage({ params, searchParams }: PageProps<"/projects/[projectId]/creative-brief">) {
   const { projectId } = await params;
+  const sp = await searchParams;
+  const briefId = typeof sp.brief === "string" && isUuid(sp.brief) ? sp.brief : null;
   const { ctx, project } = await getProjectContext(projectId);
-  const data = await withUser(ctx.user.id, (tx) => loadCreativeBrief(tx, projectId));
+  const data = await withUser(ctx.user.id, (tx) => loadCreativeBrief(tx, projectId, briefId));
   const canEdit = can(ctx.workspace.role, "strategy.edit");
   const generate = generateCreativeBriefAction.bind(null, projectId);
   if (!data) {
@@ -34,7 +37,8 @@ export default async function CreativeBriefPage({ params }: PageProps<"/projects
       </div>
     );
   }
-  const { cb, evidence, grounding, receipts } = data;
+  const { cb, evidence, grounding, receipts, versions } = data;
+  const viewingOld = versions[0]?.id !== cb.id;
   const sectionLabel = Object.fromEntries(CREATIVE_SECTIONS);
   return (
     <article className="mx-auto max-w-[1100px]">
@@ -48,11 +52,23 @@ export default async function CreativeBriefPage({ params }: PageProps<"/projects
           <p className="mt-1 text-[12px] text-white/50">{generatorLabel(cb.generator)} · revision {cb.revision} · last edited {formatDateTime(cb.updated_at)}{cb.updated_by_name ? ` by ${cb.updated_by_name}` : ""}</p>
           <div className="cc-no-print mt-6 flex flex-wrap gap-2">
             <Button asChild variant="inverse"><a href={`/api/projects/${projectId}/creative-brief/export`}><Download /> Export with evidence (.md)</a></Button>
-            {canEdit && <GenerateButton variant="ghost-dark" action={generate} label="Regenerate from selected direction" pendingLabel="Writing…" successTitle="New creative brief created" />}
+            {canEdit && <GenerateButton variant="ghost-dark" action={generate} label="Regenerate from selected direction" pendingLabel="Writing…" successTitle="New creative brief created"
+              confirm={{ title: "Write a new version of the creative brief?", body: "A new version is generated from the selected direction and becomes the current one. Your edits to this version are kept: you can reopen it from the version list.", action: "Write new version" }} />}
             <Button asChild variant="ghost-dark"><Link href={`/projects/${projectId}/experiments?new=1`}>Plan an experiment</Link></Button>
           </div>
         </div>
       </header>
+      {versions.length > 1 && (
+        <nav aria-label="Creative brief versions" className="mt-6 flex flex-wrap gap-1.5">
+          {versions.map((v) => (
+            <Link key={v.id} href={v.id === versions[0].id ? `/projects/${projectId}/creative-brief` : `/projects/${projectId}/creative-brief?brief=${v.id}`}
+              className={cn("rounded-full border px-3 py-1.5 text-[12px]", v.id === cb.id ? "border-ink bg-ink text-white" : "border-line bg-paper hover:bg-ivory")}>
+              Version {v.number}{v.id === versions[0].id ? " · current" : ""} · {formatDateTime(v.createdAt)}{v.directionName ? ` · ${v.directionName}` : ""}
+            </Link>
+          ))}
+        </nav>
+      )}
+      {viewingOld && <p className="mt-3 rounded-cc-sm bg-peach/30 p-3 text-[13px]">You&rsquo;re viewing an earlier version. Edits here change this version; the current version is unaffected.</p>}
       <div className="mt-8 rounded-[32px] border border-line bg-paper px-6 md:px-12">
         <CreativeBriefEditor briefId={cb.id} content={cb.content} revision={cb.revision} canEdit={canEdit} llm={await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)} />
       </div>

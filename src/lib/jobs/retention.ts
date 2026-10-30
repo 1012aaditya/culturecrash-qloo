@@ -42,11 +42,17 @@ export async function runRetention() {
       where provider = 'youtube' and retrieved_at < now() - interval '30 days' and (excerpt is not null or metrics <> '{}'::jsonb) returning id`;
     await tx`delete from provider_cache where expires_at < now()`;
     const links = await tx`delete from shared_report_links where expires_at is not null and expires_at < now() - interval '30 days' returning id`;
+    // Watch findings follow the workspace's retention period like other collected working data.
+    const watchDocs = await tx`
+      delete from research_documents d using workspaces w
+      where d.watch_id is not null and w.id = d.workspace_id and w.data_retention_days is not null
+        and d.retrieved_at < now() - make_interval(days => w.data_retention_days)
+      returning d.id`;
     // Backstop for runs and generation tasks nobody has looked at since their worker died.
     const staleRuns = await sweepStaleRuns(tx);
     const staleTasks = await sweepStaleTasks(tx);
     return {
-      staleRunsClosed: staleRuns, staleTasksClosed: staleTasks,
+      staleRunsClosed: staleRuns, staleTasksClosed: staleTasks, watchDocumentsDeleted: watchDocs.length,
       rawResponsesCleared: raw.length, conversationsDeleted: conv.length, activityDeleted: activity.length,
       tasksDeleted: tasks.length, youtubeExcerptsExpired: youtube.length, pilotRequestsDeleted: pilots.length, expiredLinksDeleted: links.length,
     };

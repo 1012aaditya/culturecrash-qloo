@@ -1,4 +1,5 @@
 import type { Hit, ProviderCall } from "../types";
+import { hostOf } from "../url";
 import { decodeEntities, isoOrNull, requestJson, str, type Fetcher } from "./http";
 
 /** Tavily search — alternate web-search implementation behind the same interface. */
@@ -19,8 +20,17 @@ export async function tavilySearch(opts: { query: string; count?: number; apiKey
 }
 
 /** Exa search — canonical implementation following Exa's build-with-exa specification. */
-export async function exaSearch(opts: { query: string; count?: number; apiKey: string; usdPerCall: number; fetcher?: Fetcher }): Promise<ProviderCall<Hit[]>> {
-  const params = { query: opts.query.slice(0, 400), numResults: String(Math.min(opts.count ?? 8, 10)) };
+export async function exaSearch(opts: {
+  query: string; count?: number; apiKey: string; usdPerCall: number; fetcher?: Fetcher;
+  /** Only results published on or after this ISO time (Watch's incremental window). */
+  startPublishedDate?: string;
+  /** Restrict to one Exa category, e.g. "news". */
+  category?: "news";
+}): Promise<ProviderCall<Hit[]>> {
+  const params: Record<string, string> = {
+    query: opts.query.slice(0, 400), numResults: String(Math.min(opts.count ?? 8, 10)),
+    ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}), ...(opts.category ? { category: opts.category } : {}),
+  };
   return requestJson<Hit[]>({
     url: "https://api.exa.ai/search",
     init: {
@@ -31,6 +41,8 @@ export async function exaSearch(opts: { query: string; count?: number; apiKey: s
         type: "auto",
         numResults: Number(params.numResults),
         contents: { highlights: true },
+        ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
+        ...(opts.category ? { category: opts.category } : {}),
       }),
     },
     params, fallback: [], usdPerCall: opts.usdPerCall, fetcher: opts.fetcher,
@@ -42,12 +54,13 @@ export async function exaSearch(opts: { query: string; count?: number; apiKey: s
       const snippet = highlights.length > 0 ? highlights.join(" … ") : str(o.text) ?? "";
       return [{
         provider: "exa",
-        sourceType: "web_page",
+        sourceType: opts.category === "news" ? "news" : "web_page",
         url,
         externalId: str(o.id),
         title: decodeEntities(title),
         snippet: decodeEntities(snippet).slice(0, 1500),
-        publisher: str(o.author),
+        // Exa's "author" is a person (or empty), not the outlet; the site is the honest publisher.
+        publisher: hostOf(url),
         publishedAt: isoOrNull(o.publishedDate),
         language: null,
         metrics: {},

@@ -28,15 +28,30 @@ const grid = (n: number, cols: number, w: number, h: number) => ({
   at: (i: number) => ({ x: GAP + (i % cols) * (w + GAP), y: HEADER + GAP + Math.floor(i / cols) * (h + GAP) }),
 });
 
-export function researchBoardLayout(entities: EntityData[], evidence: EvidenceCardData[], opts: { runLabel: string; id?: () => string }): Node[] {
+/** Whether a Qloo entity is one of the cultural connections a direction names (names match loosely, either way round). */
+export function namedIn(name: string, connections: string[]): boolean {
+  const n = name.trim().toLowerCase();
+  return n.length > 1 && connections.some((c) => {
+    const x = c.toLowerCase();
+    return x.includes(n) || (x.length > 3 && n.includes(x));
+  });
+}
+
+export function researchBoardLayout(
+  entities: EntityData[], evidence: EvidenceCardData[],
+  opts: { runLabel: string; id?: () => string; direction?: { name: string; culturalConnections: string[]; evidenceIds: string[] } },
+): Node[] {
   const id = opts.id ?? (() => crypto.randomUUID());
+  const dir = opts.direction;
+  // With a direction, what it names comes first: its cultural connections, then its cited evidence.
+  const rank = (e: EntityData) => (dir && namedIn(e.name, dir.culturalConnections) ? 1 : 0);
   const nodes: Node[] = [];
   const blocks: { group: Node; children: Node[] }[] = [];
 
   for (const theme of THEMES) {
     const picks = entities
       .filter((e) => theme.types.includes(e.type))
-      .sort((a, b) => (b.affinity ?? -1) - (a.affinity ?? -1))
+      .sort((a, b) => rank(b) - rank(a) || (b.affinity ?? -1) - (a.affinity ?? -1))
       .slice(0, PER_THEME);
     if (!picks.length) continue;
     const g = grid(picks.length, COLUMNS, CARD.w, CARD.h);
@@ -44,7 +59,8 @@ export function researchBoardLayout(entities: EntityData[], evidence: EvidenceCa
     blocks.push({ group, children: picks.map((e, i) => ({ id: id(), type: "entity", position: g.at(i), width: CARD.w, height: CARD.h, parentId: group.id, data: { ...e } })) });
   }
 
-  const claims = evidence.slice(0, 6);
+  const cited = new Set(dir?.evidenceIds ?? []);
+  const claims = [...evidence].sort((a, b) => Number(cited.has(b.evidenceId)) - Number(cited.has(a.evidenceId))).slice(0, 6);
   if (claims.length) {
     const g = grid(claims.length, 2, EVIDENCE_CARD.w, EVIDENCE_CARD.h);
     const group: Node = { id: id(), type: "group", position: { x: 0, y: 0 }, width: g.width, height: g.height, zIndex: -1, data: { label: "Evidence" } };
@@ -54,7 +70,7 @@ export function researchBoardLayout(entities: EntityData[], evidence: EvidenceCa
   // Blocks flow left to right in rows of three, each row as tall as its tallest block.
   const intro: Node = {
     id: id(), type: "note", position: { x: 0, y: 0 }, width: 420, height: 130,
-    data: { tone: "peach", text: `Built from research (${opts.runLabel}): the strongest Qloo affinities per theme${claims.length ? " and the best-supported evidence" : ""}. Affinity is a taste correlation, not purchase intent. Rearrange, remove and add your own references.` },
+    data: { tone: "peach", text: `Built from research (${opts.runLabel})${dir ? ` for “${dir.name}”: the references and evidence that direction names first, then` : ":"} the strongest Qloo affinities per theme${claims.length ? " and the best-supported evidence" : ""}. Affinity is a taste correlation, not purchase intent. Rearrange, remove and add your own references.` },
   };
   nodes.push(intro);
   let y = intro.height + 60;

@@ -20,7 +20,8 @@ export type ImageRights = (typeof IMAGE_RIGHTS)[number];
 export type ImageFitData = { level: "strong" | "partial" | "off" | "unknown"; tags: string[]; descriptors: string[]; rationale: string; model: string; at: string };
 /** A stored evidence item (cited web claim, conclusion or result) placed on a board; the ledger stays the source of truth. */
 export type EvidenceCardData = CommonData & { evidenceId: string; claim: string; evidenceType: string; source: string; url: string | null; score: number | null };
-export type NoteData = CommonData & { text: string; tone: "paper" | "lilac" | "peach" };
+/** A note's `role` puts it in the board's guardrails: something the work should (do) or should not (dont) be. */
+export type NoteData = CommonData & { text: string; tone: "paper" | "lilac" | "peach"; role?: "note" | "do" | "dont" };
 export type LinkData = CommonData & { url: string; title: string; note: string; siteName: string; imagePath: string | null; previewUrl?: string };
 export type EntityData = CommonData & {
   entityId: string; name: string; type: string; role: string; affinity: number | null; imageUrl: string | null; evidenceId: string | null;
@@ -91,7 +92,10 @@ function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix:
         source: str(120).parse(d.source ?? ""), url: safeUrl(d.url), score: typeof d.score === "number" && Number.isFinite(d.score) ? d.score : null,
       } satisfies EvidenceCardData;
     case "note":
-      return { ...common, text: str(4000).parse(d.text ?? ""), tone: z.enum(["paper", "lilac", "peach"]).catch("paper").parse(d.tone) } satisfies NoteData;
+      return {
+        ...common, text: str(4000).parse(d.text ?? ""), tone: z.enum(["paper", "lilac", "peach"]).catch("paper").parse(d.tone),
+        ...(d.role === "do" || d.role === "dont" ? { role: d.role } : {}),
+      } satisfies NoteData;
     case "link":
       return {
         ...common, url: safeUrl(d.url) ?? "", title: str(200).parse(d.title ?? ""), note: str(1000).parse(d.note ?? ""),

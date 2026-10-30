@@ -7,7 +7,7 @@ import { logActivity } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
-import { BOARD_BUCKET, boardEntities, boardEvidence, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
+import { BOARD_BUCKET, boardEntities, boardEvidence, linkedDirection, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
 import { researchBoardLayout } from "./layout";
 import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
 import { critiqueBoard, type BoardCritique } from "./critique";
@@ -399,25 +399,27 @@ export async function assessImageFitAction(boardId: string, thumbPath: string): 
 }
 
 /** Creates a starter board laid out from the latest research run: Qloo entities grouped by theme, plus top evidence. */
-export async function createBoardFromResearchAction(projectId: string): Promise<R<{ id: string }>> {
-  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+export async function createBoardFromResearchAction(projectId: string, directionId: string | null = null): Promise<R<{ id: string }>> {
+  if (!isUuid(projectId) || (directionId !== null && !isUuid(directionId))) return { ok: false, error: "Invalid project." };
   try {
     const ctx = await guard();
     const ws = ctx.workspace.workspaceId;
-    const [entities, evidence] = await Promise.all([boardEntities(ctx, projectId), boardEvidence(ctx, projectId)]);
+    const [entities, evidence, direction] = await Promise.all([boardEntities(ctx, projectId), boardEvidence(ctx, projectId), linkedDirection(ctx, projectId, directionId)]);
+    if (directionId && !direction) return { ok: false, error: "That direction is not part of this campaign." };
     if (!entities.length && !evidence.length) return { ok: false, error: "There is no completed research to build from yet. Run research first." };
     const id = await withUser(ctx.user.id, async (tx) => {
       const [run] = await tx`select created_at, mode from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
       const runLabel = run ? `${run.mode === "demo" ? "demonstration run" : "run"} of ${new Date(run.created_at).toISOString().slice(0, 10)}` : "latest run";
-      const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, created_by, updated_by)
-        values (${projectId}, ${ws}, ${"From research"}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
-      const parsed = parseBoardContent({ nodes: researchBoardLayout(entities, evidence, { runLabel }), viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
+      const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, direction_id, created_by, updated_by)
+        values (${projectId}, ${ws}, ${direction ? `${direction.name} — visual world`.slice(0, 120) : "From research"}, ${direction?.id ?? null}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
+      const parsed = parseBoardContent({ nodes: researchBoardLayout(entities, evidence, { runLabel, direction: direction ?? undefined }), viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
       if (!parsed) throw new Error("starter layout failed validation");
       await tx`update inspiration_boards set content = ${tx.json(parsed as never)}, revision = revision + 1 where id = ${b.id}`;
-      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "created", objectType: "board", objectId: b.id, summary: "built an inspiration board from research" });
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "created", objectType: "board", objectId: b.id, summary: direction ? `built an inspiration board from research for “${direction.name}”` : "built an inspiration board from research" });
       return b.id as string;
     });
     revalidatePath(`/projects/${projectId}/boards`);
+    if (direction) revalidatePath("/projects", "layout");
     return { ok: true, data: { id } };
   } catch (e) {
     return err(e, "The board could not be built.");

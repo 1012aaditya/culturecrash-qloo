@@ -6,8 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, useReactFlow, type NodeChange, type OnNodeDrag } from "@xyflow/react";
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, Frame, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
-  Redo2, Sparkles, StickyNote, Trash2, Undo2, X,
+  ArrowLeft, Frame, History as HistoryIcon, ImagePlus, LayoutTemplate, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
+  Redo2, Sparkles, SquareDashedMousePointer, StickyNote, Trash2, Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -25,6 +25,9 @@ import {
 } from "./board-logic";
 import { CommentsPanel, CritiqueDialog, ENTITY_MIME, EVIDENCE_MIME, EvidenceMeter, HistoryDialog, LinkDialog, ListView, PaletteDialog, ResearchPanel, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
 import type { BoardCritique } from "@/lib/boards/critique";
+import { boardHealth, healthScore, type DirectionBrief, type NoteRole } from "@/lib/boards/sections";
+import { BoardSlides } from "./board-slides";
+import { BoardView } from "./board-view";
 import { BoardCtx, nodeTypes } from "./nodes";
 
 const SAVE_DELAY_MS = 1200;
@@ -71,7 +74,12 @@ function withUrls(nodes: BoardNode[], urls: Record<string, string>): BoardNode[]
   });
 }
 
-type CanvasProps = { board: BoardDoc; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[]; canEdit: boolean; canComment: boolean };
+type CanvasProps = {
+  board: BoardDoc; projectName: string; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[];
+  /** The linked direction, also when it belongs to an earlier strategy version than `directions`. */
+  direction: DirectionBrief | null; canEdit: boolean; canComment: boolean;
+};
+type View = "board" | "canvas" | "list";
 
 export function BoardCanvas(props: CanvasProps) {
   return (
@@ -81,24 +89,26 @@ export function BoardCanvas(props: CanvasProps) {
   );
 }
 
-function Canvas({ board, entities, evidence, directions, canEdit, canComment }: CanvasProps) {
+function Canvas({ board, projectName, entities, evidence, directions, direction: linked, canEdit, canComment }: CanvasProps) {
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
   const initial = React.useMemo(() => normalise((board.content.nodes as unknown as BoardNode[]).map(hydrate)), [board.content.nodes]);
   const [nodes, setNodes, onNodesChange] = useNodesState<BoardNode>(initial);
   const [name, setName] = React.useState(board.name);
-  const [panel, setPanel] = React.useState(entities.length > 0 || evidence.length > 0);
+  const [panel, setPanel] = React.useState(false);
+  const [panelTab, setPanelTab] = React.useState<"qloo" | "evidence">("qloo");
   const [directionId, setDirectionId] = React.useState(board.directionId);
-  const [fitPending, setFitPending] = React.useState<ReadonlySet<string>>(new Set());
+  const direction = directions.find((d) => d.id === directionId)?.brief ?? (linked?.id === directionId ? linked : null);
   const searchParams = useSearchParams();
+  const [view, setViewState] = React.useState<View>(() => { const v = searchParams.get("view"); return v === "canvas" || v === "list" ? v : "board"; });
+  const listView = view === "list";
+  const [fitPending, setFitPending] = React.useState<ReadonlySet<string>>(new Set());
   const [presenting, setPresenting] = React.useState(() => searchParams.get("present") === "1");
-  const [slide, setSlide] = React.useState(0);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [critiqueOpen, setCritiqueOpen] = React.useState(false);
   const [critique, setCritique] = React.useState<{ data: BoardCritique | null; pending: boolean; error: string | null }>({ data: null, pending: false, error: null });
   const shell = React.useRef<HTMLDivElement>(null);
-  const [listView, setListView] = React.useState(false);
   const [linkOpen, setLinkOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
@@ -122,6 +132,19 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   const [fitOnOpen] = React.useState(() => !board.content.viewport && initial.length > 0);
   const palette = React.useMemo(() => boardPalette(nodes), [nodes]);
   const coverage = React.useMemo(() => evidenceCoverage(nodes), [nodes]);
+  const checks = React.useMemo(() => boardHealth(nodes, direction), [nodes, direction]);
+  const score = healthScore(checks);
+
+  // The view is kept in the address (?view=canvas), so a reload or a shared link opens the same view.
+  const setView = React.useCallback((v: View) => {
+    setViewState(v);
+    // Cards selected on the canvas would otherwise still answer Delete while hidden.
+    if (v !== "canvas") setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    const url = new URL(location.href);
+    if (v === "board") url.searchParams.delete("view");
+    else url.searchParams.set("view", v);
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }, [setNodes]);
   const selected = nodes.filter((n) => n.selected);
 
   // ---------------------------------------------------------------- saving (with per-card merge on conflict)
@@ -278,7 +301,10 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   }, [rf, setNodes, toast]);
   const add = React.useCallback((node: Omit<BoardNode, "id">) => addNodes([node])[0], [addNodes]);
 
-  const addNote = (text = "", at?: { x: number; y: number }) => { const p = at ?? centre(); add({ type: "note", position: { x: p.x - 110, y: p.y - 70 }, width: 220, height: 140, data: { text, tone: "lilac" } }); };
+  const addNote = (text = "", at?: { x: number; y: number }, role: NoteRole = "note") => {
+    const p = at ?? centre();
+    add({ type: "note", position: { x: p.x - 110, y: p.y - 70 }, width: 220, height: 140, data: { text, tone: role === "dont" ? "peach" : role === "do" ? "lilac" : "paper", ...(role !== "note" ? { role } : {}) } });
+  };
   const addGroup = () => { const p = centre(); add({ type: "group", position: { x: p.x - 260, y: p.y - 180 }, width: 520, height: 360, zIndex: -1, data: { label: "New group" } }); };
 
   /** Adds a link card at once, then fills in title, site name and preview image when they arrive. */
@@ -431,9 +457,13 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   React.useEffect(() => {
     if (presenting) return; // the presentation has its own keys
     const onKey = (e: KeyboardEvent) => {
-      if (inTextField(e.target) || listView) return;
+      if (inTextField(e.target)) return;
       const mod = isMac() ? e.metaKey : e.ctrlKey;
       const k = e.key.toLowerCase();
+      if (view !== "canvas") {
+        if (canEdit && mod && k === "z") { e.preventDefault(); return e.shiftKey ? redo() : undo(); }
+        return;
+      }
       if (mod && k === "a") { e.preventDefault(); setNodes((ns) => ns.map((n) => ({ ...n, selected: true }))); return; }
       if (k === "escape") { setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n))); return; }
       if (!canEdit) return;
@@ -457,8 +487,8 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
       e.preventDefault();
       return true;
     };
-    const onCopy = (e: ClipboardEvent) => { if (!inTextField(e.target)) copySelection(e); };
-    const onCut = (e: ClipboardEvent) => { if (!inTextField(e.target) && canEdit && copySelection(e)) deleteSelected(); };
+    const onCopy = (e: ClipboardEvent) => { if (!inTextField(e.target) && view === "canvas") copySelection(e); };
+    const onCut = (e: ClipboardEvent) => { if (!inTextField(e.target) && canEdit && view === "canvas" && copySelection(e)) deleteSelected(); };
     const onPaste = async (e: ClipboardEvent) => {
       if (inTextField(e.target) || !canEdit || !e.clipboardData) return;
       const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
@@ -504,7 +534,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
     };
     // addNote is recreated each render but only closes over stable helpers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addLink, addNodes, board.id, canEdit, deleteSelected, duplicate, listView, presenting, redo, reorder, rf, setNodes, toast, toggleLock, undo, uploadFiles]);
+  }, [addLink, addNodes, board.id, canEdit, deleteSelected, duplicate, view, presenting, redo, reorder, rf, setNodes, toast, toggleLock, undo, uploadFiles]);
 
   // ---------------------------------------------------------------- grouping: drop a card inside a group to attach it
   const onNodeDragStop: OnNodeDrag<BoardNode> = React.useCallback((_, dragged) => {
@@ -551,45 +581,51 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   };
 
   const locate = (id: string) => {
-    setListView(false);
+    setView("canvas");
     setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })));
     setTimeout(() => void rf.fitView({ nodes: [{ id }], maxZoom: 1.2, padding: 0.6, duration: 400 }), 50);
   };
 
-  // ---------------------------------------------------------------- presentation: an overview, then one group per slide
-  const slides = React.useMemo(() => {
-    const groups = nodes.filter((n) => n.type === "group").sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
-    return [{ label: "Overview", ids: nodes.map((n) => n.id) }, ...groups.map((g) => ({ label: String(g.data.label || "Group"), ids: [g.id, ...nodes.filter((n) => n.parentId === g.id).map((n) => n.id)] }))];
-  }, [nodes]);
-  const showSlide = React.useCallback((i: number) => {
-    const s = slides[Math.max(0, Math.min(slides.length - 1, i))];
-    setSlide(slides.indexOf(s));
-    // fitBounds moves at once; fitView waits for the next node change, which never comes while presenting.
-    if (s.ids.length) void rf.fitBounds(rf.getNodesBounds(s.ids), { padding: 0.08, duration: 600 });
-  }, [rf, slides]);
+  // ---------------------------------------------------------------- presentation: client slides built from the board's sections
   const startPresenting = () => {
     setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
     setPresenting(true);
-    void shell.current?.requestFullscreen?.().catch(() => {});
-    setTimeout(() => showSlide(0), 50);
   };
   const stopPresenting = React.useCallback(() => {
     setPresenting(false);
-    if (location.search.includes("present=1")) window.history.replaceState(null, "", location.pathname);
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    const url = new URL(location.href);
+    if (url.searchParams.has("present")) {
+      url.searchParams.delete("present");
+      window.history.replaceState(null, "", url.pathname + url.search);
+    }
   }, []);
-  React.useEffect(() => {
-    if (!presenting) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); showSlide(slide + 1); }
-      else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); showSlide(slide - 1); }
-      else if (e.key === "Escape") stopPresenting();
-    };
-    const onFs = () => { if (!document.fullscreenElement) setPresenting(false); };
-    window.addEventListener("keydown", onKey);
-    document.addEventListener("fullscreenchange", onFs);
-    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("fullscreenchange", onFs); };
-  }, [presenting, showSlide, slide, stopPresenting]);
+  const copyPresentLink = React.useCallback(() => {
+    void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?present=1`);
+    toast({ title: "Presentation link copied", description: "Opens straight into the slides for anyone in this workspace.", tone: "success" });
+  }, [toast]);
+
+  // ---------------------------------------------------------------- edits from the Board view
+  const updateCard = React.useCallback((id: string, patch: Record<string, unknown>) => {
+    setNodes((ns) => ns.map((n) => (n.id === id ? hydrate({ ...n, data: { ...n.data, ...patch } }) : n)));
+  }, [setNodes]);
+  const removeCard = React.useCallback((id: string) => {
+    setNodes((ns) => ns.filter((n) => n.id !== id || n.data.locked));
+  }, [setNodes]);
+  const openResearch = (tab: "qloo" | "evidence") => { setPanelTab(tab); setPanel(true); };
+  const linkDirection = async (next: string | null) => {
+    const prev = directionId;
+    setDirectionId(next);
+    const r = await setBoardDirectionAction(board.id, next);
+    if (!r.ok) { setDirectionId(prev); toast({ title: "Not linked", description: r.error, tone: "error" }); }
+  };
+  const directionSelect = (className?: string) => directions.length > 0 && (
+    <select aria-label="Strategy direction for this board" value={directionId ?? ""} disabled={!canEdit} onChange={(e) => void linkDirection(e.target.value || null)}
+      className={cn("h-8 max-w-[240px] truncate rounded-full border border-line bg-paper px-2.5 text-[12px] outline-none focus:border-violet", className)}>
+      <option value="">No direction</option>
+      {directions.map((d) => <option key={d.id} value={d.id}>{`0${d.slot} · ${d.name}${d.selected ? " (selected)" : ""}`}</option>)}
+      {directionId && !directions.some((d) => d.id === directionId) && <option value={directionId}>{linked?.id === directionId ? `${linked.name} (earlier strategy)` : "An earlier strategy version"}</option>}
+    </select>
+  );
 
   // ---------------------------------------------------------------- AI critique
   const runCritique = async () => {
@@ -605,6 +641,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   };
   const locateMany = (ids: string[]) => {
     setCritiqueOpen(false);
+    setView("canvas");
     setNodes((ns) => ns.map((n) => ({ ...n, selected: ids.includes(n.id) })));
     setTimeout(() => void rf.fitView({ nodes: ids.map((id) => ({ id })), maxZoom: 1.2, padding: 0.5, duration: 400 }), 50);
   };
@@ -627,152 +664,159 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
 
   const mod = isMac() ? "⌘" : "Ctrl+";
   const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting]);
+  const onCanvas = view === "canvas";
+  const VIEWS: { v: View; label: string; Icon: React.ComponentType }[] = [
+    { v: "board", label: "Board", Icon: LayoutTemplate }, { v: "canvas", label: "Canvas", Icon: SquareDashedMousePointer }, { v: "list", label: "List", Icon: List },
+  ];
 
   return (
     <BoardCtx.Provider value={ctx}>
-      <div ref={shell} className={cn("relative overflow-hidden", presenting ? "fixed inset-0 z-50 bg-charcoal" : "h-[calc(100dvh-210px)] min-h-[560px] rounded-cc-lg border border-line bg-ivory")}>
-        <div className="cc-atmosphere pointer-events-none absolute inset-0" aria-hidden="true" />
-        <div className={cn("absolute inset-y-0 left-0 transition-[right] duration-300", panel && !presenting ? "right-0 lg:right-[300px]" : "right-0")} onDragOver={onDragOver} onDrop={onDrop}>
-          <ReactFlow<BoardNode>
-            className="cc-board-flow"
-            aria-label={`Inspiration board “${name}”. Use Tab to move between cards; arrow keys move the selected card.`}
-            nodes={nodes}
-            onNodesChange={handleNodesChange}
-            nodeTypes={nodeTypes}
-            onNodeDragStop={onNodeDragStop}
-            onBeforeDelete={onBeforeDelete}
-            onMoveEnd={() => setViewTick((t) => t + 1)}
-            defaultViewport={board.content.viewport ?? undefined}
-            fitView={fitOnOpen}
-            fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
-            onlyRenderVisibleElements
-            minZoom={0.1}
-            maxZoom={4}
-            nodesDraggable={canEdit && !presenting}
-            nodesConnectable={false}
-            elementsSelectable={!presenting}
-            deleteKeyCode={canEdit ? ["Backspace", "Delete"] : null}
-            multiSelectionKeyCode={["Shift", "Meta", "Control"]}
-            selectionKeyCode="Shift"
-            selectionOnDrag={false}
-            panOnScroll
-            zoomOnPinch
-          >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color={presenting ? "#2b2836" : "#d9d3cc"} bgColor={presenting ? "#17151e" : undefined} />
-            {!presenting && <MiniMap pannable zoomable className="!rounded-cc !border !border-line !bg-paper/80 !shadow-card max-md:!hidden" maskColor="rgba(247,245,242,0.7)"
-              nodeColor={(n) => (n.type === "group" ? "rgba(184,165,255,0.35)" : n.type === "entity" ? "#8064F5" : "#e9e5e1")} />}
-          </ReactFlow>
-
-          {nodes.length === 0 && !listView && !presenting && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-              <div className="max-w-sm text-center">
-                <p className="cc-display text-3xl">An empty wall.</p>
-                <p className="mt-2 text-[13px] leading-relaxed text-muted">
-                  {canEdit ? `Drop or paste images and links here, add notes from the toolbar, or drag cultural entities in from the panel. ${mod}Z undoes anything.` : "Nothing has been added to this board yet."}
-                </p>
-              </div>
-            </div>
-          )}
-          {listView && <ListView nodes={nodes} onLocate={locate} />}
-        </div>
-
-        {/* Top toolbar */}
-        {!presenting && <div className={cn("cc-glass absolute left-3 right-14 top-3 z-10 flex flex-wrap items-center gap-1 rounded-cc-lg p-1.5 lg:right-auto", panel ? "lg:max-w-[calc(100%-370px)]" : "lg:max-w-[calc(100%-68px)]")}>
+      {/* The editor takes the whole window, like any design tool; the header leads back to the campaign. */}
+      <div ref={shell} className="fixed inset-0 z-40 flex flex-col bg-ivory">
+        <header className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-line bg-paper/95 px-3 py-2 backdrop-blur sm:px-4">
           <Button asChild variant="ghost" size="icon-sm" aria-label="All boards"><Link href={`/projects/${board.projectId}/boards`}><ArrowLeft /></Link></Button>
-          <input aria-label="Board name" value={name} disabled={!canEdit} maxLength={120} onChange={(e) => setName(e.target.value)} onBlur={rename}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            className="w-[min(220px,40vw)] truncate rounded-full bg-transparent px-2 py-1 text-[14px] font-medium tracking-tight outline-none focus:bg-paper/80" />
-          {canEdit && (
-            <>
-              <span className="mx-0.5 h-5 w-px bg-line" aria-hidden="true" />
+          <div className="min-w-0">
+            <Link href={`/projects/${board.projectId}/boards`} className="block truncate text-[11.5px] leading-tight text-muted hover:text-ink">{projectName} · Inspiration boards</Link>
+            <input aria-label="Board name" value={name} disabled={!canEdit} maxLength={120} onChange={(e) => setName(e.target.value)} onBlur={rename}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className="-ml-1 w-[min(300px,52vw)] truncate rounded-[6px] bg-transparent px-1 text-[16px] font-medium leading-tight tracking-tight outline-none focus:bg-ink/[0.04]" />
+          </div>
+          <div role="tablist" aria-label="View" className="ml-1 flex rounded-full bg-ink/5 p-0.5 max-sm:order-last max-sm:w-full">
+            {VIEWS.map(({ v, label, Icon }) => (
+              <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
+                className={cn("inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-1 text-[12.5px] font-medium transition-colors [&_svg]:size-3.5", view === v ? "bg-paper text-ink shadow-card" : "text-muted hover:text-ink")}>
+                <Icon /> {label}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-1">
+            {directionSelect("max-lg:hidden")}
+            <button type="button" onClick={() => setView("board")} title="What the board still needs before it goes to the client"
+              className={cn("inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium", score.passed === score.total ? "bg-lilac/70 text-violet-ink" : "bg-ink/5 text-ink")}>
+              <span className="relative size-3.5 rounded-full" style={{ background: `conic-gradient(#8064F5 ${(score.passed / score.total) * 360}deg, rgba(17,17,22,0.12) 0)` }} aria-hidden="true" />
+              Ready {score.passed}/{score.total}
+            </button>
+            <SaveBadge state={canEdit ? save : "saved"} readOnly={!canEdit} onReload={() => router.refresh()} onRetry={() => void doSave()} />
+            {canEdit && <>
+              <Button variant="ghost" size="icon-sm" aria-label={`Undo (${mod}Z)`} title={`Undo (${mod}Z)`} disabled={!canUndoRedo.undo} onClick={undo}><Undo2 /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={`Redo (${mod}⇧Z)`} title={`Redo (${mod}⇧Z)`} disabled={!canUndoRedo.redo} onClick={redo}><Redo2 /></Button>
+            </>}
+            <Button variant="ghost" size="icon-sm" aria-label="Version history" title="Version history" onClick={() => setHistoryOpen(true)}><HistoryIcon /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="AI critique" title="AI critique" onClick={() => setCritiqueOpen(true)}><Sparkles /></Button>
+            {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Delete board" title="Delete board" onClick={() => setDeleteOpen(true)}><Trash2 /></Button>}
+            <Button size="sm" disabled={!nodes.length} onClick={startPresenting}><Play /> Present</Button>
+            <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple hidden
+              onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ""; }} />
+          </div>
+        </header>
+
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <div className="cc-atmosphere pointer-events-none absolute inset-0" aria-hidden="true" />
+          <div className={cn("absolute inset-y-0 left-0 transition-[right] duration-300", panel ? "right-0 lg:right-[300px]" : "right-0")} onDragOver={onDragOver} onDrop={onDrop}>
+            <ReactFlow<BoardNode>
+              className="cc-board-flow"
+              aria-label={`Inspiration board “${name}”. Use Tab to move between cards; arrow keys move the selected card.`}
+              aria-hidden={!onCanvas}
+              nodes={nodes}
+              onNodesChange={handleNodesChange}
+              nodeTypes={nodeTypes}
+              onNodeDragStop={onNodeDragStop}
+              onBeforeDelete={onBeforeDelete}
+              onMoveEnd={() => setViewTick((t) => t + 1)}
+              defaultViewport={board.content.viewport ?? undefined}
+              fitView={fitOnOpen}
+              fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+              onlyRenderVisibleElements
+              minZoom={0.1}
+              maxZoom={4}
+              nodesDraggable={canEdit && onCanvas}
+              nodesConnectable={false}
+              elementsSelectable={onCanvas}
+              deleteKeyCode={canEdit && onCanvas ? ["Backspace", "Delete"] : null}
+              multiSelectionKeyCode={["Shift", "Meta", "Control"]}
+              selectionKeyCode="Shift"
+              selectionOnDrag={false}
+              panOnScroll
+              zoomOnPinch
+            >
+              <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="#d9d3cc" />
+              {onCanvas && <MiniMap pannable zoomable className="!rounded-cc !border !border-line !bg-paper/80 !shadow-card max-md:!hidden" maskColor="rgba(247,245,242,0.7)"
+                nodeColor={(n) => (n.type === "group" ? "rgba(184,165,255,0.35)" : n.type === "entity" ? "#8064F5" : "#e9e5e1")} />}
+            </ReactFlow>
+
+            {nodes.length === 0 && onCanvas && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+                <div className="max-w-sm text-center">
+                  <p className="cc-display text-3xl">An empty wall.</p>
+                  <p className="mt-2 text-[13px] leading-relaxed text-muted">
+                    {canEdit ? `Drop or paste images and links here, add notes from the toolbar, or drag cultural entities in from the panel. ${mod}Z undoes anything.` : "Nothing has been added to this board yet."}
+                  </p>
+                </div>
+              </div>
+            )}
+            {view === "board" && (
+              <BoardView nodes={nodes} direction={direction} checks={checks} canEdit={canEdit} uploading={uploading} fitPending={fitPending}
+                onUpload={() => fileInput.current?.click()} onAddNote={(role) => addNote("", undefined, role)} onAddLink={() => setLinkOpen(true)} onOpenResearch={openResearch}
+                onUpdate={updateCard} onRemove={removeCard} onShowOnCanvas={locate} onCheckFit={checkFit} onPalette={() => setPaletteOpen(true)}
+                onCopy={(c) => { void navigator.clipboard?.writeText(c); toast({ title: `Copied ${c}`, tone: "success" }); }}
+                onMediaError={() => void refreshUrls()} linkControl={directionSelect() || <Link href={`/projects/${board.projectId}/strategy`} className="text-[13px] font-medium text-violet-ink hover:underline">Write strategy directions first</Link>} />
+            )}
+            {listView && <ListView nodes={nodes} onLocate={locate} />}
+          </div>
+
+          {/* Canvas tools */}
+          {onCanvas && canEdit && (
+            <div className="cc-glass absolute left-3 top-3 z-10 flex flex-wrap items-center gap-1 rounded-full p-1">
               <Button variant="ghost" size="sm" onClick={() => fileInput.current?.click()} disabled={uploading > 0}>
                 {uploading > 0 ? <Loader2 className="animate-spin" /> : <ImagePlus />} Image
               </Button>
-              <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple hidden
-                onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ""; }} />
               <Button variant="ghost" size="sm" onClick={() => addNote()}><StickyNote /> Note</Button>
               <Button variant="ghost" size="sm" onClick={() => setLinkOpen(true)}><Link2 /> Link</Button>
               <Button variant="ghost" size="sm" onClick={addGroup}><Frame /> Group</Button>
               <span className="mx-0.5 h-5 w-px bg-line" aria-hidden="true" />
-              <Button variant="ghost" size="icon-sm" aria-label={`Undo (${mod}Z)`} title={`Undo (${mod}Z)`} disabled={!canUndoRedo.undo} onClick={undo}><Undo2 /></Button>
-              <Button variant="ghost" size="icon-sm" aria-label={`Redo (${mod}⇧Z)`} title={`Redo (${mod}⇧Z)`} disabled={!canUndoRedo.redo} onClick={redo}><Redo2 /></Button>
-            </>
-          )}
-          <span className="mx-0.5 h-5 w-px bg-line" aria-hidden="true" />
-          <Button variant="ghost" size="icon-sm" aria-pressed={listView} aria-label={listView ? "Show canvas" : "Show as list"} title={listView ? "Show canvas" : "Show as list"} onClick={() => setListView((v) => !v)}>
-            {listView ? <LayoutGrid /> : <List />}
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Version history" title="Version history" onClick={() => setHistoryOpen(true)}><HistoryIcon /></Button>
-          {directions.length > 0 && (
-            <select aria-label="Strategy direction for this board" value={directionId ?? ""} disabled={!canEdit}
-              onChange={async (e) => {
-                const next = e.target.value || null;
-                const prev = directionId;
-                setDirectionId(next);
-                const r = await setBoardDirectionAction(board.id, next);
-                if (!r.ok) { setDirectionId(prev); toast({ title: "Not linked", description: r.error, tone: "error" }); }
-              }}
-              className="h-8 max-w-[200px] truncate rounded-full border border-line bg-paper/80 px-2.5 text-[12px] outline-none focus:border-violet">
-              <option value="">No direction</option>
-              {directions.map((d) => <option key={d.id} value={d.id}>{`Direction 0${d.slot}: ${d.name}${d.selected ? " (selected)" : ""}`}</option>)}
-              {directionId && !directions.some((d) => d.id === directionId) && <option value={directionId}>An earlier strategy version</option>}
-            </select>
-          )}
-          <EvidenceMeter {...coverage} />
-          <SaveBadge state={canEdit ? save : "saved"} readOnly={!canEdit} onReload={() => router.refresh()} onRetry={() => void doSave()} />
-          <Button variant="ghost" size="icon-sm" aria-label="AI critique" title="AI critique" onClick={() => setCritiqueOpen(true)}><Sparkles /></Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Present" title="Present (full screen, one group at a time)" disabled={!nodes.length} onClick={startPresenting}><Play /></Button>
-          {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Delete board" title="Delete board" onClick={() => setDeleteOpen(true)}><Trash2 /></Button>}
-        </div>}
-
-        {/* Bottom-left: zoom and palette */}
-        {!presenting && <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
-          <div className="cc-glass flex items-center gap-0.5 rounded-full p-1">
-            <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => rf.zoomOut()}><Minus /></Button>
-            <Button variant="ghost" size="icon-sm" aria-label="Fit board" onClick={() => rf.fitView({ padding: 0.2, maxZoom: 1, duration: 400 })}><Maximize /></Button>
-            <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => rf.zoomIn()}><Plus /></Button>
-          </div>
-          {palette.length > 0 && selected.length === 0 && (
-            <div className="cc-glass flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-1.5">
-              <button type="button" className="cc-eyebrow text-muted hover:text-ink" onClick={() => setPaletteOpen(true)} title="Names, contrast and CSS">Palette</button>
-              {palette.map((c) => (
-                <button key={c} type="button" title={`Copy ${c}`} aria-label={`Copy colour ${c}`} className="size-6 rounded-full border-2 border-paper shadow-card transition-transform hover:scale-110"
-                  style={{ background: c }}
-                  onClick={() => { void navigator.clipboard?.writeText(c); toast({ title: `Copied ${c}`, tone: "success" }); }} />
-              ))}
+              <EvidenceMeter {...coverage} />
             </div>
           )}
-        </div>}
 
-        {canEdit && selected.length > 0 && !listView && !presenting && (
-          <SelectionBar count={selected.length} locked={selected.every((n) => n.data.locked)} onDuplicate={duplicate} onLock={toggleLock}
-            onFront={() => reorder(true)} onBack={() => reorder(false)} onAlign={doAlign} onDistribute={doDistribute} onDelete={deleteSelected}
-            onComments={() => setCommentCard(selected[0].id)} />
-        )}
-
-        {presenting && (
-          <div className="absolute inset-x-0 bottom-5 z-30 flex justify-center">
-            <div className="flex items-center gap-1 rounded-full bg-paper/90 px-2 py-1.5 shadow-float backdrop-blur" role="toolbar" aria-label="Presentation controls">
-              <Button variant="ghost" size="icon-sm" aria-label="Previous" disabled={slide === 0} onClick={() => showSlide(slide - 1)}><ChevronLeft /></Button>
-              <span className="min-w-36 px-2 text-center text-[13px] font-medium" aria-live="polite">{slides[slide]?.label} <span className="text-muted">· {slide + 1}/{slides.length}</span></span>
-              <Button variant="ghost" size="icon-sm" aria-label="Next" disabled={slide >= slides.length - 1} onClick={() => showSlide(slide + 1)}><ChevronRight /></Button>
-              <Button variant="ghost" size="sm" onClick={() => { void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?present=1`); toast({ title: "Presentation link copied", description: "Opens straight into presentation mode for anyone in this workspace.", tone: "success" }); }}><Link2 /> Copy link</Button>
-              <Button variant="ghost" size="icon-sm" aria-label="Exit presentation" title="Exit (Esc)" onClick={stopPresenting}><X /></Button>
+          {/* Bottom-left: zoom and palette */}
+          {onCanvas && <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
+            <div className="cc-glass flex items-center gap-0.5 rounded-full p-1">
+              <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => rf.zoomOut()}><Minus /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Fit board" onClick={() => rf.fitView({ padding: 0.2, maxZoom: 1, duration: 400 })}><Maximize /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => rf.zoomIn()}><Plus /></Button>
             </div>
-          </div>
-        )}
+            {palette.length > 0 && selected.length === 0 && (
+              <div className="cc-glass flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-1.5">
+                <button type="button" className="cc-eyebrow text-muted hover:text-ink" onClick={() => setPaletteOpen(true)} title="Names, contrast and CSS">Palette</button>
+                {palette.map((c) => (
+                  <button key={c} type="button" title={`Copy ${c}`} aria-label={`Copy colour ${c}`} className="size-6 rounded-full border-2 border-paper shadow-card transition-transform hover:scale-110"
+                    style={{ background: c }}
+                    onClick={() => { void navigator.clipboard?.writeText(c); toast({ title: `Copied ${c}`, tone: "success" }); }} />
+                ))}
+              </div>
+            )}
+          </div>}
 
-        {/* Right: Qloo entities */}
-        {!presenting && <Button variant="outline" size="icon-sm" className="absolute right-3 top-3 z-20 shadow-card" aria-label={panel ? "Hide research panel" : "Show research panel"} onClick={() => setPanel((p) => !p)}>
-          {panel ? <PanelRightClose /> : <PanelRightOpen />}
-        </Button>}
-        {panel && !presenting && <ResearchPanel entities={entities} evidence={evidence} canEdit={canEdit} onAddEntity={(e) => addEntity(e)} onAddEvidence={(e) => addEvidence(e)} projectId={board.projectId} />}
+          {canEdit && selected.length > 0 && onCanvas && (
+            <SelectionBar count={selected.length} locked={selected.every((n) => n.data.locked)} onDuplicate={duplicate} onLock={toggleLock}
+              onFront={() => reorder(true)} onBack={() => reorder(false)} onAlign={doAlign} onDistribute={doDistribute} onDelete={deleteSelected}
+              onComments={() => setCommentCard(selected[0].id)} />
+          )}
 
-        {commentCard && !presenting && (
-          <CommentsPanel
-            cardLabel={(() => { const n = nodes.find((x) => x.id === commentCard); return n ? describe(n) : "Removed card"; })()}
-            comments={comments.filter((c) => c.cardId === commentCard)} canComment={canComment} onPost={postComment} onClose={() => setCommentCard(null)} />
-        )}
+          {/* Right: research to add */}
+          {(panel || onCanvas) && <Button variant="outline" size="icon-sm" className="absolute right-3 top-3 z-20 shadow-card" aria-label={panel ? "Hide research panel" : "Show research panel"} onClick={() => setPanel((p) => !p)}>
+            {panel ? <PanelRightClose /> : <PanelRightOpen />}
+          </Button>}
+          {panel && <ResearchPanel key={panelTab} initialTab={panelTab} entities={entities} evidence={evidence} canEdit={canEdit} onAddEntity={(e) => addEntity(e)} onAddEvidence={(e) => addEvidence(e)} projectId={board.projectId} />}
+
+          {commentCard && (
+            <CommentsPanel
+              cardLabel={(() => { const n = nodes.find((x) => x.id === commentCard); return n ? describe(n) : "Removed card"; })()}
+              comments={comments.filter((c) => c.cardId === commentCard)} canComment={canComment} onPost={postComment} onClose={() => setCommentCard(null)} />
+          )}
+        </div>
+
+        {presenting && <BoardSlides name={name} nodes={nodes} direction={direction} onClose={stopPresenting} onCopyLink={copyPresentLink} onMediaError={() => void refreshUrls()} />}
 
         <LinkDialog open={linkOpen} onOpenChange={setLinkOpen} onAdd={(d) => void addLink(d)} />
         <PaletteDialog palette={palette} open={paletteOpen} onOpenChange={setPaletteOpen} onCopied={(what) => toast({ title: `Copied ${what}`, tone: "success" })} />

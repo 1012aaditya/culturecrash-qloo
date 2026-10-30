@@ -3,11 +3,12 @@ import { withUser, type Tx } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Ctx } from "@/lib/data/workspace";
 import { mediaPaths, type EntityData, type EvidenceCardData } from "./schema";
+import type { DirectionBrief } from "./sections";
 
 export const BOARD_BUCKET = "board-media";
 const SIGNED_URL_SECONDS = 60 * 60 * 6;
 
-export type BoardSummary = { id: string; name: string; palette: string[]; cardCount: number; updatedAt: string; previewPaths: string[]; previewUrls: string[] };
+export type BoardSummary = { id: string; name: string; directionName: string | null; palette: string[]; cardCount: number; updatedAt: string; previewPaths: string[]; previewUrls: string[] };
 export type BoardDoc = { id: string; projectId: string; name: string; revision: number; palette: string[]; directionId: string | null; content: { nodes: Record<string, unknown>[]; viewport: { x: number; y: number; zoom: number } | null } };
 
 export function mediaPrefix(workspaceId: string, projectId: string, boardId: string) {
@@ -70,12 +71,13 @@ export async function signNodes(nodes: Record<string, unknown>[]): Promise<Recor
 
 export async function listBoards(ctx: Ctx, projectId: string): Promise<BoardSummary[]> {
   const rows = await withUser(ctx.user.id, (tx) => tx`
-    select id, name, palette, updated_at, jsonb_array_length(content->'nodes') as card_count, content->'nodes' as nodes
-    from inspiration_boards where project_id = ${projectId} order by updated_at desc`);
+    select b.id, b.name, b.palette, b.updated_at, jsonb_array_length(b.content->'nodes') as card_count, b.content->'nodes' as nodes, d.name as direction_name
+    from inspiration_boards b left join strategy_directions d on d.id = b.direction_id
+    where b.project_id = ${projectId} order by b.updated_at desc`);
   const previews = rows.map((r) => [...new Set(imagePaths(r.nodes as Record<string, unknown>[]))].slice(0, 3));
   const signed = await signPaths(previews.flat());
   return rows.map((r, i) => ({
-    id: r.id, name: r.name, palette: r.palette ?? [], cardCount: Number(r.card_count), updatedAt: new Date(r.updated_at).toISOString(),
+    id: r.id, name: r.name, directionName: r.direction_name ?? null, palette: r.palette ?? [], cardCount: Number(r.card_count), updatedAt: new Date(r.updated_at).toISOString(),
     previewPaths: previews[i], previewUrls: previews[i].map((p) => signed.get(p)).filter((u): u is string => Boolean(u)),
   }));
 }
@@ -138,18 +140,39 @@ export async function boardEvidence(ctx: Ctx, projectId: string): Promise<Eviden
   }));
 }
 
-export type DirectionOption = { id: string; name: string; slot: number; selected: boolean };
+export type DirectionOption = { id: string; name: string; slot: number; selected: boolean; brief: DirectionBrief };
+
+const text = (v: unknown, max = 1200) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+const list = (v: unknown, max = 12) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, max).map((x) => x.trim().slice(0, 400)) : []);
+
+/** The parts of a stored direction a board shows. Missing or malformed fields come back empty. */
+export function directionBrief(row: { id: string; name: string; slot: number; content: unknown }): DirectionBrief {
+  const c = (row.content ?? {}) as Record<string, unknown>;
+  return {
+    id: row.id, name: row.name, slot: row.slot,
+    coreIdea: text(c.coreIdea), positioning: text(c.positioningStatement), audience: text(c.audienceContext), brandRole: text(c.brandRole, 300),
+    culturalConnections: list(c.culturalConnections), messagingPillars: list(c.messagingPillars, 8), creativeImplications: text(c.creativeImplications),
+    evidenceIds: list(c.evidenceIds, 40),
+  };
+}
 
 /** The current strategy version's directions (latest revision of each slot), for linking boards. */
 export async function boardDirections(ctx: Ctx, projectId: string): Promise<DirectionOption[]> {
   const rows = await withUser(ctx.user.id, (tx) => tx`
-    select distinct on (d.slot) d.id, d.name, d.slot, (p.selected_direction_id is not null and sel.version_id = d.version_id and sel.slot = d.slot) as selected
+    select distinct on (d.slot) d.id, d.name, d.slot, d.content, (p.selected_direction_id is not null and sel.version_id = d.version_id and sel.slot = d.slot) as selected
     from strategy_directions d
     join projects p on p.id = d.project_id
     left join strategy_directions sel on sel.id = p.selected_direction_id
     where d.project_id = ${projectId} and d.version_id = (select id from strategy_versions where project_id = ${projectId} order by version desc limit 1)
     order by d.slot, d.revision desc`);
-  return rows.map((r) => ({ id: r.id, name: r.name, slot: r.slot, selected: Boolean(r.selected) }));
+  return rows.map((r) => ({ id: r.id, name: r.name, slot: r.slot, selected: Boolean(r.selected), brief: directionBrief(r as never) }));
+}
+
+/** A board's linked direction even when it belongs to an earlier strategy version. */
+export async function linkedDirection(ctx: Ctx, projectId: string, directionId: string | null): Promise<DirectionBrief | null> {
+  if (!directionId) return null;
+  const [r] = await withUser(ctx.user.id, (tx) => tx`select id, name, slot, content from strategy_directions where id = ${directionId} and project_id = ${projectId}`);
+  return r ? directionBrief(r as never) : null;
 }
 
 export type LinkedBoard = { id: string; name: string; palette: string[]; previewUrls: string[]; cardCount: number };

@@ -43,10 +43,11 @@ export const EVIDENCE_MIME = "application/x-culturecrash-evidence";
 const EVIDENCE_KIND: Record<string, string> = { external_source: "Web claim", approved_conclusion: "Conclusion", experiment_result: "Result" };
 
 /** Research to bring onto the board: Qloo entities and cited evidence from this campaign. */
-export function ResearchPanel({ entities, evidence, canEdit, onAddEntity, onAddEvidence, projectId }: {
+export function ResearchPanel({ entities, evidence, canEdit, onAddEntity, onAddEvidence, projectId, initialTab }: {
   entities: EntityData[]; evidence: EvidenceCardData[]; canEdit: boolean; onAddEntity: (e: EntityData) => void; onAddEvidence: (e: EvidenceCardData) => void; projectId: string;
+  initialTab?: "qloo" | "evidence";
 }) {
-  const [tab, setTab] = React.useState<"qloo" | "evidence">(entities.length || !evidence.length ? "qloo" : "evidence");
+  const [tab, setTab] = React.useState<"qloo" | "evidence">(initialTab ?? (entities.length || !evidence.length ? "qloo" : "evidence"));
   const [q, setQ] = React.useState("");
   const t = q.trim().toLowerCase();
   const shownEntities = t ? entities.filter((e) => e.name.toLowerCase().includes(t) || (TYPE_LABEL[e.type] ?? e.type).toLowerCase().includes(t)) : entities;
@@ -200,7 +201,7 @@ const TYPE_NAME: Record<string, string> = { image: "Image", note: "Note", link: 
 export function ListView({ nodes, onLocate }: { nodes: BoardNode[]; onLocate: (id: string) => void }) {
   const groups = new Map(nodes.filter((n) => n.type === "group").map((n) => [n.id, String(n.data.label || "Untitled group")]));
   return (
-    <div className="absolute inset-0 z-[5] overflow-y-auto bg-ivory/95 px-3 pb-6 pt-20 sm:px-6">
+    <div className="absolute inset-0 z-[5] overflow-y-auto bg-ivory/95 px-3 pb-6 pt-6 sm:px-6">
       <table className="w-full border-separate border-spacing-0 overflow-hidden rounded-cc border border-line bg-paper text-left text-[13px]">
         <caption className="sr-only">Cards on this board</caption>
         <thead className="text-[11px] uppercase tracking-wider text-muted">

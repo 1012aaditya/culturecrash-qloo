@@ -3,7 +3,7 @@
 import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError } from "@/lib/ai";
+import { generateStructured, tag, TEMPLATE_GENERATOR, LLMError, NO_IDS_IN_PROSE, stripEvidenceIds } from "@/lib/ai";
 import { latestCompletedRun, readObservations } from "@/lib/ai/context";
 import { checkStatements, citedIds } from "@/lib/ai/grounding";
 import {
@@ -362,10 +362,11 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
       try {
         const r = await generateStructured({
           schema: creativeBriefOutputSchema,
-          prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. The section texts are client-facing: never write evidence ids in them. In \`grounding\`, list the factual statements the brief relies on, each with its section and the ids of the evidence items whose text supports it.`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
+          prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. The section texts are client-facing: never write evidence ids in them. In \`grounding\`, list the factual statements the brief relies on, each with its section and the ids of the evidence items whose text supports it. ${NO_IDS_IN_PROSE}`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
         });
         const { grounding: g, ...prose } = r.data;
-        content = prose;
+        // Any id the model still wrote into the client-facing prose is removed; citations live in grounding.
+        content = Object.fromEntries(Object.entries(prose).map(([k, v]) => [k, stripEvidenceIds(v)])) as CreativeBriefContent;
         const evidence = evidenceText(input.obs);
         grounding = g.map((c) => ({ ...checkStatements([c], evidence)[0], section: c.section }));
         generator = r.generator;
@@ -424,9 +425,9 @@ export async function reviseCreativeSectionAction(briefId: string, key: Creative
     const r = await generateStructured({
       schema: sectionRevisionSchema,
       maxTokens: 4000,
-      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text.`, tag("brief", cb.brief ? briefJson(cb.brief) : "{}"), tag("creative_brief", JSON.stringify(cb.content)), tag("evidence", JSON.stringify(cb.evidence)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
+      prompt: [`Rewrite only the "${key}" section of this creative brief per the request. Do not add unsupported claims. Return just the new section text. ${NO_IDS_IN_PROSE}`, tag("brief", cb.brief ? briefJson(cb.brief) : "{}"), tag("creative_brief", JSON.stringify(cb.content)), tag("evidence", JSON.stringify(cb.evidence)), tag("user_request", instruction.trim().slice(0, 1000))].join("\n\n"),
     });
-    return { ok: true, data: { text: r.data.text } };
+    return { ok: true, data: { text: stripEvidenceIds(r.data.text) } };
   } catch (e) {
     return { ok: false, error: llmMessage(e) };
   }

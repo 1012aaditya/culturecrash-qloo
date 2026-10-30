@@ -6,7 +6,7 @@ import { loadBrief } from "@/lib/data/briefs";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { env } from "@/lib/env";
 import { ensureChunks, searchBrandDocs } from "./brand-docs";
-import { Budget, DEPTH_PROFILES, llmCostUsd, synthesisEstimateUsd, type BudgetLimits } from "./budget";
+import { Budget, DEPTH_PROFILES, llmCostUsd, synthesisEstimateUsd, WEB_TIME_SHARE, type BudgetLimits } from "./budget";
 import { cacheGet, cacheKey, cachePut } from "./cache";
 import { dedupe, independentCount, isRepeatQuery, mergeClaims, tokens } from "./dedupe";
 import { extractionPrompt, extractionSchema, rulesExtraction, validateExtraction, type ExtractDoc } from "./extract";
@@ -160,6 +160,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       affinity: r.affinity === null ? null : Number(r.affinity), popularity: r.popularity === null ? null : Number(r.popularity), tier: r.tier,
     })))) : [];
   const qlooPicks = pickQlooEntities(qlooRows, QLOO_PICKS[depth]);
+  // External sources always get time after a slow Qloo stage, but never past the run's hard deadline.
+  budget.ensureSecondsLeft(Math.min(limits.maxSeconds * WEB_TIME_SHARE, (deadline - Date.now()) / 1000 - 30));
   await save({ stage: "planning" });
 
   const useLlm = !isDemo && (await llmEnabled(userId, ws));

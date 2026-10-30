@@ -64,6 +64,20 @@ export async function generateStructured<S extends z.ZodType>(opts: { schema: S;
   }
 }
 
+/** For prose a client reads (the creative brief), which has no separate field for citations. */
+export const NO_IDS_IN_PROSE = "This text is client-facing: never write evidence ids or other UUIDs in it. Refer to evidence by the entity, source or finding it describes.";
+
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
+/** Removes evidence ids the model wrote into prose anyway, e.g. "Shankar Mahadevan at 0.978 (f5e4…b1)". */
+export function stripEvidenceIds(text: string) {
+  return text
+    .replace(new RegExp(`\\s*[(\\[]\\s*(?:ids?:?\\s*)?${UUID}(?:\\s*[,;]\\s*${UUID})*\\s*[)\\]]`, "gi"), "")
+    .replace(new RegExp(UUID, "gi"), "")
+    .replace(/ {2,}/g, " ")
+    .replace(/ ([.,;:])/g, "$1");
+}
+
 export function tag(name: string, content: string) {
   // Neutralise attempts to close our wrapper tags from inside untrusted content.
   return `<${name}>\n${content.replaceAll(`</${name}>`, `</ ${name}>`)}\n</${name}>`;

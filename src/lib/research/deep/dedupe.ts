@@ -94,3 +94,24 @@ export function isRepeatQuery(q: string, previous: string[], threshold = 0.75): 
   const t = new Set(tokens(q));
   return previous.some((p) => jaccard(new Set(tokens(p)), t) >= threshold);
 }
+
+/**
+ * Takes up to `n` items in turns across questions (by each item's first question key), keeping each
+ * question's own order. Taking the first `n` let the first question use the whole extraction cap: live,
+ * q1 got all 18 documents and q2–q5 got no claims despite 15–30 documents each.
+ */
+export function takeAcrossQuestions<T extends { questionKeys: string[] }>(items: T[], n: number): T[] {
+  const queues = new Map<string, T[]>();
+  for (const it of items) {
+    const k = it.questionKeys[0] ?? "";
+    queues.set(k, [...(queues.get(k) ?? []), it]);
+  }
+  const out: T[] = [];
+  while (out.length < n && [...queues.values()].some((q) => q.length)) {
+    for (const q of queues.values()) {
+      const next = q.shift();
+      if (next && out.length < n) out.push(next);
+    }
+  }
+  return out;
+}

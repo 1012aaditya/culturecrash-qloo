@@ -17,6 +17,8 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   const [run] = await tx`select * from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
   const entities = run ? await tx`select name, entity_type, role, affinity, popularity from cultural_entities where run_id = ${run.id} and role <> 'seed' order by affinity desc nulls last` : [];
   const sources = run ? await tx`select endpoint, params, status, http_status, result_count, retrieved_at from research_sources where run_id = ${run.id} order by retrieved_at` : [];
+  // The signals actually sent to Qloo: brief names that Qloo did not match are not signals.
+  const seeds = run ? await tx`select name, properties->>'query' as query, properties->>'kind' as kind from cultural_entities where run_id = ${run.id} and role = 'seed' order by retrieved_at, name` : [];
   const opps = await tx`select title, description, why_it_matters, unknowns, validation_step, status, generator, evidence_ids, claims from opportunities where project_id = ${projectId} and status <> 'dismissed' order by (status = 'saved') desc limit 8`;
   const [p] = await tx`select selected_direction_id from projects where id = ${projectId}`;
   const [selected] = p?.selected_direction_id ? await tx`select id, version_id, name, content, revision from strategy_directions where id = ${p.selected_direction_id}` : [];
@@ -97,7 +99,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
     },
     methodology: run ? {
       question: run.question as string, mode: run.mode as "live" | "demo", provider: run.provider as string, runAt: new Date(run.created_at).toISOString(), briefRevision: run.brief_revision as number | null,
-      signals: plan?.seedQueries.map((s) => s.query) ?? [], location: plan?.location ?? null, requests: sources.length, failedRequests: sources.filter((s) => s.status === "error").length,
+      signals: seeds.map((s) => (s.query && s.query !== s.name ? `${s.name} (${s.kind ?? "brief"} “${s.query}”)` : (s.name as string))), location: plan?.location ?? null, requests: sources.length, failedRequests: sources.filter((s) => s.status === "error").length,
       interpretationBy: generatorLabel(run.interpretation_generator), notes: plan?.notes ?? [],
     } : null,
     landscape: [...byType.entries()].map(([type, items]) => ({ type, items: items.slice(0, 8) })),

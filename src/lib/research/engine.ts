@@ -84,6 +84,25 @@ export function pickMatchingEntity<T extends { name: string }>(query: string, ca
   });
 }
 
+/**
+ * Picks the Qloo tag for an audience interest. /v2/tags also returns loose matches (live: "K-beauty" →
+ * "Kent Downs Area of Outstanding Natural Beauty", "clean beauty" → "Beauty salon"), so a tag is used only
+ * when its name contains every word of the interest (singular or plural) or equals it ignoring spaces.
+ * Taste tags are preferred over genre tags.
+ */
+export function pickMatchingTag<T extends { name: string; type?: string | null }>(query: string, candidates: T[]): T | undefined {
+  const q = normalizeName(query);
+  if (!q) return undefined;
+  const words = q.split(" ");
+  const matches = candidates.filter((c) => {
+    const n = normalizeName(c.name);
+    if (n.replace(/ /g, "") === q.replace(/ /g, "")) return true;
+    const have = n.split(" ");
+    return words.every((w) => have.some((h) => h === w || h === `${w}s` || w === `${h}s`));
+  });
+  return matches.find((t) => !(t.type ?? "").startsWith("urn:tag:genre:")) ?? matches[0];
+}
+
 export function buildPlan(b: BriefInput): ResearchPlan {
   const seeds: ResearchPlan["seedQueries"] = [];
   if (b.brand) seeds.push({ query: b.brand, kind: "brand" });
@@ -276,7 +295,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     });
     for (const q of plan.interestQueries ?? []) {
       const res = await guard("/v2/tags", { "filter.query": q }, () => client.searchTags(q, 3));
-      const top = res?.call.data.find((t) => !(t.type ?? "").startsWith("urn:tag:genre:")) ?? res?.call.data[0];
+      const top = res ? pickMatchingTag(q, res.call.data) : undefined;
       if (res && top) {
         seeds.push({
           entity: { providerId: top.providerId, name: top.name, type: "tag", affinity: null, popularity: top.popularity, tags: [], description: top.type ? `Qloo tag type: ${top.type}` : null, disambiguation: null, explainability: [] },
@@ -420,7 +439,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
               : `The brief’s ${s.kind} “${s.query}” was resolved to the provider entity “${s.entity.name}” (${s.entity.type}).`},
             ${provider}, ${s.entity.providerId}, now(), ${tx.json({ source_id: s.sourceId, role: "seed" })}, ${[ent.id]}, ${isDemo}, ${userId},
             ${s.kind === "interest"
-              ? "Interest matching uses the top /v2/tags result; check the tag reflects what the brief meant."
+              ? "Interest matching requires the tag to contain the interest’s words; check the tag reflects what the brief meant."
               : "Entity resolution requires the provider’s name to match the brief; check it refers to the intended brand."}) returning id`;
         obs.push({ id: ev.id, claim: "", entityName: s.entity.name, entityType: s.entity.type, affinity: null, role: "seed" });
       }
@@ -521,7 +540,14 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       // Only standalone Qloo runs get their own model interpretation. In a multi-source job the final
       // synthesis interprets Qloo and web evidence together, so a second, unbudgeted call would be waste.
       try {
-        const out = await generateStructured({ schema: researchInterpretationSchema, prompt: interpretationPrompt(brief!, observations, plan) });
+        // Embedded in a multi-source job, this is an intermediate read that the job's own synthesis
+        // supersedes, and it shares the job's time budget: the main model took ~90 s live and left no
+        // time for web search, so the fast model drafts it.
+        const out = await generateStructured({
+          schema: researchInterpretationSchema,
+          prompt: interpretationPrompt(brief!, observations, plan),
+          ...(embedded ? { model: env().LLM_MODEL_FAST, effort: "low" as const } : {}),
+        });
         const valid = new Set(observations.map((o) => o.id));
         out.data.findings = out.data.findings.map((f) => ({ ...f, evidenceIds: f.evidenceIds.filter((id) => valid.has(id)) }));
         interpretation = out.data;

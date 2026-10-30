@@ -19,6 +19,9 @@ export const DEPTH_PROFILES: Record<Depth, BudgetLimits> = {
   deep: { maxProviderCalls: 32, maxRounds: 3, maxRetrievedPages: 16, maxDocsToModel: 32, maxUsd: 1.5, maxSeconds: 270, maxLlmCalls: 10, synthesisReserveUsd: 0.35 },
 };
 
+/** Share of maxSeconds that external sources always get after the Qloo stage, however long it took. */
+export const WEB_TIME_SHARE = 0.5;
+
 export type Usage = {
   providerCalls: number;
   failedCalls: number;
@@ -43,7 +46,17 @@ export class Budget {
     this.started = now();
   }
 
-  elapsedSeconds() { return (this.now() - this.started) / 1000; }
+  elapsedSeconds() { return (this.now() - this.started - this.grantedMs) / 1000; }
+
+  private grantedMs = 0;
+  /**
+   * Guarantees at least `seconds` of working time from now (before the 80% stop threshold), so a slow
+   * earlier stage (the Qloo stage) cannot use up the whole budget before any external source is searched.
+   */
+  ensureSecondsLeft(seconds: number) {
+    const left = this.limits.maxSeconds * 0.8 - this.elapsedSeconds();
+    if (seconds > 0 && left < seconds) this.grantedMs += (seconds - left) * 1000;
+  }
   private ceiling() { return Math.min(this.limits.maxUsd, this.monthlyHeadroomUsd); }
 
   /** Can an optional operation run without eating the synthesis reserve? */

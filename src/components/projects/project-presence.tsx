@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 const BEAT_MS = 5_000;
 const PAGE_LABEL: Record<string, string> = {
   overview: "Overview", brief: "Brief", research: "Research", evidence: "Evidence", opportunities: "Opportunities",
-  strategy: "Strategy", "creative-brief": "Creative brief", experiments: "Experiments", reports: "Reports",
+  strategy: "Strategy", "creative-brief": "Creative brief", experiments: "Experiments", reports: "Reports", boards: "Inspiration boards",
 };
 
 /**

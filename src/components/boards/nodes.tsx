@@ -3,7 +3,7 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ExternalLink, Link2, Lock, Sparkles } from "lucide-react";
+import { AlertTriangle, ExternalLink, Link2, Lock, MessageSquare, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
 import type { EntityData, GroupData, ImageData, LinkData, NoteData } from "@/lib/boards/schema";
@@ -11,7 +11,25 @@ import { safeUrl } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 
 /** Board-level context the cards need: edit rights and where links resolve. */
-export const BoardCtx = React.createContext<{ canEdit: boolean; projectId: string; onMediaError: () => void }>({ canEdit: false, projectId: "", onMediaError: () => {} });
+export type BoardContext = {
+  canEdit: boolean; projectId: string; onMediaError: () => void;
+  /** Comment count per card id, and opening a card's thread. */
+  commentCounts: Record<string, number>; openComments: (cardId: string) => void;
+};
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {} });
+
+/** Comment count on a card; opens the card's thread. */
+function CommentBadge({ id }: { id: string }) {
+  const { commentCounts, openComments } = React.useContext(BoardCtx);
+  const n = commentCounts[id] ?? 0;
+  if (!n) return null;
+  return (
+    <button type="button" onClick={() => openComments(id)} aria-label={`${n} ${n === 1 ? "comment" : "comments"}`}
+      className="nodrag absolute left-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-full bg-violet px-1.5 py-0.5 text-[10.5px] font-medium text-white shadow-card hover:bg-violet-ink">
+      <MessageSquare className="size-3" /> {n}
+    </button>
+  );
+}
 
 /** Small badge on locked cards; locked cards can't be moved, resized or deleted until unlocked. */
 function LockBadge({ locked }: { locked?: boolean }) {
@@ -76,8 +94,8 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
   return (
     <>
       <Resizer selected={selected} locked={data.locked} keepAspectRatio />
-      <figure className={cn(card, ring(selected), "relative flex flex-col")}>
-        <LockBadge locked={data.locked} />
+      <figure data-presence-field={`card-${id}`} className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
         <div className="relative min-h-0 flex-1 bg-ivory">
           {src
             // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
@@ -126,8 +144,8 @@ export function NoteNode({ id, data, selected }: NodeProps<Node<NoteData>>) {
   return (
     <>
       <Resizer selected={selected} locked={data.locked} minHeight={60} />
-      <div className={cn(card, ring(selected), NOTE_TONES[data.tone], "relative flex flex-col p-3")}>
-        <LockBadge locked={data.locked} />
+      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), NOTE_TONES[data.tone], "relative flex flex-col p-3")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
         <InlineText multiline value={data.text} onChange={(v) => update({ text: v })} placeholder="Write a note…" className="flex-1 text-[13px] leading-relaxed" />
         {selected && canEdit && (
           <div className="nodrag mt-1 flex gap-1" role="group" aria-label="Note colour">
@@ -148,8 +166,8 @@ export function LinkNode({ id, data, selected }: NodeProps<Node<LinkData>>) {
   return (
     <>
       <Resizer selected={selected} locked={data.locked} minHeight={90} />
-      <div className={cn(card, ring(selected), "relative flex flex-col")}>
-        <LockBadge locked={data.locked} />
+      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
         {data.previewUrl && (
           // eslint-disable-next-line @next/next/no-img-element -- preview stored in the board's private bucket
           <img src={data.previewUrl} alt="" loading="lazy" onError={onMediaError} className="h-28 w-full shrink-0 border-b border-line object-cover" />
@@ -169,14 +187,14 @@ export function LinkNode({ id, data, selected }: NodeProps<Node<LinkData>>) {
   );
 }
 
-export function EntityNode({ data, selected }: NodeProps<Node<EntityData>>) {
+export function EntityNode({ id, data, selected }: NodeProps<Node<EntityData>>) {
   const { projectId } = React.useContext(BoardCtx);
   const theme = TYPE_THEME[data.type] ?? "culture";
   return (
     <>
       <Resizer selected={selected} locked={data.locked} minWidth={160} minHeight={150} />
-      <div className={cn(card, ring(selected), "relative flex flex-col")}>
-        <LockBadge locked={data.locked} />
+      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
         <EntityImage src={data.imageUrl} theme={theme} seed={data.entityId || data.name} rounded={false} className="min-h-0 flex-1" />
         <div className="space-y-1 border-t border-line px-2.5 py-2">
           <p className="truncate text-[13px] font-medium tracking-tight">{data.name}</p>
@@ -198,8 +216,8 @@ export function GroupNode({ id, data, selected }: NodeProps<Node<GroupData>>) {
   return (
     <>
       <Resizer selected={selected} locked={data.locked} minWidth={220} minHeight={160} />
-      <div className={cn("relative h-full w-full rounded-cc-lg border-2 border-dashed bg-lilac/15", selected ? "border-violet" : "border-lavender/70")}>
-        <LockBadge locked={data.locked} />
+      <div data-presence-field={`card-${id}`} className={cn("relative h-full w-full rounded-cc-lg border-2 border-dashed bg-lilac/15", selected ? "border-violet" : "border-lavender/70")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
         <div className="-translate-y-full px-1 pb-1">
           <InlineText value={data.label} onChange={(v) => update({ label: v })} placeholder="Group name" className="cc-eyebrow w-64 text-violet-ink" />
         </div>

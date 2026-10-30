@@ -7,7 +7,7 @@ import { logActivity } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
-import { BOARD_BUCKET, mediaPrefix, signNodes, signPaths, storageAvailable } from "./data";
+import { BOARD_BUCKET, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
 import { fetchLinkPreview, processImage, type LinkPreview, type ProcessedImage } from "./media";
 import { boardPalette, mediaPaths, parseBoardContent, safeUrl } from "./schema";
 
@@ -68,22 +68,19 @@ export async function deleteBoardAction(boardId: string): Promise<R> {
   try {
     const ctx = await guard();
     const b = await withUser(ctx.user.id, async (tx) => {
-      const [row] = await tx`delete from inspiration_boards where id = ${boardId} returning project_id, workspace_id, name`;
+      const [row] = await tx`delete from inspiration_boards where id = ${boardId} returning project_id, workspace_id, name, content`;
+      // Card comments have no foreign key to the board document, so they are removed with it.
+      const cardIds = ((row?.content?.nodes ?? []) as { id: string }[]).map((n) => n.id).filter(isUuid);
+      if (cardIds.length) await tx`delete from comments where target_type = 'board_card' and target_id = any(${cardIds}::uuid[])`;
       if (row) await logActivity(tx, { workspaceId: row.workspace_id, actorId: ctx.user.id, projectId: row.project_id, verb: "deleted", objectType: "board", objectId: boardId, summary: `deleted inspiration board “${row.name}”` });
       return row;
     });
     if (!b) return { ok: false, error: "Board not found." };
     // The board's media folder goes with it; a failure here only leaves orphaned files in the private bucket.
-    if (storageAvailable()) {
-      try {
-        const { supabaseServer } = await import("@/lib/auth/supabase");
-        const client = await supabaseServer();
-        const prefix = mediaPrefix(b.workspace_id, b.project_id, boardId);
-        const { data } = await client.storage.from(BOARD_BUCKET).list(prefix.slice(0, -1), { limit: 1000 });
-        if (data?.length) await client.storage.from(BOARD_BUCKET).remove(data.map((f) => prefix + f.name));
-      } catch (e) {
-        console.error("[boards] media cleanup failed", e instanceof Error ? e.message : e);
-      }
+    try {
+      await removeBoardFolders([{ id: boardId, workspace_id: b.workspace_id, project_id: b.project_id }]);
+    } catch (e) {
+      console.error("[boards] media cleanup failed", e instanceof Error ? e.message : e);
     }
     revalidatePath(`/projects/${b.project_id}/boards`);
     return { ok: true };
@@ -121,6 +118,11 @@ export async function saveBoardAction(boardId: string, revision: number, content
       if (!u) return { ok: false as const, error: CONFLICT, conflict: true };
 
       // Version history: a snapshot every 10 minutes of editing (or on request, e.g. before a restore), latest 30 kept.
+      // The editor asks for a snapshot only when it saves a restored version.
+      if (opts.snapshot) {
+        const [{ name }] = await tx`select name from inspiration_boards where id = ${boardId}`;
+        await logActivity(tx, { workspaceId: b.workspace_id, actorId: ctx.user.id, projectId: b.project_id, verb: "restored", objectType: "board", objectId: boardId, summary: `restored an earlier version of “${name}”` });
+      }
       const [last] = await tx`select created_at from inspiration_board_versions where board_id = ${boardId} order by created_at desc limit 1`;
       if (parsed.nodes.length > 0 && (opts.snapshot || !last || Date.now() - new Date(last.created_at).getTime() > VERSION_EVERY_MS)) {
         await tx`insert into inspiration_board_versions (board_id, project_id, workspace_id, revision, content, card_count, created_by)
@@ -287,5 +289,49 @@ export async function getBoardVersionAction(versionId: string): Promise<R<{ node
     return { ok: true, data: { nodes: await signNodes((v.content?.nodes ?? []) as Record<string, unknown>[]) } };
   } catch (e) {
     return err(e, "That version could not be loaded.");
+  }
+}
+
+export type CardComment = { id: string; cardId: string; body: string; author: string; createdAt: string };
+
+/** Comments on this board's cards, oldest first per card. */
+export async function listBoardCommentsAction(boardId: string): Promise<R<CardComment[]>> {
+  if (!isUuid(boardId)) return { ok: false, error: "Invalid board." };
+  try {
+    const ctx = await getCtx();
+    const rows = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select content from inspiration_boards where id = ${boardId}`;
+      if (!b) return [];
+      const ids = ((b.content?.nodes ?? []) as { id: string }[]).map((n) => n.id).filter(isUuid);
+      if (!ids.length) return [];
+      return tx`select c.id, c.target_id, c.body, c.created_at, coalesce(p.full_name, p.email, 'Former member') as author
+        from comments c left join profiles p on p.id = c.author_id
+        where c.target_type = 'board_card' and c.target_id = any(${ids}::uuid[]) order by c.created_at`;
+    });
+    return { ok: true, data: rows.map((r) => ({ id: r.id, cardId: r.target_id, body: r.body, author: r.author, createdAt: new Date(r.created_at).toISOString() })) };
+  } catch (e) {
+    return err(e, "Comments could not be loaded.");
+  }
+}
+
+export async function addBoardCommentAction(boardId: string, cardId: string, rawBody: string): Promise<R<CardComment>> {
+  const body = z.string().trim().min(1, "Write a comment").max(4000).safeParse(rawBody);
+  if (!isUuid(boardId) || !isUuid(cardId)) return { ok: false, error: "Comments need a saved card. Wait for “Saved”, then try again." };
+  if (!body.success) return { ok: false, error: body.error.issues[0].message };
+  try {
+    const ctx = await getCtx();
+    assertCan(ctx.workspace.role, "comment.create");
+    return await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select project_id, workspace_id, name, content from inspiration_boards where id = ${boardId}`;
+      if (!b) return { ok: false as const, error: "Board not found." };
+      if (!((b.content?.nodes ?? []) as { id: string }[]).some((n) => n.id === cardId)) return { ok: false as const, error: "That card isn’t saved yet. Wait for “Saved”, then try again." };
+      const [c] = await tx`insert into comments (workspace_id, project_id, target_type, target_id, body, author_id)
+        values (${b.workspace_id}, ${b.project_id}, 'board_card', ${cardId}, ${body.data}, ${ctx.user.id}) returning id, created_at`;
+      await logActivity(tx, { workspaceId: b.workspace_id, actorId: ctx.user.id, projectId: b.project_id, verb: "commented", objectType: "board", objectId: boardId, summary: `commented on a card on “${b.name}”` });
+      const [me] = await tx`select coalesce(full_name, email) as name from profiles where id = ${ctx.user.id}`;
+      return { ok: true as const, data: { id: c.id, cardId, body: body.data, author: me?.name ?? "You", createdAt: new Date(c.created_at).toISOString() } };
+    });
+  } catch (e) {
+    return err(e, "The comment could not be posted.");
   }
 }

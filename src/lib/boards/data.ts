@@ -85,3 +85,25 @@ export async function boardEntities(ctx: Ctx, projectId: string): Promise<Entity
     }));
   });
 }
+
+/**
+ * Removes every stored file of the given boards from Storage. Each board's folder is listed, so files from
+ * before the media register existed are included. Throws when Storage refuses, so a caller can stop before
+ * deleting database rows and leave nothing orphaned.
+ */
+export async function removeBoardFolders(boards: { id: string; workspace_id: string; project_id: string }[]) {
+  if (!boards.length || !storageAvailable()) return;
+  const { supabaseServer } = await import("@/lib/auth/supabase");
+  const bucket = (await supabaseServer()).storage.from(BOARD_BUCKET);
+  for (const b of boards) {
+    const prefix = mediaPrefix(b.workspace_id, b.project_id, b.id);
+    for (;;) {
+      const { data, error } = await bucket.list(prefix.slice(0, -1), { limit: 100 });
+      if (error) throw new Error(`board media listing failed: ${error.message}`);
+      if (!data?.length) break;
+      const { error: rmError } = await bucket.remove(data.map((f) => prefix + f.name));
+      if (rmError) throw new Error(`board media removal failed: ${rmError.message}`);
+      if (data.length < 100) break;
+    }
+  }
+}

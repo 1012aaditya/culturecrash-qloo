@@ -13,7 +13,7 @@ type Item = { id: string; label: string; hint?: string; group: string; href: str
 type Hit = { type: string; id: string; title: string; subtitle: string | null; href: string };
 
 const hitIcon: Record<string, Item["icon"]> = {
-  project: FolderOpen, client: Building2, evidence: ListChecks, strategy: Lightbulb, report: FileText, experiment: FlaskConical,
+  project: FolderOpen, client: Building2, evidence: ListChecks, strategy: Lightbulb, report: FileText, experiment: FlaskConical, board: LayoutGrid,
 };
 
 export function useCommandPalette() {

@@ -15,6 +15,7 @@ export default async function BoardPage({ params }: PageProps<"/projects/[projec
   const [board, entities] = await Promise.all([getBoard(ctx, projectId, boardId), boardEntities(ctx, projectId)]);
   if (!board) notFound();
   const canEdit = can(ctx.workspace.role, "board.edit") && project.status !== "archived";
+  const canComment = can(ctx.workspace.role, "comment.create");
   // Keyed by revision so "Reload" after a save conflict remounts the canvas with the newer board.
-  return <BoardCanvas key={`${board.id}:${board.revision}`} board={board} entities={entities} canEdit={canEdit} />;
+  return <BoardCanvas key={`${board.id}:${board.revision}`} board={board} entities={entities} canEdit={canEdit} canComment={canComment} />;
 }

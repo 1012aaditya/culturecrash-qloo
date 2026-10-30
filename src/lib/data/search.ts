@@ -2,7 +2,7 @@ import "server-only";
 import { withUser } from "@/lib/db";
 import type { Ctx } from "./workspace";
 
-export type SearchHit = { type: "project" | "client" | "evidence" | "strategy" | "report" | "experiment"; id: string; title: string; subtitle: string | null; href: string };
+export type SearchHit = { type: "project" | "client" | "evidence" | "strategy" | "report" | "experiment" | "board"; id: string; title: string; subtitle: string | null; href: string };
 
 function likePattern(q: string) {
   return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -43,6 +43,15 @@ export async function searchWorkspace(ctx: Ctx, q: string, types?: SearchHit["ty
       const rows = await tx`select x.id, x.name, x.project_id, p.name as project from experiments x join projects p on p.id = x.project_id
         where x.workspace_id = ${ws} and (x.name ilike ${p} or x.hypothesis ilike ${p}) order by x.updated_at desc limit 6`;
       rows.forEach((r) => hits.push({ type: "experiment", id: r.id, title: r.name, subtitle: `Experiment · ${r.project}`, href: `/projects/${r.project_id}/experiments/${r.id}` }));
+    }
+    if (want("board")) {
+      // Boards match on their name or on text written on their cards.
+      const rows = await tx`select b.id, b.name, b.project_id, p.name as project from inspiration_boards b join projects p on p.id = b.project_id
+        where b.workspace_id = ${ws} and (b.name ilike ${p} or exists (
+          select 1 from jsonb_array_elements(b.content->'nodes') x
+          where concat_ws(' ', x->'data'->>'text', x->'data'->>'title', x->'data'->>'label', x->'data'->>'name', x->'data'->>'note', x->'data'->>'alt') ilike ${p}))
+        order by b.updated_at desc limit 6`;
+      rows.forEach((r) => hits.push({ type: "board", id: r.id, title: r.name, subtitle: `Inspiration board · ${r.project}`, href: `/projects/${r.project_id}/boards/${r.id}` }));
     }
     return hits;
   });

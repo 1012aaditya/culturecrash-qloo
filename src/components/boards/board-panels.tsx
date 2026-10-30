@@ -5,7 +5,7 @@ import * as React from "react";
 import {
   AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignHorizontalSpaceAround, AlignStartHorizontal,
   AlignStartVertical, AlignVerticalSpaceAround, ArrowDownToLine, ArrowUpToLine, Check, CloudOff, Copy, ExternalLink, History as HistoryIcon,
-  Loader2, Lock, LockOpen, Plus, Search, Sparkles, Trash2, Users,
+  Loader2, Lock, LockOpen, MessageSquare, Plus, Search, Sparkles, Trash2, Users, X,
 } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { Ago } from "@/components/ui/time";
-import { listBoardVersionsAction, type BoardVersionRow } from "@/lib/boards/actions";
+import { listBoardVersionsAction, type BoardVersionRow, type CardComment } from "@/lib/boards/actions";
 import { safeUrl, type EntityData } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 import { describe, type AlignMode, type BoardNode } from "./board-logic";
@@ -213,13 +213,14 @@ const ALIGN: { mode: AlignMode; label: string; Icon: React.ComponentType }[] = [
 ];
 
 /** Actions for the selected cards. Shown only to editors while something is selected. */
-export function SelectionBar({ count, locked, onDuplicate, onLock, onFront, onBack, onAlign, onDistribute, onDelete }: {
-  count: number; locked: boolean; onDuplicate: () => void; onLock: () => void; onFront: () => void; onBack: () => void;
+export function SelectionBar({ count, locked, onDuplicate, onLock, onFront, onBack, onAlign, onDistribute, onDelete, onComments }: {
+  count: number; locked: boolean; onComments?: () => void; onDuplicate: () => void; onLock: () => void; onFront: () => void; onBack: () => void;
   onAlign: (m: AlignMode) => void; onDistribute: (axis: "x" | "y") => void; onDelete: () => void;
 }) {
   return (
     <div role="toolbar" aria-label={`${count} selected`} className="cc-glass absolute bottom-3 left-1/2 z-10 flex max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-full p-1">
       <span className="px-2 text-[12px] text-muted">{count} selected</span>
+      {count === 1 && onComments && <Button variant="ghost" size="icon-sm" aria-label="Comments" title="Comments" onClick={onComments}><MessageSquare /></Button>}
       <Button variant="ghost" size="icon-sm" aria-label="Duplicate (⌘D)" title="Duplicate (⌘D)" onClick={onDuplicate}><Copy /></Button>
       <Button variant="ghost" size="icon-sm" aria-label={locked ? "Unlock (⇧⌘L)" : "Lock (⇧⌘L)"} title={locked ? "Unlock (⇧⌘L)" : "Lock (⇧⌘L)"} onClick={onLock}>{locked ? <LockOpen /> : <Lock />}</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Bring to front (])" title="Bring to front (])" onClick={onFront}><ArrowUpToLine /></Button>
@@ -235,5 +236,49 @@ export function SelectionBar({ count, locked, onDuplicate, onLock, onFront, onBa
       <span className="mx-0.5 h-5 w-px bg-line" aria-hidden="true" />
       <Button variant="ghost" size="icon-sm" aria-label="Delete (⌫)" title="Delete (⌫)" onClick={onDelete}><Trash2 /></Button>
     </div>
+  );
+}
+
+/** Discussion thread for one card. Posting needs comment rights; everyone in the workspace can read. */
+export function CommentsPanel({ cardLabel, comments, canComment, onPost, onClose }: {
+  cardLabel: string; comments: CardComment[]; canComment: boolean; onPost: (body: string) => Promise<string | null>; onClose: () => void;
+}) {
+  const [body, setBody] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [pending, start] = React.useTransition();
+  return (
+    <aside aria-label="Card comments" className="absolute inset-y-0 right-0 z-30 flex w-[320px] max-w-[90vw] flex-col border-l border-line bg-paper shadow-float">
+      <div className="flex items-start justify-between gap-2 border-b border-line p-3">
+        <div className="min-w-0">
+          <p className="cc-eyebrow flex items-center gap-1.5 text-muted"><MessageSquare className="size-3.5 text-violet" /> Comments</p>
+          <p className="mt-1 truncate text-[13px] font-medium">{cardLabel}</p>
+        </div>
+        <Button variant="ghost" size="icon-sm" aria-label="Close comments" onClick={onClose}><X /></Button>
+      </div>
+      <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        {comments.length === 0 && <li className="text-[13px] text-muted">No comments on this card yet.</li>}
+        {comments.map((c) => (
+          <li key={c.id} className="rounded-cc-sm border border-line bg-ivory/60 p-2.5">
+            <p className="text-[12px] text-muted"><span className="font-medium text-ink">{c.author}</span> · <Ago value={c.createdAt} /></p>
+            <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed">{c.body}</p>
+          </li>
+        ))}
+      </ol>
+      {canComment && (
+        <form className="space-y-2 border-t border-line p-3" onSubmit={(e) => {
+          e.preventDefault();
+          start(async () => {
+            const err = await onPost(body);
+            setError(err);
+            if (!err) setBody("");
+          });
+        }}>
+          <label htmlFor="card-comment" className="sr-only">Add a comment</label>
+          <Textarea id="card-comment" value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={4000} placeholder="Why does this belong on the board?" />
+          {error && <p className="text-[12px] text-danger">{error}</p>}
+          <div className="flex justify-end"><Button size="sm" type="submit" disabled={pending || !body.trim()}>{pending ? "Posting…" : "Comment"}</Button></div>
+        </form>
+      )}
+    </aside>
   );
 }

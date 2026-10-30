@@ -161,8 +161,13 @@ runs. `npm run build` must pass; then apply migrations before the first deploy.
 npm run typecheck && npm run lint
 npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates, copilot loop
 TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–J against a running server (local auth + demo mode)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–K against a running server (local auth + demo mode)
 ```
+
+To run the e2e suite next to your normal dev server, start the local-auth server with its own build folder so the
+two never share cached chunks (they inline different `NEXT_PUBLIC_*` values):
+`NEXT_DIST_DIR=.next-e2e AUTH_MODE=local DATABASE_URL=postgres://… SESSION_SECRET=… CC_DEMO_MODE=enabled npx next dev -p 3300`,
+then `BASE_URL=http://localhost:3300 npm run test:e2e`.
 
 ## Status
 

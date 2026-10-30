@@ -16,6 +16,7 @@ const schemas = {
   get_strategy: z.object({}),
   list_experiments: z.object({}),
   list_research_runs: z.object({}),
+  list_boards: z.object({}),
 };
 export type CopilotToolName = keyof typeof schemas;
 
@@ -52,6 +53,11 @@ export const COPILOT_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_research_runs",
     description: "List research runs for this campaign (newest first) with mode (live or demo), status, entity counts and any error.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_boards",
+    description: "List the campaign's inspiration boards (visual moodboards) with their colour palette and cards: image captions and sources, notes, links, groups, and the Qloo entities placed on them. Boards are the team's visual references, not research evidence.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
@@ -120,6 +126,25 @@ export async function runCopilotTool(tx: Tx, projectId: string, name: string, ra
         from experiments e where e.project_id = ${projectId} order by e.updated_at desc limit 10`;
       return { result: rows.map((r) => ({ name: r.name, hypothesis: clip(r.hypothesis), primaryMetric: r.primary_metric, threshold: r.decision_threshold, status: r.status, interpretation: clip(r.interpretation), results: r.results })), evidenceIds: [] };
     }
+    case "list_boards": {
+      const rows = await tx`select name, palette, content, updated_at from inspiration_boards where project_id = ${projectId} order by updated_at desc limit 5`;
+      if (!rows.length) return { result: { error: "No inspiration boards yet." }, evidenceIds: [] };
+      const card = (n: { type: string; data: Record<string, unknown> }) => {
+        const d = n.data ?? {};
+        switch (n.type) {
+          case "image": return { type: "image", caption: clip(d.title, 120), source: d.sourceUrl ?? "none", colours: d.palette };
+          case "note": return { type: "note", text: clip(d.text, 300) };
+          case "link": return { type: "link", title: clip(d.title, 120), url: d.url, note: clip(d.note, 200) };
+          case "entity": return { type: "qloo_entity", name: d.name, entityType: d.type, affinity: d.affinity };
+          case "group": return { type: "group", label: d.label };
+          default: return { type: n.type };
+        }
+      };
+      return {
+        result: rows.map((r) => ({ name: r.name, palette: r.palette, updatedAt: new Date(r.updated_at).toISOString(), cards: ((r.content?.nodes ?? []) as { type: string; data: Record<string, unknown> }[]).slice(0, 60).map(card) })),
+        evidenceIds: [],
+      };
+    }
     case "list_research_runs": {
       const rows = await tx`select r.mode, r.status, r.created_at, r.error_message,
           (select count(*)::int from cultural_entities e where e.run_id = r.id and e.role = 'result') as entities,
@@ -140,6 +165,7 @@ export function describeToolCall(name: string, input: unknown): string {
     case "get_strategy": return "Read the strategy directions";
     case "list_experiments": return "Read the experiments";
     case "list_research_runs": return "Checked research run history";
+    case "list_boards": return "Looked at the inspiration boards";
     default: return name;
   }
 }

@@ -13,16 +13,17 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import {
-  deleteBoardAction, getBoardVersionAction, linkPreviewAction, refreshMediaUrlsAction, renameBoardAction, saveBoardAction, uploadBoardImageAction,
+  addBoardCommentAction, deleteBoardAction, getBoardVersionAction, linkPreviewAction, listBoardCommentsAction, refreshMediaUrlsAction, renameBoardAction,
+  saveBoardAction, uploadBoardImageAction, type CardComment,
 } from "@/lib/boards/actions";
 import type { BoardDoc } from "@/lib/boards/data";
 import { cn } from "@/lib/utils";
 import { boardPalette, MAX_NODES, mediaPaths, safeUrl, type EntityData } from "@/lib/boards/schema";
 import {
-  align, contentKey, distribute, History, hydrate, inTextField, mergeBoards, nodeKey, nodesKey, normalise, serialise, stripTransient,
+  align, contentKey, describe, distribute, History, hydrate, inTextField, mergeBoards, nodeKey, nodesKey, normalise, serialise, stripTransient,
   type AlignMode, type BoardNode, type Box,
 } from "./board-logic";
-import { ENTITY_MIME, EntityPanel, HistoryDialog, LinkDialog, ListView, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
+import { CommentsPanel, ENTITY_MIME, EntityPanel, HistoryDialog, LinkDialog, ListView, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
 import { BoardCtx, nodeTypes } from "./nodes";
 
 const SAVE_DELAY_MS = 1200;
@@ -69,7 +70,7 @@ function withUrls(nodes: BoardNode[], urls: Record<string, string>): BoardNode[]
   });
 }
 
-export function BoardCanvas(props: { board: BoardDoc; entities: EntityData[]; canEdit: boolean }) {
+export function BoardCanvas(props: { board: BoardDoc; entities: EntityData[]; canEdit: boolean; canComment: boolean }) {
   return (
     <ReactFlowProvider>
       <Canvas {...props} />
@@ -77,7 +78,7 @@ export function BoardCanvas(props: { board: BoardDoc; entities: EntityData[]; ca
   );
 }
 
-function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: EntityData[]; canEdit: boolean }) {
+function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; entities: EntityData[]; canEdit: boolean; canComment: boolean }) {
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
@@ -92,6 +93,8 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
   const [uploading, setUploading] = React.useState(0);
   const [save, setSave] = React.useState<SaveState>("saved");
   const [viewTick, setViewTick] = React.useState(0);
+  const [comments, setComments] = React.useState<CardComment[]>([]);
+  const [commentCard, setCommentCard] = React.useState<string | null>(null);
   const [canUndoRedo, setCanUndoRedo] = React.useState({ undo: false, redo: false });
 
   const revision = React.useRef(board.revision);
@@ -159,14 +162,30 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
   }, [save]);
 
   // ---------------------------------------------------------------- undo / redo
+  // Adding or removing cards is its own step at once; typing and dragging settle into one step.
+  const lastIds = React.useRef(initial.map((n) => n.id).join());
+  const pending = React.useRef<BoardNode[] | null>(null);
   React.useEffect(() => {
-    const t = setTimeout(() => {
-      const key = nodesKey(nodes);
+    const record = (snap: BoardNode[]) => {
+      const key = nodesKey(snap);
       if (restoring.current === key) {
         restoring.current = null;
         return;
       }
-      if (history.current.push(nodes.map((n) => ({ ...n, selected: false })))) setCanUndoRedo({ undo: history.current.canUndo, redo: history.current.canRedo });
+      if (history.current.push(snap.map((n) => ({ ...n, selected: false })))) setCanUndoRedo({ undo: history.current.canUndo, redo: history.current.canRedo });
+    };
+    const ids = nodes.map((n) => n.id).join();
+    if (ids !== lastIds.current) {
+      lastIds.current = ids;
+      if (pending.current) record(pending.current);
+      pending.current = null;
+      record(nodes);
+      return;
+    }
+    pending.current = nodes;
+    const t = setTimeout(() => {
+      pending.current = null;
+      record(nodes);
     }, HISTORY_SETTLE_MS);
     return () => clearTimeout(t);
   }, [nodes]);
@@ -182,6 +201,9 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
       if (typeof d.imagePath === "string" && typeof d.previewUrl === "string") urls[d.imagePath] = d.previewUrl;
     }
     const next = withUrls(snap, urls).map(hydrate);
+    // A not-yet-recorded edit would otherwise be recorded on top and wipe the redo branch.
+    pending.current = null;
+    lastIds.current = next.map((n) => n.id).join();
     restoring.current = nodesKey(next);
     setNodes(next);
     setCanUndoRedo({ undo: history.current.canUndo, redo: history.current.canRedo });
@@ -202,6 +224,26 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
     const t = setInterval(() => void refreshUrls(), URL_REFRESH_MS);
     return () => clearInterval(t);
   }, [refreshUrls]);
+
+  // ---------------------------------------------------------------- card comments (refreshed while the tab is visible)
+  React.useEffect(() => {
+    let live = true;
+    const load = () => {
+      if (document.visibilityState !== "visible") return;
+      void listBoardCommentsAction(board.id).then((r) => { if (live && r.ok) setComments(r.data ?? []); });
+    };
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { live = false; clearInterval(t); };
+  }, [board.id]);
+  const commentCounts = React.useMemo(() => comments.reduce<Record<string, number>>((m, c) => ({ ...m, [c.cardId]: (m[c.cardId] ?? 0) + 1 }), {}), [comments]);
+  const postComment = async (body: string) => {
+    if (!commentCard) return "Select a card first.";
+    const r = await addBoardCommentAction(board.id, commentCard, body);
+    if (!r.ok) return r.error;
+    setComments((cs) => [...cs, r.data!]);
+    return null;
+  };
 
   // ---------------------------------------------------------------- adding cards
   /** The visible centre, nudged diagonally for each new card so toolbar-added cards don't stack exactly. */
@@ -490,7 +532,7 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
   };
 
   const mod = isMac() ? "⌘" : "Ctrl+";
-  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls() }), [canEdit, board.projectId, refreshUrls]);
+  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard }), [canEdit, board.projectId, refreshUrls, commentCounts]);
 
   return (
     <BoardCtx.Provider value={ctx}>
@@ -592,7 +634,8 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
 
         {canEdit && selected.length > 0 && !listView && (
           <SelectionBar count={selected.length} locked={selected.every((n) => n.data.locked)} onDuplicate={duplicate} onLock={toggleLock}
-            onFront={() => reorder(true)} onBack={() => reorder(false)} onAlign={doAlign} onDistribute={doDistribute} onDelete={deleteSelected} />
+            onFront={() => reorder(true)} onBack={() => reorder(false)} onAlign={doAlign} onDistribute={doDistribute} onDelete={deleteSelected}
+            onComments={() => setCommentCard(selected[0].id)} />
         )}
 
         {/* Right: Qloo entities */}
@@ -600,6 +643,12 @@ function Canvas({ board, entities, canEdit }: { board: BoardDoc; entities: Entit
           {panel ? <PanelRightClose /> : <PanelRightOpen />}
         </Button>
         {panel && <EntityPanel entities={entities} canEdit={canEdit} onAdd={(e) => addEntity(e)} projectId={board.projectId} />}
+
+        {commentCard && (
+          <CommentsPanel
+            cardLabel={(() => { const n = nodes.find((x) => x.id === commentCard); return n ? describe(n) : "Removed card"; })()}
+            comments={comments.filter((c) => c.cardId === commentCard)} canComment={canComment} onPost={postComment} onClose={() => setCommentCard(null)} />
+        )}
 
         <LinkDialog open={linkOpen} onOpenChange={setLinkOpen} onAdd={(d) => void addLink(d)} />
         <HistoryDialog boardId={board.id} open={historyOpen} onOpenChange={setHistoryOpen} onRestore={restoreVersion} canEdit={canEdit} />

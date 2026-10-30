@@ -238,7 +238,7 @@ export async function renderReportPdf(s: ReportSnapshot, version: number, create
   }
 }
 
-const RIGHTS = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset" } as const;
+const RIGHTS = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" } as const;
 
 function VisualWorldPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualWorld"]>; images: Map<string, Buffer> }) {
   return (
@@ -264,7 +264,7 @@ function VisualWorldPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualWo
                 <View style={{ height: 110, borderRadius: 4, backgroundColor: "#F2EFEA", justifyContent: "center", padding: 6 }}><Text style={[st.small, { textAlign: "center" }]}>{img.alt || img.title || "Image unavailable"}</Text></View>
               )}
               {img.title ? <Text style={{ fontSize: 8.5, fontFamily: "Helvetica-Bold", marginTop: 3 }}>{img.title}</Text> : null}
-              <Text style={[st.small, img.rights === "reference" ? { color: "#8a3d22" } : {}]}>{RIGHTS[img.rights]}</Text>
+              <Text style={[st.small, img.rights === "reference" || img.rights === "ai" ? { color: "#8a3d22" } : {}]}>{RIGHTS[img.rights]}</Text>
               {img.sourceUrl ? <Link src={img.sourceUrl} style={[st.small, { color: C.violet }]}>{img.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}</Link> : <Text style={st.small}>No source recorded</Text>}
             </View>
           );

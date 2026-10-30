@@ -266,7 +266,7 @@ export function ReportDocument({ s, version, createdAt, boardImages = {} }: { s:
   );
 }
 
-const RIGHTS_LABEL = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset" } as const;
+const RIGHTS_LABEL = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" } as const;
 
 function VisualWorldSection({ v, urls }: { v: NonNullable<ReportSnapshot["visualWorld"]>; urls: Record<string, string> }) {
   const shown = v.images.some((i) => urls[i.thumbPath ?? i.path] ?? urls[i.path]);
@@ -295,11 +295,11 @@ function VisualWorldSection({ v, urls }: { v: NonNullable<ReportSnapshot["visual
                       // eslint-disable-next-line @next/next/no-img-element -- short-lived signed Storage URL
                       <img src={url} alt={img.alt || img.title} className="h-full w-full object-cover" />
                     ) : <span className="absolute inset-0 grid place-items-center px-3 text-center text-[11px] text-faint">{img.alt || img.title || "Image"}</span>}
-                    {img.rights === "reference" && <span className="absolute inset-x-0 bottom-0 bg-ink/70 px-2 py-1 text-[10px] uppercase tracking-wide text-white">{RIGHTS_LABEL.reference}</span>}
+                    {(img.rights === "reference" || img.rights === "ai") && <span className="absolute inset-x-0 bottom-0 bg-ink/70 px-2 py-1 text-[10px] uppercase tracking-wide text-white">{RIGHTS_LABEL[img.rights]}</span>}
                   </div>
                   <div className="space-y-0.5 p-2.5 text-[12px]">
                     {img.title && <p className="font-medium">{img.title}</p>}
-                    <p className="text-muted">{img.rights !== "reference" && `${RIGHTS_LABEL[img.rights]} · `}{img.sourceUrl ? <a href={img.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-violet-ink hover:underline">{hostOf(img.sourceUrl)}</a> : "No source recorded"}</p>
+                    <p className="text-muted">{img.rights !== "reference" && img.rights !== "ai" && `${RIGHTS_LABEL[img.rights]} · `}{img.sourceUrl ? <a href={img.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-violet-ink hover:underline">{hostOf(img.sourceUrl)}</a> : "No source recorded"}</p>
                   </div>
                 </li>
               );

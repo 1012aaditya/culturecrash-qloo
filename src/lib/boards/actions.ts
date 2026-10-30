@@ -13,6 +13,7 @@ import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
 import { critiqueBoard, type BoardCritique } from "./critique";
 import { assessImageFit, type ImageFit } from "./fit";
 import { fetchLinkPreview, processImage, type LinkPreview, type ProcessedImage } from "./media";
+import { storeImages } from "./store";
 import { boardPalette, mediaPaths, parseBoardContent, safeUrl } from "./schema";
 
 type R<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; conflict?: boolean };
@@ -172,28 +173,6 @@ async function purgeMedia(userId: string, boardId: string, paths: string[]) {
   } catch (e) {
     console.error("[boards] media purge failed", e instanceof Error ? e.message : e);
   }
-}
-
-/** Stores processed images for a board and registers them. Returns the stored paths in the same order. */
-async function storeImages(userId: string, b: { workspace_id: string; project_id: string }, boardId: string, files: { buf: Buffer; suffix: string; kind: "image" | "thumb" | "preview" }[]) {
-  const { supabaseServer } = await import("@/lib/auth/supabase");
-  const client = await supabaseServer();
-  const base = `${mediaPrefix(b.workspace_id, b.project_id, boardId)}${crypto.randomUUID()}`;
-  const paths: string[] = [];
-  for (const f of files) {
-    const path = `${base}${f.suffix}.webp`;
-    const { error } = await client.storage.from(BOARD_BUCKET).upload(path, f.buf, { contentType: "image/webp", upsert: false });
-    if (error) throw new Error(`upload failed: ${error.message}`);
-    paths.push(path);
-  }
-  // Registered as unused until a save references them, so abandoned uploads are cleaned up too.
-  await withUser(userId, async (tx) => {
-    for (const [i, f] of files.entries()) {
-      await tx`insert into inspiration_board_media (path, board_id, project_id, workspace_id, kind, bytes, created_by, unused_since)
-        values (${paths[i]}, ${boardId}, ${b.project_id}, ${b.workspace_id}, ${f.kind}, ${f.buf.length}, ${userId}, now()) on conflict (path) do nothing`;
-    }
-  });
-  return paths;
 }
 
 /**

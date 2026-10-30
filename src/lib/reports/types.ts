@@ -25,7 +25,7 @@ export const PITCH_PACK_SECTIONS: ReportSectionKey[] = ["cover", "executive", "l
 export type VisualWorld = {
   boardName: string;
   palette: { hex: string; name: string }[];
-  images: { path: string; thumbPath: string | null; title: string; alt: string; sourceUrl: string | null; rights: "reference" | "licensed" | "own" }[];
+  images: { path: string; thumbPath: string | null; title: string; alt: string; sourceUrl: string | null; rights: "reference" | "licensed" | "own" | "ai" }[];
   notes: string[];
   cardCount: number;
   coverage: { sourceable: number; sourced: number };

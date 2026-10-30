@@ -7,7 +7,7 @@ import * as React from "react";
 import { Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, useReactFlow, type NodeChange, type OnNodeDrag } from "@xyflow/react";
 import {
   ArrowLeft, ChevronLeft, ChevronRight, Frame, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
-  Redo2, Sparkles, StickyNote, Trash2, Undo2, X,
+  Redo2, Sparkles, StickyNote, Trash2, Undo2, Wand2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -26,6 +26,9 @@ import {
 import { CommentsPanel, CritiqueDialog, ENTITY_MIME, EVIDENCE_MIME, EvidenceMeter, HistoryDialog, LinkDialog, ListView, PaletteDialog, ResearchPanel, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
 import type { BoardCritique } from "@/lib/boards/critique";
 import { BoardCtx, nodeTypes } from "./nodes";
+import { ConceptDialog, type ConceptRequest } from "./concept-dialog";
+import { conceptJobsAction, type ConceptResult } from "@/lib/concepts/actions";
+import type { PendingConcept } from "@/lib/concepts/data";
 
 const SAVE_DELAY_MS = 1200;
 const HISTORY_SETTLE_MS = 350;
@@ -71,7 +74,13 @@ function withUrls(nodes: BoardNode[], urls: Record<string, string>): BoardNode[]
   });
 }
 
-type CanvasProps = { board: BoardDoc; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[]; canEdit: boolean; canComment: boolean };
+type CanvasProps = {
+  board: BoardDoc; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[]; canEdit: boolean; canComment: boolean;
+  /** Image generation on the agency's GPU PC; null when not set up or not allowed. */
+  concepts: { pending: PendingConcept[] } | null;
+};
+type ConceptJob = PendingConcept & { status: "queued" | "running"; position: number | null };
+const CONCEPT_POLL_MS = 3000;
 
 export function BoardCanvas(props: CanvasProps) {
   return (
@@ -81,7 +90,7 @@ export function BoardCanvas(props: CanvasProps) {
   );
 }
 
-function Canvas({ board, entities, evidence, directions, canEdit, canComment }: CanvasProps) {
+function Canvas({ board, entities, evidence, directions, canEdit, canComment, concepts }: CanvasProps) {
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
@@ -108,6 +117,8 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   const [comments, setComments] = React.useState<CardComment[]>([]);
   const [commentCard, setCommentCard] = React.useState<string | null>(null);
   const [canUndoRedo, setCanUndoRedo] = React.useState({ undo: false, redo: false });
+  const [conceptRequest, setConceptRequest] = React.useState<ConceptRequest | null>(null);
+  const [conceptJobs, setConceptJobs] = React.useState<ConceptJob[]>(() => (concepts?.pending ?? []).map((p) => ({ ...p, status: "queued", position: null })));
 
   const revision = React.useRef(board.revision);
   const savedKey = React.useRef(contentKey(initial, board.content.viewport));
@@ -343,6 +354,47 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
       }
     }));
   }, [add, board.id, centre, runFit, toast]);
+
+  // ---------------------------------------------------------------- AI concepts from the GPU PC
+  /** Places a finished concept as an "AI concept" image card, then checks its cultural fit. */
+  const placeConcept = React.useCallback(async (job: PendingConcept, r: ConceptResult, i: number) => {
+    const [colours, size] = await Promise.all([extractPalette(r.thumbUrl), r.width && r.height ? { w: r.width, h: r.height } : imageSize(r.thumbUrl)]);
+    const origin = centre();
+    const width = 260;
+    const height = Math.round(Math.min(560, Math.max(120, (width * size.h) / size.w))) + 64;
+    const id = add({ type: "image", position: { x: origin.x - width / 2 + i * 280, y: origin.y - height / 2 }, width, height,
+      data: { path: r.path, thumbPath: r.thumbPath, url: r.url, thumbUrl: r.thumbUrl, title: job.kind === "variation" ? "AI variation" : "AI concept", alt: "", sourceUrl: null, palette: colours, rights: "ai" } });
+    if (id) void runFit(id, r.thumbPath, true);
+  }, [add, centre, runFit]);
+
+  // Polls every few seconds while images are on their way; each poll's state update re-arms the next one.
+  React.useEffect(() => {
+    if (!conceptJobs.length) return;
+    let live = true;
+    const timer = setTimeout(async () => {
+      const r = await conceptJobsAction(board.id, conceptJobs.map((j) => j.id));
+      if (!live || !r.ok) return;
+      const states = new Map(r.data!.map((s) => [s.id, s]));
+      let placed = 0;
+      for (const j of conceptJobs) {
+        const s = states.get(j.id);
+        if (s?.status === "done" && s.result) void placeConcept(j, s.result, placed++);
+        else if (s?.status === "error") toast({ title: j.kind === "variation" ? "Variation not made" : "Concept not made", description: s.error ?? undefined, tone: "error" });
+      }
+      // Finished, failed and vanished jobs leave the list; jobs queued meanwhile are kept.
+      setConceptJobs((jobs) => jobs.flatMap((j) => {
+        if (!conceptJobs.some((p) => p.id === j.id)) return [j];
+        const s = states.get(j.id);
+        if (!s || s.status === "error" || (s.status === "done" && s.result)) return [];
+        return [{ ...j, status: s.status === "done" ? "running" : s.status, position: s.position }];
+      }));
+    }, CONCEPT_POLL_MS);
+    return () => { live = false; clearTimeout(timer); };
+  }, [board.id, conceptJobs, placeConcept, toast]);
+  const makeVariations = React.useCallback((cardId: string) => {
+    const n = rf.getNode(cardId);
+    if (n?.type === "image" && typeof n.data.path === "string") setConceptRequest({ kind: "variation", sourcePath: n.data.path, sourceTitle: String(n.data.title ?? "") });
+  }, [rf]);
 
   const addEntity = React.useCallback((e: EntityData, at?: { x: number; y: number }) => {
     const p = at ?? centre();
@@ -626,7 +678,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   };
 
   const mod = isMac() ? "⌘" : "Ctrl+";
-  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting]);
+  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting, makeVariations: concepts ? makeVariations : null }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting, concepts, makeVariations]);
 
   return (
     <BoardCtx.Provider value={ctx}>
@@ -721,6 +773,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
           <EvidenceMeter {...coverage} />
           <SaveBadge state={canEdit ? save : "saved"} readOnly={!canEdit} onReload={() => router.refresh()} onRetry={() => void doSave()} />
           <Button variant="ghost" size="icon-sm" aria-label="AI critique" title="AI critique" onClick={() => setCritiqueOpen(true)}><Sparkles /></Button>
+          {concepts && <Button variant="ghost" size="icon-sm" aria-label="Generate concepts" title="Generate concepts (AI, on the agency’s GPU PC)" onClick={() => setConceptRequest({ kind: "concept" })}><Wand2 /></Button>}
           <Button variant="ghost" size="icon-sm" aria-label="Present" title="Present (full screen, one group at a time)" disabled={!nodes.length} onClick={startPresenting}><Play /></Button>
           {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Delete board" title="Delete board" onClick={() => setDeleteOpen(true)}><Trash2 /></Button>}
         </div>}
@@ -732,6 +785,14 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
             <Button variant="ghost" size="icon-sm" aria-label="Fit board" onClick={() => rf.fitView({ padding: 0.2, maxZoom: 1, duration: 400 })}><Maximize /></Button>
             <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => rf.zoomIn()}><Plus /></Button>
           </div>
+          {conceptJobs.length > 0 && (
+            <div className="cc-glass flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px]" role="status" aria-live="polite">
+              <Loader2 className="size-3.5 animate-spin text-violet" />
+              {conceptJobs.some((j) => j.status === "running")
+                ? `Generating ${conceptJobs.length} ${conceptJobs.length === 1 ? "image" : "images"}…`
+                : `${conceptJobs.length} ${conceptJobs.length === 1 ? "image" : "images"} waiting for the GPU PC${conceptJobs[0].position ? ` · #${conceptJobs[0].position} in line` : ""}`}
+            </div>
+          )}
           {palette.length > 0 && selected.length === 0 && (
             <div className="cc-glass flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-1.5">
               <button type="button" className="cc-eyebrow text-muted hover:text-ink" onClick={() => setPaletteOpen(true)} title="Names, contrast and CSS">Palette</button>
@@ -776,6 +837,8 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
 
         <LinkDialog open={linkOpen} onOpenChange={setLinkOpen} onAdd={(d) => void addLink(d)} />
         <PaletteDialog palette={palette} open={paletteOpen} onOpenChange={setPaletteOpen} onCopied={(what) => toast({ title: `Copied ${what}`, tone: "success" })} />
+        {concepts && conceptRequest && <ConceptDialog boardId={board.id} request={conceptRequest} onClose={() => setConceptRequest(null)}
+          onQueued={(ids, kind) => setConceptJobs((js) => [...js, ...ids.map((id) => ({ id, kind, status: "queued" as const, position: null }))])} />}
         <CritiqueDialog open={critiqueOpen} onOpenChange={setCritiqueOpen} critique={critique.data} pending={critique.pending} error={critique.error}
           onRun={() => void runCritique()} onLocate={locateMany} onKeep={keepCritique} canEdit={canEdit} />
         <HistoryDialog boardId={board.id} open={historyOpen} onOpenChange={setHistoryOpen} onRestore={restoreVersion} canEdit={canEdit} />

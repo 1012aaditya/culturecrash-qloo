@@ -3,7 +3,7 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
+import { AlertTriangle, Copy, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
 import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, NoteData } from "@/lib/boards/schema";
@@ -19,8 +19,10 @@ export type BoardContext = {
   checkFit: (cardId: string) => void; fitPending: ReadonlySet<string>;
   /** Presentation mode: no editing chrome; reference-only images are watermarked. */
   presenting: boolean;
+  /** AI variations of an image card (null when no GPU PC is set up for this server). */
+  makeVariations: ((cardId: string) => void) | null;
 };
-export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false });
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false, makeVariations: null });
 
 /** Comment count on a card; opens the card's thread. */
 function CommentBadge({ id }: { id: string }) {
@@ -100,9 +102,11 @@ function FitChip({ fit }: { fit: ImageFitData }) {
   );
 }
 
+const RIGHTS_LABEL: Record<ImageRights, string> = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" };
+
 export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit, onMediaError, checkFit, fitPending, presenting } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError, checkFit, fitPending, presenting, makeVariations } = React.useContext(BoardCtx);
   const rights = data.rights ?? "reference";
   const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
@@ -123,8 +127,8 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
             // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
             ? <img src={src} alt={data.alt || data.title || "Reference image"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className="h-full w-full object-cover" />
             : <div className="flex h-full items-center justify-center text-[12px] text-muted">Image unavailable</div>}
-          {presenting && rights === "reference" && (
-            <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-charcoal/70 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wider text-white">Reference only · not for publication</span>
+          {presenting && (rights === "reference" || rights === "ai") && (
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-charcoal/70 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wider text-white">{RIGHTS_LABEL[rights]}</span>
           )}
         </div>
         <figcaption className="space-y-1 border-t border-line px-2.5 py-2">
@@ -156,8 +160,14 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
               <option value="reference">Reference only</option>
               <option value="licensed">Licensed</option>
               <option value="own">Own asset</option>
+              <option value="ai">AI concept</option>
             </select>
-          ) : rights !== "reference" && <span className="inline-flex rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] text-muted">{rights === "own" ? "Own asset" : "Licensed"}</span>}
+          ) : rights !== "reference" && <span className={cn("inline-flex rounded-full px-1.5 py-0.5 text-[10.5px]", rights === "ai" ? "bg-lilac/60 text-violet-ink" : "bg-ink/5 text-muted")}>{rights === "ai" ? "AI concept · not final" : RIGHTS_LABEL[rights]}</span>}
+          {selected && canEdit && !presenting && makeVariations && data.path && (
+            <button type="button" onClick={() => makeVariations(id)} className="nodrag ml-1 inline-flex items-center gap-1 rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] font-medium text-ink hover:bg-ink/10">
+              <Copy className="size-3" /> Variations
+            </button>
+          )}
           {data.fit ? !presenting && <FitChip fit={data.fit} /> : selected && canEdit && data.thumbPath && (
             <button type="button" onClick={() => checkFit(id)} disabled={fitPending.has(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-lilac/60 px-1.5 py-0.5 text-[10.5px] font-medium text-violet-ink enabled:hover:bg-lilac">
               {fitPending.has(id) ? <Loader2 className="size-3 animate-spin" /> : <ScanEye className="size-3" />} Check cultural fit

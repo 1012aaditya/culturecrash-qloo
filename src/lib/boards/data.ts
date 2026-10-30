@@ -31,6 +31,23 @@ export async function signPaths(paths: string[]): Promise<Map<string, string>> {
   return out;
 }
 
+/** Board images as JPEG bytes for the PDF report (react-pdf reads only JPEG and PNG). Missing files are skipped. */
+export async function boardImagesAsJpeg(paths: string[]): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>();
+  const unique = [...new Set(paths.filter(Boolean))].slice(0, 12);
+  if (!unique.length || !storageAvailable()) return out;
+  const [{ supabaseServer }, { default: sharp }] = await Promise.all([import("@/lib/auth/supabase"), import("sharp")]);
+  const client = await supabaseServer();
+  await Promise.all(unique.map(async (path) => {
+    const { data } = await client.storage.from(BOARD_BUCKET).download(path);
+    if (!data) return;
+    try {
+      out.set(path, await sharp(Buffer.from(await data.arrayBuffer())).resize({ width: 800, height: 800, fit: "inside", withoutEnlargement: true }).flatten({ background: "#ffffff" }).jpeg({ quality: 80 }).toBuffer());
+    } catch { /* an unreadable file is left out of the PDF rather than failing it */ }
+  }));
+  return out;
+}
+
 const imagePaths = (nodes: Record<string, unknown>[]) =>
   nodes.flatMap((n) => {
     const d = n.data as { path?: unknown; thumbPath?: unknown } | undefined;

@@ -19,7 +19,8 @@ function Section({ id, n, children, className }: { id: string; n: number; childr
 }
 
 /** Editorial report rendered purely from an immutable snapshot. */
-export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; version: number; createdAt: string }) {
+/** boardImages maps a board image's storage path to a signed URL; without it (public links) images show as captions. */
+export function ReportDocument({ s, version, createdAt, boardImages = {} }: { s: ReportSnapshot; version: number; createdAt: string; boardImages?: Record<string, string> }) {
   const on = (k: string) => s.sections.includes(k as never);
   const evIndex = new Map(s.evidence.map((e, i) => [e.id, i + 1]));
   const numbers = Object.fromEntries(evIndex);
@@ -211,6 +212,13 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
             ) : <p className="text-muted">No creative brief yet.</p>}
           </Section>
         )}
+        {on("visual") && (
+          <Section id="visual" n={++n}>
+            {s.visualWorld ? <VisualWorldSection v={s.visualWorld} urls={boardImages} /> : (
+              <p className="text-muted">{s.visualWorld === undefined ? "This report version was created before boards could be included." : "No inspiration board is linked to the selected direction."}</p>
+            )}
+          </Section>
+        )}
         {on("experiments") && (
           <Section id="experiments" n={++n}>
             {s.experiments.length === 0 ? <p className="text-muted">No experiments planned.</p> : (
@@ -257,3 +265,54 @@ export function ReportDocument({ s, version, createdAt }: { s: ReportSnapshot; v
     </article>
   );
 }
+
+const RIGHTS_LABEL = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset" } as const;
+
+function VisualWorldSection({ v, urls }: { v: NonNullable<ReportSnapshot["visualWorld"]>; urls: Record<string, string> }) {
+  const shown = v.images.some((i) => urls[i.thumbPath ?? i.path] ?? urls[i.path]);
+  return (
+    <div className="space-y-6">
+      <p className="text-[13px] text-muted">From the inspiration board “{v.boardName}” ({v.cardCount} cards). {v.coverage.sourceable > 0 && `${v.coverage.sourced} of ${v.coverage.sourceable} references carry a source.`}</p>
+      {v.palette.length > 0 && (
+        <ul className="flex flex-wrap gap-3" aria-label="Palette">
+          {v.palette.map((c) => (
+            <li key={c.hex} className="flex items-center gap-2 text-[12px]">
+              <span className="size-8 rounded-full border border-line" style={{ background: c.hex }} />
+              <span><span className="font-medium">{c.name}</span><br /><span className="font-mono text-muted">{c.hex}</span></span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {v.images.length > 0 && (
+        <>
+          <ul className="grid grid-cols-2 gap-3 md:grid-cols-3">
+            {v.images.map((img) => {
+              const url = urls[img.thumbPath ?? img.path] ?? urls[img.path];
+              return (
+                <li key={img.path} className="break-inside-avoid overflow-hidden rounded-cc border border-line bg-paper">
+                  <div className="relative aspect-[4/3] bg-ivory">
+                    {url ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- short-lived signed Storage URL
+                      <img src={url} alt={img.alt || img.title} className="h-full w-full object-cover" />
+                    ) : <span className="absolute inset-0 grid place-items-center px-3 text-center text-[11px] text-faint">{img.alt || img.title || "Image"}</span>}
+                    {img.rights === "reference" && <span className="absolute inset-x-0 bottom-0 bg-ink/70 px-2 py-1 text-[10px] uppercase tracking-wide text-white">{RIGHTS_LABEL.reference}</span>}
+                  </div>
+                  <div className="space-y-0.5 p-2.5 text-[12px]">
+                    {img.title && <p className="font-medium">{img.title}</p>}
+                    <p className="text-muted">{img.rights !== "reference" && `${RIGHTS_LABEL[img.rights]} · `}{img.sourceUrl ? <a href={img.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-violet-ink hover:underline">{hostOf(img.sourceUrl)}</a> : "No source recorded"}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {!shown && <p className="text-[12px] text-faint">Board images are private to the workspace; sign in to see them.</p>}
+        </>
+      )}
+      {v.notes.length > 0 && (
+        <div><p className="cc-eyebrow text-muted">Board notes</p><ul className="mt-2 space-y-2 text-[13px] leading-relaxed">{v.notes.map((t, i) => <li key={i} className="whitespace-pre-wrap">{t}</li>)}</ul></div>
+      )}
+    </div>
+  );
+}
+
+const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };

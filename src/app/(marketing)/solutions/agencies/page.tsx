@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = {
   title: "For agencies",
   description:
-    "CultureCrash for independent branding and advertising agencies: faster pitch research, client workspaces with brand memory, and reports with citations.",
+    "CultureCrash for independent branding and advertising agencies: faster pitch research, per-client brand memory, and reports with citations.",
 };
 
 const moments = [
@@ -34,7 +34,7 @@ const moments = [
 ];
 
 const features = [
-  { icon: FolderLock, title: "Client workspaces", body: "Each client's briefs, evidence, conversations and reports are isolated by workspace permissions and database-level row security." },
+  { icon: FolderLock, title: "Every client in one place", body: "Each client keeps its own briefs, brand memory, evidence and reports. Your agency's workspace is isolated from every other by role permissions and database-level row security." },
   { icon: BookMarked, title: "Brand memory", body: "Approved guidelines, tone, previous positioning and exclusions stored per client and used as context for that client only." },
   { icon: FileCheck2, title: "Reports with citations", body: "Versioned, editorial reports with sources and evidence labels intact, shareable through expiring read-only links." },
   { icon: Users, title: "Roles for real teams", body: "Owners, strategists and reviewers with the permissions they need — and an activity history of who changed what." },

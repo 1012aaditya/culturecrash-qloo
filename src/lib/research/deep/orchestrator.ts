@@ -6,12 +6,12 @@ import { loadBrief } from "@/lib/data/briefs";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { env } from "@/lib/env";
 import { ensureChunks, searchBrandDocs } from "./brand-docs";
-import { Budget, DEPTH_PROFILES, llmCostUsd, WEB_TIME_SHARE, type BudgetLimits } from "./budget";
+import { Budget, DEPTH_PROFILES, llmCostUsd, synthesisEstimateUsd, WEB_TIME_SHARE, type BudgetLimits } from "./budget";
 import { cacheGet, cacheKey, cachePut } from "./cache";
-import { dedupe, independentCount, isRepeatQuery, mergeClaims, takeAcrossQuestions, tokens } from "./dedupe";
+import { dedupe, independentCount, isRepeatQuery, mergeClaims, tokens } from "./dedupe";
 import { extractionPrompt, extractionSchema, rulesExtraction, validateExtraction, type ExtractDoc } from "./extract";
 import { fetchPage } from "./fetch-page";
-import { buildPlanV2, countryCode, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan } from "./planner";
+import { buildPlanV2, countryCode, FIRST_ROUND_SHARE, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan, shareAcross } from "./planner";
 import { exaSearch, tavilySearch } from "./providers/alt-web";
 import { braveSearch } from "./providers/brave";
 import { demoSearch } from "./providers/demo";
@@ -25,6 +25,8 @@ import { scoreClaim } from "./quality";
 import { providerRegistry, type ProviderInfo } from "./registry";
 import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, type Coverage, type QlooObservation, type Report, type SynthClaim } from "./synthesize";
 import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
+import { RUN_DEADLINE_MS } from "../lifecycle";
+import { platformHeadroomUsd } from "../spend";
 
 export type AffinityOutcome =
   | { ok: true; observations: number; failures: number; summary: string | null; notes?: string[] }
@@ -50,20 +52,34 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
  * Stages are explicit and persisted; every external call goes through the budget and the
  * provenance ledger; partial results survive provider failures, budget stops and cancellation.
  */
-export async function runDeepResearch(userId: string, run: Record<string, unknown>, affinityStage: () => Promise<AffinityOutcome>) {
+export async function runDeepResearch(userId: string, run: Record<string, unknown>, affinityStage: () => Promise<AffinityOutcome>, deadline = Date.now() + RUN_DEADLINE_MS) {
   const runId = run.id as string;
   const ws = run.workspace_id as string;
   const projectId = run.project_id as string;
   const isDemo = run.mode === "demo";
   const depth = (run.depth as Depth) ?? "standard";
   const limits: BudgetLimits = { ...DEPTH_PROFILES[depth], ...((run.budget as Partial<BudgetLimits>) ?? {}) };
+  // The search budget ends 30 s before the hard deadline, so there is always time to synthesise and save.
+  limits.maxSeconds = Math.min(limits.maxSeconds, Math.max(30, (deadline - Date.now()) / 1000 - 30));
+  const pastDeadline = () => Date.now() > deadline - 30_000;
   const e = env();
 
   const headroom = await withUser(userId, async (tx) => {
     const [w] = await tx`select research_budget_usd_monthly as cap, public.research_spend_this_month(${ws}) as spent from workspaces where id = ${ws}`;
-    return Number(w.cap) - Number(w.spent);
+    // Other live runs in this workspace may still spend up to their own cap: set that aside, so
+    // concurrent runs on different projects can't each spend the same remaining budget.
+    const others = await tx`
+      select r.depth, r.budget, coalesce((select sum(coalesce(s.cost_usd_actual, s.cost_usd_estimated, 0)) from research_sources s where s.run_id = r.id), 0) as spent
+      from research_runs r
+      where r.workspace_id = ${ws} and r.id <> ${runId} and r.mode = 'live' and r.depth is not null and r.status in ('queued', 'running')`;
+    const reserved = others.reduce((sum, o) => {
+      const cap = { ...DEPTH_PROFILES[o.depth as Depth], ...((o.budget as Partial<BudgetLimits>) ?? {}) }.maxUsd;
+      return sum + Math.max(0, cap - Number(o.spent));
+    }, 0);
+    return Number(w.cap) - Number(w.spent) - reserved;
   });
-  const budget = new Budget(limits, Math.max(0, headroom));
+  const platform = isDemo ? null : await platformHeadroomUsd();
+  const budget = new Budget(limits, Math.max(0, platform === null ? headroom : Math.min(headroom, platform)));
   const providerFailures: { provider: string; error: string }[] = [];
   let stopReason = "sufficient_coverage";
   const docs: Doc[] = [];
@@ -75,7 +91,21 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   const save = (patch: { stage?: string; coverage?: Coverage[] }) => withUser(userId, (tx) =>
     tx`update research_runs set stage = coalesce(${patch.stage ?? null}, stage), usage = ${tx.json({ ...budget.usage, elapsedSeconds: Math.round(budget.elapsedSeconds()) } as never)},
       coverage = coalesce(${patch.coverage ? tx.json(patch.coverage as never) : null}::jsonb, coverage), started_by_heartbeat = now() where id = ${runId}`);
-  const cancelled = async () => (await withUser(userId, (tx) => tx`select cancel_requested_at from research_runs where id = ${runId}`))[0]?.cancel_requested_at != null;
+  // Checked inside every round (at most every 3 s). It doubles as the heartbeat, so a working run is
+  // never mistaken for a dead one.
+  let cancelFlag = false;
+  let cancelCheckedAt = 0;
+  const cancelled = async () => {
+    if (cancelFlag || Date.now() - cancelCheckedAt < 3000) return cancelFlag;
+    cancelCheckedAt = Date.now();
+    const [r] = await withUser(userId, (tx) => tx`update research_runs set started_by_heartbeat = now() where id = ${runId} returning cancel_requested_at, status`);
+    // Only a real cancel stops the worker. A run a sweep closed as stale or timed out keeps going: its
+    // own result, if it gets there before the deadline, replaces the placeholder (see finish()).
+    cancelFlag = !r || r.cancel_requested_at != null || r.status === "cancelled";
+    return cancelFlag;
+  };
+  /** Why new work should not start now, if it shouldn't. */
+  const halt = async () => ((await cancelled()) ? "cancelled" : pastDeadline() ? "time_limit" : null);
   const ledger = (tx: Tx, provider: string, endpoint: string, call: Pick<ProviderCall<unknown>, "params" | "status" | "httpStatus" | "durationMs" | "error" | "raw" | "units" | "costUsdEstimated" | "costUsdActual" | "cached"> & { count: number; questionKey?: string | null; round?: number; tokensIn?: number; tokensOut?: number }) =>
     tx`insert into research_sources (run_id, workspace_id, provider, endpoint, params, status, http_status, result_count, duration_ms, error_message, raw_response,
         question_key, round, units, cost_usd_estimated, cost_usd_actual, tokens_in, tokens_out, cached)
@@ -108,7 +138,9 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     await ensureChunks(tx, projectId);
     const [{ n }] = await tx`select count(*)::int as n from brand_document_chunks where project_id = ${projectId}`;
     const [webSetting] = await tx`select enabled from integration_settings where workspace_id = ${ws} and provider = 'web_research'`;
-    return { brief: brief!, hasBrandDocs: n > 0, webEnabled: webSetting ? Boolean(webSetting.enabled) : true };
+    // Demo runs never search the client's real documents: fictional sources and real brand material
+    // must not end up side by side in one report.
+    return { brief: brief!, hasBrandDocs: !isDemo && n > 0, webEnabled: webSetting ? Boolean(webSetting.enabled) : true };
   });
   let registry: ProviderInfo[] = providerRegistry({ demo: isDemo });
   if (!ctx.webEnabled) {
@@ -128,7 +160,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
       affinity: r.affinity === null ? null : Number(r.affinity), popularity: r.popularity === null ? null : Number(r.popularity), tier: r.tier,
     })))) : [];
   const qlooPicks = pickQlooEntities(qlooRows, QLOO_PICKS[depth]);
-  budget.ensureSecondsLeft(limits.maxSeconds * WEB_TIME_SHARE);
+  // External sources always get time after a slow Qloo stage, but never past the run's hard deadline.
+  budget.ensureSecondsLeft(Math.min(limits.maxSeconds * WEB_TIME_SHARE, (deadline - Date.now()) / 1000 - 30));
   await save({ stage: "planning" });
 
   const useLlm = !isDemo && (await llmEnabled(userId, ws));
@@ -151,14 +184,22 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   const country = countryCode(plan.geography);
 
   for (let round = 1; round <= limits.maxRounds; round++) {
-    if (await cancelled()) { stopReason = "cancelled"; break; }
+    const stop = await halt();
+    if (stop) { stopReason = stop; break; }
     budget.usage.rounds = round;
-    const tasks: Task[] = round === 1 ? plan.questions.flatMap((q) => (plan.byQuestion[q.key] ?? []).flatMap((p) => q.queries.map((query) => ({ q, provider: p, query })))) : followUpTasks(plan, coverage, queriesRun);
+    // Round 1 rotates through questions so each gets searched before any gets a second search, and
+    // leaves a quarter of the calls for follow-ups on whatever is still thin.
+    const tasks: Task[] = round === 1
+      ? shareAcross(plan.questions.map((q) => (plan.byQuestion[q.key] ?? []).flatMap((p) => q.queries.map((query) => ({ q, provider: p, query })))),
+        limits.maxRounds > 1 ? Math.ceil(limits.maxProviderCalls * FIRST_ROUND_SHARE) : limits.maxProviderCalls)
+      : followUpTasks(plan, coverage, queriesRun);
     if (!tasks.length) { if (round > 1) stopReason = "no_follow_up"; break; }
     await save({ stage: round === 1 ? "searching" : "follow_up" });
 
     const before = new Set(claims.filter((c) => c.score >= 0.45).flatMap((c) => c.documentIds.map((id) => docs.find((d) => d.id === id)?.group)));
     const results = await pool(tasks, 3, async (t) => {
+      const stop = await halt();
+      if (stop) { stopReason = stop; return { t, hits: [] as Hit[] }; }
       const allowed = budget.canSpend("provider", estimateUsd(t.provider));
       if (!allowed.ok) { stopReason = allowed.reason!; return { t, hits: [] as Hit[] }; }
       queriesRun.push(t.query);
@@ -173,7 +214,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const toFetch = rankForRetrieval(fresh.filter(({ h }) => h.url && (h.sourceType === "web_page" || h.sourceType === "news") && !known.has(h.url)), pagesThisRound);
     const pages = new Map<string, Awaited<ReturnType<typeof fetchPage>>>();
     await pool(toFetch, 3, async ({ h }) => {
-      if (!budget.canSpend("page", 0).ok) return;
+      if (!budget.canSpend("page", 0).ok || (await halt())) return;
       const page = await fetchPage(h.url!);
       budget.record("page_fetch", { ok: page.status === "extracted", kind: "page", units: 1, usdEstimated: 0, usdActual: null, ms: page.durationMs });
       pages.set(h.url!, page);
@@ -188,7 +229,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
 
     const gaps = coverage.filter((c) => c.priority <= 2 && c.status !== "sufficient");
     if (!gaps.length) { stopReason = "sufficient_coverage"; break; }
-    if (["budget_limit", "time_limit", "provider_call_limit"].includes(stopReason) && stopReason !== "sufficient_coverage") break;
+    if (["budget_limit", "time_limit", "provider_call_limit", "cancelled"].includes(stopReason)) break;
     if (round > 1) {
       const after = new Set(claims.filter((c) => c.score >= 0.45).flatMap((c) => c.documentIds.map((id) => docs.find((d) => d.id === id)?.group)));
       if (after.size <= before.size) { stopReason = "low_marginal_gain"; break; }
@@ -202,7 +243,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   // ================================================================ helpers
   async function runProvider(t: Task, round: number): Promise<Hit[]> {
     const info = registry.find((p) => p.key === t.provider);
-    const params = { q: t.query, country, freshness };
+    const params = { q: t.query, country, freshness, count: resultCount(t.provider) };
     const key = cacheKey(t.provider, t.query, params);
     if (t.provider === "brand_docs") {
       const hits = await withUser(userId, (tx) => searchBrandDocs(tx, projectId, t.query));
@@ -212,7 +253,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     if (info && info.cacheTtlHours > 0 && !isDemo) {
       const cached = await withUser(userId, (tx) => cacheGet<Hit[]>(tx, ws, t.provider, key));
       if (cached) {
-        budget.record(t.provider, { ok: true, units: 0, usdEstimated: 0, usdActual: null, ms: 0 });
+        budget.record(t.provider, { ok: true, kind: "cache", units: 0, usdEstimated: 0, usdActual: null, ms: 0 });
         await withUser(userId, (tx) => ledger(tx, t.provider, "search", { params: { q: t.query }, status: cached.length ? "ok" : "empty", httpStatus: null, durationMs: 0, error: null, raw: null, units: 0, costUsdEstimated: 0, costUsdActual: null, cached: true, count: cached.length, questionKey: t.q.key, round }));
         return cached;
       }
@@ -233,17 +274,24 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   async function callProvider(p: ProviderKey, query: string): Promise<ProviderCall<Hit[]>> {
     switch (p) {
       case "demo_web": return demoSearch(query);
-      case "serper": return serperSearch({ query, count: depth === "quick" ? 5 : 8, country, apiKey: e.SERPER_API_KEY!, usdPerCall: e.SERPER_USD_PER_REQUEST });
-      case "brave": return braveSearch({ query, count: depth === "quick" ? 5 : 8, country, freshness, apiKey: e.BRAVE_API_KEY!, usdPerCall: e.BRAVE_USD_PER_REQUEST });
+      case "serper": return serperSearch({ query, count: resultCount(p), country, apiKey: e.SERPER_API_KEY!, usdPerCall: e.SERPER_USD_PER_REQUEST });
+      case "brave": return braveSearch({ query, count: resultCount(p), country, freshness, apiKey: e.BRAVE_API_KEY!, usdPerCall: e.BRAVE_USD_PER_REQUEST });
       case "tavily": return tavilySearch({ query, count: 8, apiKey: e.TAVILY_API_KEY!, usdPerCall: e.TAVILY_USD_PER_REQUEST });
       case "exa": return exaSearch({ query, count: 8, apiKey: e.EXA_API_KEY!, usdPerCall: e.EXA_USD_PER_REQUEST });
       case "youtube": return youtubeSearch({ query, count: 5, regionCode: country, publishedAfter: freshness === "any" ? null : new Date(Date.now() - (freshness === "month" ? 31 : 366) * 86_400_000).toISOString(), apiKey: e.YOUTUBE_API_KEY! });
       case "reddit": return redditSearch({ query, count: 8, timeframe: freshness, clientId: e.REDDIT_CLIENT_ID!, clientSecret: e.REDDIT_CLIENT_SECRET! });
       case "wikipedia": return wikipediaSearch({ query, count: 3 });
       case "google_suggest": return googleSuggest({ query, country });
-      case "hacker_news": return hackerNewsSearch({ query, count: depth === "quick" ? 4 : 8 });
+      case "hacker_news": return hackerNewsSearch({ query, count: resultCount(p) });
       default: return { ok: false, data: [], status: "error", httpStatus: null, durationMs: 0, error: `Unknown provider ${p}`, errorKind: "permanent", units: 0, costUsdEstimated: 0, costUsdActual: null, params: {}, raw: null, cached: false };
     }
+  }
+
+  /** Results requested per call; part of the cache key, so a 5-result answer is never reused for an 8-result request. */
+  function resultCount(p: ProviderKey) {
+    if (p === "serper" || p === "brave") return depth === "quick" ? 5 : 8;
+    if (p === "hacker_news") return depth === "quick" ? 4 : 8;
+    return p === "youtube" ? 5 : p === "wikipedia" ? 3 : 8;
   }
 
   function estimateUsd(p: ProviderKey) {
@@ -315,8 +363,16 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   }
 
   async function extractClaims(newDocs: Doc[], questions: ResearchQuestion[], llmOn: boolean) {
-    // Only the most relevant new documents go to extraction, within the per-job cap, shared across questions.
-    const batchDocs = takeAcrossQuestions(newDocs, Math.max(0, limits.maxDocsToModel - docsSentToModel));
+    // Only the most relevant new documents go to extraction, within the per-job cap: ranked by how
+    // well they match their question, and shared across questions so one can't take every slot.
+    const relevance = (d: Doc) => {
+      const qs = questions.filter((q) => d.questionKeys.includes(q.key));
+      const want = new Set(tokens(qs.map((q) => `${q.text} ${q.queries.join(" ")}`).join(" ")));
+      return tokens(`${d.title ?? ""} ${d.text.slice(0, 3000)}`).filter((t) => want.has(t)).length;
+    };
+    const groups = questions.map((q) => newDocs.filter((d) => d.questionKeys[0] === q.key).sort((a, b) => relevance(b) - relevance(a)));
+    const ungrouped = newDocs.filter((d) => !questions.some((q) => q.key === d.questionKeys[0]));
+    const batchDocs = shareAcross([...groups, ungrouped], Math.max(0, limits.maxDocsToModel - docsSentToModel));
     docsSentToModel += batchDocs.length;
     const drafts: { draft: ClaimDraft; batch: Doc[]; method: string }[] = [];
     for (const batch of sleepless(batchDocs, 6)) {
@@ -390,9 +446,10 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const qlooIds = new Set(qlooObs.map((o) => o.id));
     let generator = "rules";
     let synthesis = rulesSynthesis(plan.questions, synthClaims, coverage, qlooObs, brief);
-    if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled) {
+    // Past the deadline there is no time for a model call: the rules-based synthesis is used instead.
+    if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled && Date.now() < deadline - 20_000) {
       const model = depth === "quick" ? e.LLM_MODEL_FAST : e.LLM_MODEL;
-      const out = await llm("synthesize", model, depth === "quick" ? 0.01 : 0.12, () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
+      const out = await llm("synthesize", model, synthesisEstimateUsd(model, depth), () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
         prompt: synthesisPrompt(brief, plan.objective, plan.questions, synthClaims, coverage, affinity.ok ? affinity.summary : null, qlooObs) }), true);
       if (out) { synthesis = validateSynthesis(out, new Set(synthClaims.map((c) => c.id)), new Set(plan.questions.map((q) => q.key)), qlooIds); generator = `llm:${model}`; }
       else synthesis.limitations.unshift("The LLM synthesis was skipped (budget) or failed; this summary restates the strongest source claims.");
@@ -412,6 +469,11 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const status = isCancelled ? "cancelled" : docs.length === 0 && !qlooOk ? "failed" : completeness === "complete" && (qlooOk || affinity?.ok === false && affinity.skipped) ? "completed" : "partially_completed";
 
     await withUser(userId, async (tx) => {
+      // Write the result only if the run is still open, or was closed from outside for time/staleness
+      // without a report (then the real report is better than the placeholder). Never after a cancel or a finished run.
+      const [open] = await tx`select 1 from research_runs where id = ${runId}
+        and (status in ('queued', 'running') or (stop_reason in ('time_limit', 'stale') and report is null)) for update`;
+      if (!open) return;
       // Interpretations and hypotheses are stored as such — never as source facts.
       for (const f of report.findings.filter((x) => x.kind === "interpretation")) {
         await tx`insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim_type, claim, source_provider, raw_metadata, question_key, is_demo, created_by, review_status, limitations)

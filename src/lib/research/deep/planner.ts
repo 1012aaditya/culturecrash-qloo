@@ -43,11 +43,11 @@ export function rulesPlan(b: BriefInput, opts: { objective: string | null; depth
   const aud = b.audience ? clean(b.audience).split(/[.,;]/)[0].slice(0, 60) : null;
   const interests = (b.interests ?? []).slice(0, 2);
   const qs: Omit<ResearchQuestion, "key">[] = [];
-  if (opts.objective) qs.push({ text: clean(opts.objective), intent: inferIntent(opts.objective), priority: 1, queries: [clean(`${opts.objective}`).slice(0, 120)] });
+  if (opts.objective) qs.push({ text: clean(opts.objective), intent: inferIntent(opts.objective), priority: 1, origin: "user", queries: [clean(`${opts.objective}`).slice(0, 120)] });
   if (aud) qs.push({ text: `What do ${aud}${mkt ? ` in${mkt}` : ""} value, need or struggle with in ${cat}?`, intent: "audience", priority: 1, queries: [`${aud} ${cat}${mkt}`, `${cat}${mkt} consumer attitudes ${year}`] });
   if (b.competitors.length) qs.push({ text: `How do ${b.competitors.slice(0, 3).join(", ")} position themselves and what do they communicate?`, intent: "competitor", priority: 1, queries: b.competitors.slice(0, 2).map((c) => `${c} brand positioning campaign`) });
-  // Counter-evidence comes first among secondary questions so it survives the per-depth cap.
-  if (opts.depth !== "quick") qs.push({ text: `What evidence challenges the obvious direction for ${brand} — criticism, fatigue or backlash in ${cat}?`, intent: "counterevidence", priority: 2, queries: [`${cat} backlash criticism`, `${cat} overrated`] });
+  // Counter-evidence is asked at every depth; mergeQuestions guarantees it a place.
+  qs.push({ text: `What evidence challenges the obvious direction for ${brand} — criticism, fatigue or backlash in ${cat}?`, intent: "counterevidence", priority: 2, queries: [`${cat} backlash criticism`, `${cat} overrated`] });
   qs.push({ text: `How do people talk about ${cat} online — recurring frustrations, questions and language?`, intent: "community", priority: 2, queries: [`${cat} frustrations`, `${cat} what people want`] });
   qs.push({ text: `What has changed recently in ${cat}${mkt}?`, intent: "trend", priority: 2, queries: [`${cat}${mkt} trend ${year}`, `${cat} market shift ${year}`] });
   if (interests.length) qs.push({ text: `How do ${interests.join(" and ")} connect culturally to ${cat}?`, intent: "culture", priority: 2, queries: interests.map((i) => `${i} ${cat} culture`) });
@@ -112,7 +112,15 @@ export function sanitizeLlmPlan(out: z.infer<typeof llmPlanSchema>, depth: Depth
 }
 
 export function buildPlanV2(b: BriefInput, opts: { objective: string | null; depth: Depth; freshness: "month" | "year" | "any"; hasBrandDocs: boolean; registry: ProviderInfo[]; demo: boolean; llmQuestions?: ResearchQuestion[] | null; qlooQuestions?: ResearchQuestion[] }): ResearchPlanV2 & { byQuestion: Record<string, ProviderKey[]> } {
-  const briefQs = opts.llmQuestions?.length ? opts.llmQuestions : rulesPlan(b, opts);
+  const rules = rulesPlan(b, opts);
+  let briefQs = opts.llmQuestions?.length ? opts.llmQuestions : rules;
+  // A model-written plan must still contain the user's own question and a counter-evidence question.
+  if (opts.llmQuestions?.length) {
+    const userQ = rules.find((q) => q.origin === "user");
+    const counter = rules.find((q) => q.intent === "counterevidence");
+    if (userQ && !briefQs.some((q) => q.text === userQ.text)) briefQs = [userQ, ...briefQs];
+    if (counter && !briefQs.some((q) => q.intent === "counterevidence")) briefQs = [...briefQs, counter];
+  }
   const questions = mergeQuestions(opts.qlooQuestions ?? [], briefQs, opts.depth);
   const tech = isTechBrief([b.category, b.product, b.brand, opts.objective].filter(Boolean).join(" "));
   const sel = selectProviders(questions, opts.registry, opts.demo, { tech });
@@ -142,23 +150,25 @@ const TYPE_INTENT: Record<string, Intent> = {
 };
 
 /**
- * Picks the Qloo results worth investigating: highest affinity first, preferring under-the-radar
- * ("white space") entities and type diversity, plus the strongest taste tag. Deterministic.
+ * Picks the Qloo results worth investigating, deterministically. Affinity scores come from separate
+ * Qloo queries per entity type and are not comparable across types, so picks rotate through types,
+ * strongest result of each first, plus the strongest taste tag. Second-hop "orbit" entities are
+ * never picked: their score is relative to another entity, not to this audience.
  */
 export function pickQlooEntities(rows: QlooPick[], n: number): QlooPick[] {
-  const results = rows.filter((r) => r.role === "result" && r.affinity !== null)
-    .sort((a, b) => (b.tier === "white_space" ? 0.05 : 0) + (b.affinity ?? 0) - ((a.tier === "white_space" ? 0.05 : 0) + (a.affinity ?? 0)));
-  const picks: QlooPick[] = [];
-  const types = new Set<string>();
-  for (const r of results) {
-    if (picks.length >= Math.max(1, n - (n > 1 ? 1 : 0))) break;
-    if (types.has(r.type) && results.some((x) => !types.has(x.type) && !picks.includes(x))) continue;
-    picks.push(r);
-    types.add(r.type);
+  const byType = new Map<string, QlooPick[]>();
+  for (const r of rows.filter((x) => x.role === "result" && x.affinity !== null && x.tier !== "subcultural_orbit")) {
+    byType.set(r.type, [...(byType.get(r.type) ?? []), r]);
   }
-  const tag = rows.filter((r) => r.role === "tag").sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))[0];
+  const queues = [...byType.values()].map((l) => l.sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0)))
+    .sort((a, b) => (b[0].affinity ?? 0) - (a[0].affinity ?? 0));
+  const tag = rows.filter((r) => r.role === "tag" && r.affinity !== null).sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))[0];
+  const want = n > 1 && tag ? n - 1 : n;
+  const picks: QlooPick[] = [];
+  for (let i = 0; picks.length < want && queues.some((q) => q.length > i); i++) {
+    for (const q of queues) if (q[i] && picks.length < want) picks.push(q[i]);
+  }
   if (n > 1 && tag) picks.push(tag);
-  for (const r of results) if (picks.length < n && !picks.includes(r)) picks.push(r);
   return picks.slice(0, n);
 }
 
@@ -178,9 +188,35 @@ export function qlooQuestions(picks: QlooPick[], b: BriefInput): ResearchQuestio
   });
 }
 
-/** Qloo-seeded questions first, then brief questions, within the depth's cap. */
+/**
+ * Fits Qloo-seeded and brief questions into the depth's cap. The user's own question and the
+ * counter-evidence question are always kept (a plan that can't be challenged isn't research), then
+ * Qloo questions, then the remaining brief questions by priority.
+ */
 export function mergeQuestions(qloo: ResearchQuestion[], brief: ResearchQuestion[], depth: Depth): ResearchQuestion[] {
   const cap = QUESTION_CAP[depth];
-  const qs = [...qloo.map((q) => ({ ...q, queries: q.queries.slice(0, QUERIES_PER_QUESTION[depth]) })), ...brief.map((q) => ({ ...q, origin: q.origin ?? ("brief" as const) }))];
-  return qs.slice(0, cap).map((q, i) => ({ ...q, key: `q${i + 1}` }));
+  const fromBrief = brief.map((q) => ({ ...q, origin: q.origin ?? ("brief" as const) }));
+  const must = fromBrief.filter((q) => q.origin === "user" || q.intent === "counterevidence").slice(0, cap);
+  const rest = fromBrief.filter((q) => !must.includes(q)).sort((a, b) => a.priority - b.priority);
+  const room = cap - must.length;
+  // Qloo questions fill the room, except one slot kept for the top brief question (audience or competitors).
+  const qlooRoom = Math.max(0, room - (rest.length && room >= 2 ? 1 : 0));
+  const qlooQs = qloo.slice(0, qlooRoom).map((q) => ({ ...q, queries: q.queries.slice(0, QUERIES_PER_QUESTION[depth]) }));
+  const chosen = [...must.filter((q) => q.origin === "user"), ...qlooQs, ...rest.slice(0, cap - must.length - qlooQs.length), ...must.filter((q) => q.origin !== "user")];
+  return chosen.map((q, i) => ({ ...q, key: `q${i + 1}` }));
 }
+
+/**
+ * Takes items from each group in turn (first of every group, then second, …) up to `limit`, so no
+ * group can use up a shared budget before the others get anything.
+ */
+export function shareAcross<T>(groups: T[][], limit: number): T[] {
+  const out: T[] = [];
+  for (let i = 0; out.length < limit && groups.some((g) => g.length > i); i++) {
+    for (const g of groups) if (g[i] !== undefined && out.length < limit) out.push(g[i]);
+  }
+  return out;
+}
+
+/** Share of a multi-round job's provider calls that round 1 may use; the rest is kept for follow-ups. */
+export const FIRST_ROUND_SHARE = 0.75;

@@ -23,13 +23,11 @@ function build(to: string, subject: string, heading: string, paragraphs: string[
   return { to, subject, html: layout(heading, paragraphs, cta), text: text(heading, paragraphs, cta), replyTo };
 }
 
-export function invitationEmail(o: { to: string; workspace: string; inviter: string; role: string; added: boolean }): Email {
-  return o.added
-    ? build(o.to, `You now have access to ${o.workspace}`, `You’ve been added to ${o.workspace}`,
-        [`${o.inviter} added you to the ${o.workspace} workspace on CultureCrash as ${o.role}.`], { label: "Open CultureCrash", href: appUrl("/dashboard") })
-    : build(o.to, `${o.inviter} invited you to ${o.workspace} on CultureCrash`, `Join ${o.workspace}`,
-        [`${o.inviter} invited you to the ${o.workspace} workspace on CultureCrash as ${o.role}.`, `Create an account with this email address (${o.to}) and you will join the workspace automatically.`],
-        { label: "Create your account", href: appUrl("/signup") });
+export function invitationEmail(o: { to: string; workspace: string; inviter: string; role: string }): Email {
+  return build(o.to, `${o.inviter} invited you to ${o.workspace} on CultureCrash`, `Join ${o.workspace}`,
+    [`${o.inviter} invited you to the ${o.workspace} workspace on CultureCrash as ${o.role}.`,
+      `Sign in with this email address (${o.to}), or create an account with it, then accept the invitation on your dashboard. Nothing changes until you accept.`],
+    { label: "Open CultureCrash", href: appUrl("/login?next=/dashboard") });
 }
 
 export function researchFinishedEmail(o: { to: string; project: string; projectId: string; runId: string; ok: boolean; entities: number; error: string | null; demo: boolean }): Email {

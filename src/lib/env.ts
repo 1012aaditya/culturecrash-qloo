@@ -39,7 +39,11 @@ const schema = z.object({
   BRAVE_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
   SERPER_USD_PER_REQUEST: z.coerce.number().min(0).default(0.001),
   TAVILY_USD_PER_REQUEST: z.coerce.number().min(0).default(0.008),
-  EXA_USD_PER_REQUEST: z.coerce.number().min(0).default(0.005),
+  EXA_USD_PER_REQUEST: z.coerce.number().min(0).default(0.007), // measured: Exa news search with highlights, Oct 2026
+  // Ceiling on estimated research spend across ALL workspaces this calendar month (USD). Every workspace
+  // shares the server's provider keys, so this stops many signups from adding up to an unbounded bill.
+  // Unset = no platform ceiling (only per-workspace budgets apply).
+  PLATFORM_SPEND_CAP_USD: opt(z.coerce.number().min(0)),
   LLM_MODEL: z.string().default("claude-opus-5-5"),
   // Smaller model for planning and claim extraction; the main model writes the synthesis.
   LLM_MODEL_FAST: z.string().default("claude-haiku-5-5"),

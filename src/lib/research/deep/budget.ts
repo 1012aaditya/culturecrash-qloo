@@ -14,8 +14,9 @@ export type BudgetLimits = {
 
 export const DEPTH_PROFILES: Record<Depth, BudgetLimits> = {
   quick: { maxProviderCalls: 6, maxRounds: 1, maxRetrievedPages: 3, maxDocsToModel: 8, maxUsd: 0.15, maxSeconds: 75, maxLlmCalls: 3, synthesisReserveUsd: 0.05 },
-  standard: { maxProviderCalls: 16, maxRounds: 2, maxRetrievedPages: 8, maxDocsToModel: 18, maxUsd: 0.6, maxSeconds: 170, maxLlmCalls: 6, synthesisReserveUsd: 0.15 },
-  deep: { maxProviderCalls: 32, maxRounds: 3, maxRetrievedPages: 16, maxDocsToModel: 32, maxUsd: 1.5, maxSeconds: 270, maxLlmCalls: 10, synthesisReserveUsd: 0.3 },
+  // Reserves cover a typical synthesis with the default main model (see synthesisEstimateUsd).
+  standard: { maxProviderCalls: 16, maxRounds: 2, maxRetrievedPages: 8, maxDocsToModel: 18, maxUsd: 0.6, maxSeconds: 170, maxLlmCalls: 6, synthesisReserveUsd: 0.25 },
+  deep: { maxProviderCalls: 32, maxRounds: 3, maxRetrievedPages: 16, maxDocsToModel: 32, maxUsd: 1.5, maxSeconds: 270, maxLlmCalls: 10, synthesisReserveUsd: 0.35 },
 };
 
 /** Share of maxSeconds that external sources always get after the Qloo stage, however long it took. */
@@ -73,11 +74,12 @@ export class Budget {
     return this.usage.llmCalls < this.limits.maxLlmCalls && this.usage.usdEstimated + estimatedUsd <= this.ceiling();
   }
 
-  record(provider: string, r: { ok: boolean; units: number; usdEstimated: number; usdActual: number | null; ms: number; kind?: "provider" | "page" | "llm"; tokensIn?: number; tokensOut?: number }) {
+  record(provider: string, r: { ok: boolean; units: number; usdEstimated: number; usdActual: number | null; ms: number; kind?: "provider" | "page" | "llm" | "cache"; tokensIn?: number; tokensOut?: number }) {
     const u = this.usage;
     if (r.kind === "page") u.retrievedPages++;
     else if (r.kind === "llm") { u.llmCalls++; u.tokensIn += r.tokensIn ?? 0; u.tokensOut += r.tokensOut ?? 0; }
-    else u.providerCalls++;
+    // A cache hit costs nothing and calls nobody, so it doesn't use up the provider-call allowance.
+    else if (r.kind !== "cache") u.providerCalls++;
     if (!r.ok) u.failedCalls++;
     u.usdEstimated = Math.round((u.usdEstimated + r.usdEstimated) * 1e6) / 1e6;
     if (r.usdActual !== null) u.usdActual = Math.round((u.usdActual + r.usdActual) * 1e6) / 1e6;
@@ -97,4 +99,13 @@ export function llmCostUsd(model: string, tokensIn: number, tokensOut: number): 
   };
   const [pi, po] = price[model] ?? [4, 20];
   return (tokensIn * pi + tokensOut * po) / 1_000_000;
+}
+
+/** Typical tokens for one research synthesis per depth (prompt with claims in, structured report out). */
+const SYNTHESIS_TOKENS: Record<"quick" | "standard" | "deep", [number, number]> = { quick: [8_000, 3_000], standard: [20_000, 8_000], deep: [30_000, 10_000] };
+
+/** Estimated cost of the synthesis call, so the budget check reflects the model actually used. */
+export function synthesisEstimateUsd(model: string, depth: "quick" | "standard" | "deep"): number {
+  const [tokensIn, tokensOut] = SYNTHESIS_TOKENS[depth];
+  return llmCostUsd(model, tokensIn, tokensOut);
 }

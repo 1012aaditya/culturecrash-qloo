@@ -1,13 +1,13 @@
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { SiteNav } from "@/components/marketing/site-nav";
-import { getSessionUser } from "@/lib/auth/session";
 
-export default async function MarketingLayout({ children }: LayoutProps<"/">) {
-  const user = await getSessionUser();
+// No session lookup here: marketing pages stay static (served from the CDN). The nav reads a
+// non-secret sign-in hint cookie in the browser to choose between "Dashboard" and "Sign in".
+export default function MarketingLayout({ children }: LayoutProps<"/">) {
   return (
     <>
       <div className="cc-scroll-progress" aria-hidden="true" />
-      <SiteNav signedIn={Boolean(user)} />
+      <SiteNav />
       <main id="main">{children}</main>
       <SiteFooter />
     </>

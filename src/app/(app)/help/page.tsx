@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { SectionTitle, Surface } from "@/components/ui/surface";
 import { getCtx } from "@/lib/data/workspace";
 import { EVIDENCE_LABEL } from "@/lib/evidence-labels";
+import { safeInternalPath } from "@/lib/safe-path";
 import { STAGES } from "@/lib/stages";
 
 export const metadata: Metadata = { title: "Help & feedback" };
@@ -55,7 +56,7 @@ const FAQ: [string, ReactNode][] = [
 export default async function HelpPage({ searchParams }: PageProps<"/help">) {
   const sp = await searchParams;
   const fromRaw = Array.isArray(sp.from) ? sp.from[0] : sp.from;
-  const from = fromRaw && fromRaw.startsWith("/") && !fromRaw.startsWith("//") ? fromRaw.slice(0, 300) : null;
+  const from = fromRaw ? safeInternalPath(fromRaw.slice(0, 300), "") || null : null;
   await getCtx();
 
   return (

@@ -8,6 +8,7 @@ import { briefExtractionSchema, type BriefExtraction } from "@/lib/ai/schemas";
 import { templateBriefExtraction } from "@/lib/ai/template";
 import { withUser } from "@/lib/db";
 import { ensureChunks } from "@/lib/research/deep/brand-docs";
+import { zipUncompressedBytes } from "@/lib/upload-guards";
 import { env } from "@/lib/env";
 import { logActivity, trackEvent } from "./activity";
 import { BRIEF_CORE_FIELDS, isUuid } from "./projects";
@@ -80,44 +81,59 @@ const ALLOWED = new Map([
   ["image/gif", "gif"],
 ]);
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_UNZIPPED_BYTES = 60 * 1024 * 1024;
+const MAX_PDF_PAGES = 300;
+const PARSE_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("parse timeout")), ms); })])
+    .finally(() => clearTimeout(timer));
+}
 
 export type UploadResult = { ok: true; documentId: string; extracted: boolean; textPreview: string | null; stored: boolean } | { ok: false; error: string };
 
-export async function uploadBriefDocumentAction(form: FormData): Promise<UploadResult> {
-  const projectId = String(form.get("projectId") ?? "");
-  const file = form.get("file");
-  if (!isUuid(projectId) || !(file instanceof File)) return { ok: false, error: "Choose a file to upload." };
-  if (file.size === 0 || file.size > MAX_BYTES) return { ok: false, error: "Files must be between 1 byte and 10 MB." };
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const isImage = isImageFile(file.name, file.type);
-  const kind = ALLOWED.get(file.type) ?? (["pdf", "docx", "txt", "md", "png", "jpg", "jpeg", "webp", "gif"].includes(ext) ? ext : null);
-  if (!kind) return { ok: false, error: "Supported formats: PDF, DOCX, TXT, Markdown, and Moodboards/Images (PNG, JPG, WEBP, GIF)." };
-  const ctx = await getCtx();
-  try {
-    assertCan(ctx.workspace.role, "brief.edit");
-  } catch (e) {
-    return { ok: false, error: (e as ForbiddenError).message };
-  }
-  const bytes = Buffer.from(await file.arrayBuffer());
+function kindOf(name: string, type: string) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ALLOWED.get(type) ?? (["pdf", "docx", "txt", "md", "png", "jpg", "jpeg", "webp", "gif"].includes(ext) ? ext : null);
+}
+const FORMATS = "Supported formats: PDF, DOCX, TXT, Markdown, and Moodboards/Images (PNG, JPG, WEBP, GIF).";
+const storageOn = () => { const e = env(); return e.AUTH_MODE === "supabase" && Boolean(e.NEXT_PUBLIC_SUPABASE_URL); };
+
+/**
+ * Validates, extracts and records one uploaded file. Shared by the direct form upload (local / small
+ * files) and the signed-URL path (Supabase), so both apply exactly the same checks.
+ */
+async function processDocument(ctx: Awaited<ReturnType<typeof getCtx>>, projectId: string, file: { name: string; type: string; bytes: Buffer }, storagePath: string | null): Promise<UploadResult> {
+  const { name, type, bytes } = file;
+  const kind = kindOf(name, type);
+  if (!kind) return { ok: false, error: FORMATS };
+  const isImage = isImageFile(name, type);
   // Magic-byte checks: content must match the declared type.
   if (kind === "pdf" && bytes.subarray(0, 5).toString() !== "%PDF-") return { ok: false, error: "That file is not a valid PDF." };
   if (kind === "docx" && !(bytes[0] === 0x50 && bytes[1] === 0x4b)) return { ok: false, error: "That file is not a valid DOCX document." };
+  if (kind === "docx") {
+    const unzipped = zipUncompressedBytes(bytes);
+    if (unzipped === null) return { ok: false, error: "That file is not a valid DOCX document." };
+    if (unzipped > MAX_UNZIPPED_BYTES) return { ok: false, error: "That DOCX expands to more than 60 MB, so it was not opened. Save a smaller copy and try again." };
+  }
 
   let extracted: string | null = null;
   let status: "extracted" | "unsupported" | "failed" = "unsupported";
   try {
     if (isImage) {
       // Images go to the vision model only when this workspace allows LLM use; otherwise the file is kept without text.
-      extracted = (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) ? await extractVisualAesthetics(bytes, file.name, file.type) : null;
+      extracted = (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) ? await extractVisualAesthetics(bytes, name, type) : null;
       if (extracted === null) status = "unsupported";
     } else if (kind === "pdf") {
       const { extractText, getDocumentProxy } = await import("unpdf");
-      const pdf = await getDocumentProxy(new Uint8Array(bytes));
-      const { text: t } = await extractText(pdf, { mergePages: true });
+      const pdf = await withTimeout(getDocumentProxy(new Uint8Array(bytes)), PARSE_TIMEOUT_MS);
+      if (pdf.numPages > MAX_PDF_PAGES) return { ok: false, error: `That PDF has ${pdf.numPages} pages. Upload one with ${MAX_PDF_PAGES} pages or fewer.` };
+      const { text: t } = await withTimeout(extractText(pdf, { mergePages: true }), PARSE_TIMEOUT_MS);
       extracted = String(t);
     } else if (kind === "docx") {
       const mammoth = await import("mammoth");
-      extracted = (await mammoth.extractRawText({ buffer: bytes })).value;
+      extracted = (await withTimeout(mammoth.extractRawText({ buffer: bytes }), PARSE_TIMEOUT_MS)).value;
     } else {
       extracted = bytes.toString("utf8");
     }
@@ -130,28 +146,14 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
     extracted = null;
   }
 
-  let storagePath: string | null = null;
-  const e = env();
-  if (e.AUTH_MODE === "supabase" && e.NEXT_PUBLIC_SUPABASE_URL) {
-    try {
-      const { supabaseServer } = await import("@/lib/auth/supabase");
-      const client = await supabaseServer();
-      const path = `${ctx.workspace.workspaceId}/${projectId}/${crypto.randomUUID()}.${kind}`;
-      const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).upload(path, bytes, { contentType: file.type || "application/octet-stream", upsert: false });
-      if (!error) storagePath = path;
-    } catch {
-      storagePath = null;
-    }
-  }
-
   const id = await withUser(ctx.user.id, async (tx) => {
     const [p] = await tx`select id from projects where id = ${projectId} and workspace_id = ${ctx.workspace.workspaceId}`;
     if (!p) return null;
     const [doc] = await tx`insert into brief_documents (project_id, workspace_id, file_name, mime_type, size_bytes, storage_path, extracted_text, extraction_status, created_by)
-      values (${projectId}, ${ctx.workspace.workspaceId}, ${file.name.slice(0, 200)}, ${file.type || kind}, ${file.size}, ${storagePath}, ${extracted}, ${status}, ${ctx.user.id}) returning id`;
+      values (${projectId}, ${ctx.workspace.workspaceId}, ${name.slice(0, 200)}, ${type || kind}, ${bytes.length}, ${storagePath}, ${extracted}, ${status}, ${ctx.user.id}) returning id`;
     // Index the text for research retrieval straight away (keyword passages, this project only).
     if (status === "extracted") await ensureChunks(tx, projectId);
-    await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "uploaded", objectType: "document", objectId: doc.id, summary: `uploaded “${file.name.slice(0, 80)}” to the brief` });
+    await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "uploaded", objectType: "document", objectId: doc.id, summary: `uploaded “${name.slice(0, 80)}” to the brief` });
     return doc.id as string;
   });
   if (!id) return { ok: false, error: "Project not found." };
@@ -159,11 +161,90 @@ export async function uploadBriefDocumentAction(form: FormData): Promise<UploadR
   return { ok: true, documentId: id, extracted: status === "extracted", textPreview: extracted?.slice(0, 400) ?? null, stored: Boolean(storagePath) };
 }
 
-export async function deleteBriefDocumentAction(projectId: string, documentId: string) {
+async function authorizeUpload() {
+  const ctx = await getCtx();
+  assertCan(ctx.workspace.role, "brief.edit");
+  return ctx;
+}
+
+/** Direct upload through the server: used when Supabase Storage isn't configured (local development). */
+export async function uploadBriefDocumentAction(form: FormData): Promise<UploadResult> {
+  const projectId = String(form.get("projectId") ?? "");
+  const file = form.get("file");
+  if (!isUuid(projectId) || !(file instanceof File)) return { ok: false, error: "Choose a file to upload." };
+  if (file.size === 0 || file.size > MAX_BYTES) return { ok: false, error: "Files must be between 1 byte and 10 MB." };
+  if (!kindOf(file.name, file.type)) return { ok: false, error: FORMATS };
+  let ctx;
+  try {
+    ctx = await authorizeUpload();
+  } catch (e) {
+    return { ok: false, error: (e as ForbiddenError).message };
+  }
+  return processDocument(ctx, projectId, { name: file.name, type: file.type, bytes: Buffer.from(await file.arrayBuffer()) }, null);
+}
+
+export type UploadTicket = { ok: true; mode: "direct"; bucket: string; path: string; token: string } | { ok: true; mode: "form" } | { ok: false; error: string };
+
+/**
+ * Step 1 of a Supabase upload: a one-time signed URL so the browser sends the file straight to Storage.
+ * Vercel caps a function request at 4.5 MB, so a 10 MB file can't pass through a server action.
+ */
+export async function startBriefUploadAction(projectId: string, name: string, size: number, type: string): Promise<UploadTicket> {
+  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+  if (!(size > 0 && size <= MAX_BYTES)) return { ok: false, error: "Files must be between 1 byte and 10 MB." };
+  const kind = kindOf(name, type);
+  if (!kind) return { ok: false, error: FORMATS };
+  let ctx;
+  try {
+    ctx = await authorizeUpload();
+  } catch (e) {
+    return { ok: false, error: (e as ForbiddenError).message };
+  }
+  if (!storageOn()) return { ok: true, mode: "form" };
+  const { supabaseServer } = await import("@/lib/auth/supabase");
+  const bucket = env().SUPABASE_STORAGE_BUCKET;
+  const path = `${ctx.workspace.workspaceId}/${projectId}/${crypto.randomUUID()}.${kind}`;
+  const { data, error } = await (await supabaseServer()).storage.from(bucket).createSignedUploadUrl(path);
+  if (error || !data) return { ok: false, error: "Storage didn't accept the upload. Check the bucket is set up (see README) and try again." };
+  return { ok: true, mode: "direct", bucket, path: data.path, token: data.token };
+}
+
+/** Step 2: the server reads the stored file back, applies the same checks, extracts text and records it. */
+export async function finishBriefUploadAction(projectId: string, path: string, name: string, type: string): Promise<UploadResult> {
+  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+  let ctx;
+  try {
+    ctx = await authorizeUpload();
+  } catch (e) {
+    return { ok: false, error: (e as ForbiddenError).message };
+  }
+  // Only a path this workspace and project could have been issued.
+  if (!path.startsWith(`${ctx.workspace.workspaceId}/${projectId}/`) || path.includes("..")) return { ok: false, error: "Invalid upload." };
+  const { supabaseServer } = await import("@/lib/auth/supabase");
+  const store = (await supabaseServer()).storage.from(env().SUPABASE_STORAGE_BUCKET);
+  const { data, error } = await store.download(path);
+  if (error || !data) return { ok: false, error: "The uploaded file couldn't be read back from Storage. Try again." };
+  if (data.size > MAX_BYTES) {
+    await store.remove([path]);
+    return { ok: false, error: "Files must be 10 MB or smaller." };
+  }
+  const result = await processDocument(ctx, projectId, { name, type, bytes: Buffer.from(await data.arrayBuffer()) }, path);
+  if (!result.ok) await store.remove([path]); // a rejected file isn't kept
+  return result;
+}
+
+/** Deletes the document and its stored original (deletion is immediate, as the privacy notice says). */
+export async function deleteBriefDocumentAction(projectId: string, documentId: string): Promise<{ ok: boolean; error?: string }> {
   if (!isUuid(projectId) || !isUuid(documentId)) return { ok: false, error: "Invalid request." };
   const ctx = await getCtx();
   assertCan(ctx.workspace.role, "brief.edit");
-  await withUser(ctx.user.id, (tx) => tx`delete from brief_documents where id = ${documentId} and project_id = ${projectId}`);
+  const rows = await withUser(ctx.user.id, (tx) => tx`delete from brief_documents where id = ${documentId} and project_id = ${projectId} returning storage_path`);
+  if (!rows.length) return { ok: false, error: "Only the person who uploaded a document, or an admin, can delete it." };
+  if (rows[0].storage_path && storageOn()) {
+    const { supabaseServer } = await import("@/lib/auth/supabase");
+    const { error } = await (await supabaseServer()).storage.from(env().SUPABASE_STORAGE_BUCKET).remove([rows[0].storage_path as string]);
+    if (error) console.error("[brief] stored file not removed", rows[0].storage_path, error.message);
+  }
   revalidatePath(`/projects/${projectId}/brief`);
   return { ok: true };
 }

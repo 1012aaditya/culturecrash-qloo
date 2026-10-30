@@ -39,6 +39,14 @@ export const researchInterpretationSchema = z.object({
 });
 export type ResearchInterpretation = z.infer<typeof researchInterpretationSchema>;
 
+/** One factual statement plus the evidence it rests on. `support` is set by the server's check, never by the model. */
+export const groundedClaimSchema = z.object({
+  statement: z.string().describe("One factual statement this item depends on, in plain words. One fact per statement."),
+  evidenceIds: z.array(z.string()).describe("ids of the evidence items whose text supports this exact statement; empty if it is your interpretation"),
+  support: z.enum(["verified", "weak", "uncited"]).optional().describe("Leave unset: the server fills this in after checking the evidence"),
+});
+export type GroundedClaim = z.infer<typeof groundedClaimSchema>;
+
 export const opportunitiesSchema = z.object({
   opportunities: z.array(z.object({
     title: z.string(),
@@ -49,6 +57,7 @@ export const opportunitiesSchema = z.object({
     validationStep: z.string(),
     evidenceIds: z.array(z.string()),
     entityNames: z.array(z.string()),
+    claims: z.array(groundedClaimSchema).default([]).describe("The 2-5 factual statements this opportunity rests on, each with its own evidence ids"),
   })),
 });
 export type OpportunitiesOutput = z.infer<typeof opportunitiesSchema>;
@@ -59,6 +68,7 @@ export const directionSchema = z.object({
   positioningStatement: z.string(),
   audienceContext: z.string(),
   consumerTension: z.string().describe("Empty string if not supported by evidence"),
+  brandRole: z.string().default("").describe("The role the brand plays in people's lives in this direction (e.g. host, guide, ally, provocateur) — different for each direction"),
   culturalConnections: z.array(z.string()),
   evidenceIds: z.array(z.string()),
   strategicRationale: z.string(),
@@ -70,6 +80,7 @@ export const directionSchema = z.object({
   assumptionsToTest: z.array(z.string()),
   suggestedExperiment: z.string(),
   isExploratory: z.boolean(),
+  claims: z.array(groundedClaimSchema).default([]).describe("The 3-6 factual statements this direction rests on, each with the evidence ids that support it"),
 });
 export type DirectionContent = z.infer<typeof directionSchema>;
 
@@ -108,6 +119,16 @@ export const creativeBriefSchema = z.object(
 );
 export type CreativeBriefContent = Record<CreativeSectionKey, string>;
 
+export const creativeGroundingSchema = z.array(groundedClaimSchema.extend({
+  section: z.enum(CREATIVE_SECTIONS.map(([k]) => k) as [CreativeSectionKey, ...CreativeSectionKey[]]),
+}));
+export type CreativeGrounding = z.infer<typeof creativeGroundingSchema>;
+
+/** What the model returns: client-facing prose (no ids) plus the citations for it, kept apart. */
+export const creativeBriefOutputSchema = creativeBriefSchema.extend({
+  grounding: creativeGroundingSchema.describe("The factual statements the brief relies on (especially audience context and reasons to believe), each tagged with its section and evidence ids"),
+});
+
 export const sectionRevisionSchema = z.object({ text: z.string() });
 
 export const copilotAnswerSchema = z.object({
@@ -133,10 +154,13 @@ export const redTeamCritiqueSchema = z.object({
     directionSlot: z.number().int().min(1).max(3),
     directionName: z.string(),
     fatalFlaw: z.string().describe("The single biggest point of failure or strategic vulnerability."),
+    weakestEvidence: z.string().default("").describe("The statement this direction rests on that is least supported (quote it), and why a client would doubt it. Prefer statements marked weak or uncited."),
+    nearestCompetitor: z.string().default("").describe("The competitor (from the brief or evidence) that already owns or could most easily claim this position, and how. Say 'none identified in the evidence' if so."),
     culturalRisk: z.string().describe("Risk of being perceived as tone-deaf, cliché, performative, or inauthentic."),
     competitorCounter: z.string().describe("How a rival brand could easily counter, ridicule, or neutralize this position."),
     toughestClientQuestion: z.string().describe("The hardest, most skeptical question a client CMO will ask in the pitch meeting."),
     suggestedDefense: z.string().describe("Actionable advice to fortify and defend this direction."),
+    directionId: z.string().optional().describe("Leave unset: filled in by the server"),
   })),
 });
 export type RedTeamCritique = z.infer<typeof redTeamCritiqueSchema>;

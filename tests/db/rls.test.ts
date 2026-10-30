@@ -9,6 +9,9 @@ import { createHash } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCopilotTool } from "@/lib/ai/copilot-tools";
+import { buildSnapshot } from "@/lib/reports/snapshot";
+import { closeRun, sweepStaleRuns, sweepStaleTasks } from "@/lib/research/lifecycle";
+import { PITCH_PACK_SECTIONS } from "@/lib/reports/types";
 
 const admin = process.env.TEST_DATABASE_ADMIN_URL;
 const d = admin ? describe : describe.skip;
@@ -38,7 +41,7 @@ async function user(email: string) {
 }
 
 let A: { id: string; ws: string }, B: { id: string; ws: string }, V: { id: string; ws: string };
-let projectA: string, projectB: string;
+let projectA: string;
 
 d("Row Level Security and workspace isolation", () => {
   beforeAll(async () => {
@@ -56,10 +59,13 @@ d("Row Level Security and workspace isolation", () => {
     A = await user("alice@a.test");
     B = await user("bob@b.test");
     V = await user("vera@a.test");
-    // Vera joins Alice's workspace as a viewer (via Alice, an owner).
+    // Vera joins Alice's workspace as a viewer: Alice (an owner) invites, Vera accepts.
     await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'vera@a.test', 'viewer')`);
+    const [inv] = await as(V.id, (tx) => tx`select id from my_pending_invitations()`);
+    await as(V.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`);
     projectA = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'A secret launch', ${A.id}) returning id`))[0].id;
-    projectB = (await as(B.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${B.ws}, 'B secret launch', ${B.id}) returning id`))[0].id;
+    // Bob has a project of his own, so isolation checks below compare against real data.
+    await as(B.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${B.ws}, 'B secret launch', ${B.id})`);
   });
   afterAll(async () => {
     await sql?.end();
@@ -175,10 +181,14 @@ d("Row Level Security and workspace isolation", () => {
   it("copilot tools only see what the caller can see", async () => {
     await as(A.id, (tx) => tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim) values (${projectA}, ${A.ws}, 'hypothesis', 'Gen Z loves vinyl listening bars')`);
     const own = await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
-    expect(own.evidenceIds).toHaveLength(1);
+    expect(own.result).toHaveLength(1);
+    // A hypothesis is readable context but never citable as evidence.
+    expect(own.evidenceIds).toHaveLength(0);
+    await as(A.id, (tx) => tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim) values (${projectA}, ${A.ws}, 'external_source', 'Vinyl listening bars opened in three cities')`);
+    expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }))).evidenceIds).toHaveLength(1);
     // Bob passes Alice's project id directly: RLS returns nothing.
     const other = await as(B.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "vinyl" }));
-    expect(other.evidenceIds).toHaveLength(0);
+    expect(other.result).toHaveLength(0);
     expect(await as(B.id, (tx) => runCopilotTool(tx, projectA, "list_opportunities", {}))).toMatchObject({ result: [] });
     // Bad input and unknown tools are rejected without querying.
     expect((await as(A.id, (tx) => runCopilotTool(tx, projectA, "search_evidence", { query: "" }))).result).toMatchObject({ error: "Invalid input" });
@@ -221,5 +231,182 @@ d("Row Level Security and workspace isolation", () => {
     expect(Number((await as(A.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBeCloseTo(0.005);
     expect(Number((await as(B.id, (tx) => tx`select research_spend_this_month(${A.ws}) as s`))[0].s)).toBe(0);
     expect((await as(B.id, (tx) => tx`select research_runs_today_by_user(${A.ws}, ${A.id}) as n`))[0].n).toBe(0);
+  });
+
+  it("profile email can't be changed by its owner, so invitations can't be hijacked", async () => {
+    // Bob tries to take over an invitation addressed to someone else's email.
+    await denied(as(B.id, (tx) => tx`update profiles set email = 'newhire@a.test' where id = ${B.id}`));
+    expect(await as(B.id, (tx) => tx`update profiles set full_name = 'Bob B' where id = ${B.id} returning id`)).toHaveLength(1);
+    await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'newhire@a.test', 'member')`);
+    expect(await as(B.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    expect(await as(B.id, (tx) => tx`select * from workspace_members where workspace_id = ${A.ws} and user_id = ${B.id}`)).toHaveLength(0);
+  });
+
+  it("invitations add nobody until a confirmed invitee accepts", async () => {
+    const D = await user("dan@d.test");
+    const [{ invite_member: outcome }] = await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'dan@d.test', 'member')`);
+    expect(outcome).toBe("invited"); // the same answer whether or not the address has an account
+    expect(await as(D.id, (tx) => tx`select * from workspaces where id = ${A.ws}`)).toHaveLength(0);
+    const [inv] = await as(D.id, (tx) => tx`select id, workspace_name from my_pending_invitations()`);
+    expect(inv.workspace_name).toBeTruthy();
+    // Nobody else can answer it.
+    await expect(as(B.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`)).rejects.toThrow(/invitation not found/);
+    // An unconfirmed account sees nothing and can't accept.
+    await sql`update auth.users set email_confirmed_at = null where id = ${D.id}`;
+    expect(await as(D.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    await expect(as(D.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`)).rejects.toThrow(/invitation not found/);
+    await sql`update auth.users set email_confirmed_at = now() where id = ${D.id}`;
+    await as(D.id, (tx) => tx`select respond_to_invitation(${inv.id}, false)`);
+    expect(await as(D.id, (tx) => tx`select id from my_pending_invitations()`)).toHaveLength(0);
+    expect(await as(D.id, (tx) => tx`select * from workspaces where id = ${A.ws}`)).toHaveLength(0);
+  });
+
+  it("only owners change limits and retention; nobody edits plan or demo flags directly", async () => {
+    await as(A.id, (tx) => tx`update workspace_members set role = 'admin' where workspace_id = ${A.ws} and user_id = ${V.id}`);
+    await denied(as(V.id, (tx) => tx`update workspaces set research_runs_daily_limit = 1000 where id = ${A.ws}`));
+    await denied(as(A.id, (tx) => tx`update workspaces set plan = 'agency', is_demo = true where id = ${A.ws}`));
+    await denied(as(V.id, (tx) => tx`select set_research_limits(${A.ws}, 9999, 200)`));
+    await denied(as(V.id, (tx) => tx`select set_data_retention(${A.ws}, 30)`));
+    await as(A.id, (tx) => tx`select set_research_limits(${A.ws}, 40, 20)`);
+    await as(A.id, (tx) => tx`select set_data_retention(${A.ws}, 90)`);
+    const [w] = await as(A.id, (tx) => tx`select research_budget_usd_monthly, research_runs_per_user_daily, data_retention_days from workspaces where id = ${A.ws}`);
+    expect([Number(w.research_budget_usd_monthly), w.research_runs_per_user_daily, w.data_retention_days]).toEqual([40, 20, 90]);
+    expect(await as(V.id, (tx) => tx`update workspaces set name = 'Renamed by admin' where id = ${A.ws} returning id`)).toHaveLength(1);
+    await as(A.id, (tx) => tx`update workspace_members set role = 'viewer' where workspace_id = ${A.ws} and user_id = ${V.id}`);
+  });
+
+  it("a user can own at most three workspaces", async () => {
+    const E = await user("erin@e.test");
+    await as(E.id, (tx) => tx`select create_workspace('Second')`);
+    await as(E.id, (tx) => tx`select create_workspace('Third')`);
+    await expect(as(E.id, (tx) => tx`select create_workspace('Fourth')`)).rejects.toThrow(/at most three/);
+  });
+
+  it("notifications can't be planted for a teammate or point off-site", async () => {
+    // Vera (viewer) can't notify Alice, even as herself.
+    await denied(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, actor_id, kind, title) values (${A.ws}, ${A.id}, ${V.id}, 'report_shared', 'Verify your account')`));
+    await expect(as(V.id, (tx) => tx`insert into notifications (workspace_id, user_id, kind, title, href) values (${A.ws}, ${V.id}, 'report_shared', 'x', ${"/" + String.fromCharCode(92) + "evil.test"})`)).rejects.toThrow(/check constraint/);
+  });
+
+  it("the Data API pre-request hook refuses every call", async () => {
+    await expect(as(A.id, (tx) => tx`select data_api_disabled()`)).rejects.toThrow(/Data API is disabled/);
+  });
+
+  it("report snapshots leave out rejected evidence and hypotheses, and always include what they cite", async () => {
+    const ids = await as(A.id, async (tx) => {
+      await tx`insert into campaign_briefs (project_id, workspace_id, brand) values (${projectA}, ${A.ws}, 'Lumen') on conflict do nothing`;
+      const ins = (type: string, claim: string, review: string) =>
+        tx`insert into evidence_items (project_id, workspace_id, evidence_type, claim, review_status) values (${projectA}, ${A.ws}, ${type}::evidence_type, ${claim}, ${review}::review_status) returning id`;
+      const [rejected] = await ins("external_source", "A source a strategist marked wrong", "rejected");
+      const [good] = await ins("external_source", "Vogue India: Gen Z in Mumbai follow K-beauty creators", "approved");
+      await tx`insert into opportunities (project_id, workspace_id, title, description, evidence_ids, claims, generator)
+        values (${projectA}, ${A.ws}, 'K-beauty creators', 'x', ${[rejected.id, good.id]},
+          ${tx.json([{ statement: "Gen Z in Mumbai follow K-beauty creators", evidenceIds: [good.id], support: "verified" }] as never)}, 'template')`;
+      return { rejected: rejected.id as string, good: good.id as string };
+    });
+    const snap = await as(A.id, (tx) => buildSnapshot(tx, projectA, ["evidence", "opportunities"], "Test report"));
+    const evIds = snap.evidence.map((e) => e.id);
+    expect(evIds).toContain(ids.good);
+    expect(evIds).not.toContain(ids.rejected);
+    expect(snap.evidence.some((e) => e.type === "hypothesis" || e.type === "ai_interpretation")).toBe(false);
+    expect(snap.opportunities[0].claims?.[0].support).toBe("verified");
+    expect(snap.limitations.join(" ")).not.toMatch(/No public-web research provider was configured/);
+  });
+
+  it("dead research runs are closed (keeping what they found), live ones are left alone", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'Lifecycle', ${A.id}) returning id`))[0].id as string;
+    const mk = (key: string, extra: string) => as(A.id, async (tx) => {
+      // Older runs on this project are finished first: only one may be active at a time.
+      await tx`update research_runs set status = 'completed' where project_id = ${P} and status in ('queued', 'running')`;
+      const [r] = await tx`insert into research_runs (project_id, workspace_id, mode, provider, question, idempotency_key, depth, status) values (${P}, ${A.ws}, 'live', 'multi-source', 'q', ${key}, 'quick', 'running') returning id`;
+      await tx.unsafe(`update research_runs set ${extra} where id = '${r.id}'`);
+      await tx`insert into background_tasks (workspace_id, project_id, kind, label, status, ref_id) values (${A.ws}, ${P}, 'research_run', 'r', 'running', ${r.id})`;
+      return r.id as string;
+    });
+    // Heartbeat 5 minutes old, with a stored document: closed as partially completed.
+    const dead = await mk(`dead-${Date.now()}`, "started_at = now() - interval '5 minutes', started_by_heartbeat = now() - interval '5 minutes'");
+    await as(A.id, (tx) => tx`insert into research_documents (run_id, project_id, workspace_id, provider, source_type, title) values (${dead}, ${P}, ${A.ws}, 'brave', 'web_page', 'kept')`);
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(1);
+    const [d] = await as(A.id, (tx) => tx`select status, stop_reason from research_runs where id = ${dead}`);
+    expect([d.status, d.stop_reason]).toEqual(["partially_completed", "stale"]);
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where ref_id = ${dead}`))[0].status).toBe("completed");
+    // Closing is one-shot: a late worker or a second sweep can't reopen or re-close it.
+    expect(await as(A.id, (tx) => closeRun(tx, dead, "time_limit"))).toBe(false);
+    // A fresh heartbeat means the worker is alive.
+    const live = await mk(`live-${Date.now()}`, "started_at = now() - interval '1 minute', started_by_heartbeat = now()");
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(0);
+    // Running longer than the function limit is dead whatever its heartbeat says; nothing collected = failed.
+    await as(A.id, (tx) => tx`update research_runs set started_at = now() - interval '7 minutes' where id = ${live}`);
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(1);
+    expect((await as(A.id, (tx) => tx`select status from research_runs where id = ${live}`))[0].status).toBe("failed");
+  });
+
+  it("a project can have only one active research run", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'One at a time', ${A.id}) returning id`))[0].id as string;
+    const insert = (key: string) => as(A.id, (tx) => tx`insert into research_runs (project_id, workspace_id, mode, provider, question, idempotency_key, depth, status) values (${P}, ${A.ws}, 'live', 'multi-source', 'q', ${key}, 'quick', 'queued') returning id`);
+    const [first] = await insert(`a-${Date.now()}`);
+    await expect(insert(`b-${Date.now()}`)).rejects.toThrow(/research_runs_one_active_per_project|duplicate key/);
+    // Cancelling a queued run closes it at once, which frees the project.
+    expect(await as(A.id, (tx) => closeRun(tx, first.id, "cancelled"))).toBe(true);
+    expect((await as(A.id, (tx) => tx`select status from research_runs where id = ${first.id}`))[0].status).toBe("cancelled");
+    await insert(`c-${Date.now()}`);
+  });
+
+  it("generation tasks left running by a killed request are closed", async () => {
+    const [t] = await as(A.id, (tx) => tx`insert into background_tasks (workspace_id, project_id, kind, label, status, started_at) values (${A.ws}, ${projectA}, 'strategy_generation', 's', 'running', now() - interval '10 minutes') returning id`);
+    const [fresh] = await as(A.id, (tx) => tx`insert into background_tasks (workspace_id, project_id, kind, label, status, started_at) values (${A.ws}, ${projectA}, 'creative_brief', 'c', 'running', now()) returning id`);
+    expect(await as(A.id, (tx) => sweepStaleTasks(tx, projectA))).toBe(1);
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${t.id}`))[0].status).toBe("failed");
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${fresh.id}`))[0].status).toBe("running");
+  });
+
+  it("Devil's Advocate critiques are workspace-private, and rate results can't exceed their exposures", async () => {
+    const [sv] = await as(A.id, (tx) => tx`insert into strategy_versions (project_id, workspace_id, version, generator, created_by) values (${projectA}, ${A.ws}, 99, 'template', ${A.id}) returning id`);
+    await as(A.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'llm:test', ${A.id})`);
+    expect(await as(V.id, (tx) => tx`select id from strategy_critiques where version_id = ${sv.id}`)).toHaveLength(1);
+    expect(await as(B.id, (tx) => tx`select id from strategy_critiques where version_id = ${sv.id}`)).toHaveLength(0);
+    // Viewers can't save one, nobody can save one as someone else, and nobody can write into another workspace.
+    await denied(as(V.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'x', ${V.id})`));
+    await denied(as(B.id, (tx) => tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${projectA}, ${sv.id}, '{}'::jsonb, 'x', ${B.id})`));
+
+    const [x] = await as(A.id, (tx) => tx`insert into experiments (project_id, workspace_id, name, hypothesis, primary_metric) values (${projectA}, ${A.ws}, 'Ritual test', 'Ritual framing converts better than efficacy framing', 'conversion') returning id`);
+    await as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, sample_size, successes) values (${x.id}, ${A.ws}, 'conversion', 0.1, 1000, 100)`);
+    await expect(as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, sample_size, successes) values (${x.id}, ${A.ws}, 'conversion', 1.2, 100, 120)`)).rejects.toThrow(/check constraint/);
+    await expect(as(A.id, (tx) => tx`insert into experiment_results (experiment_id, workspace_id, metric, value, successes) values (${x.id}, ${A.ws}, 'conversion', 1, 5)`)).rejects.toThrow(/check constraint/);
+  });
+
+  it("a pitch pack carries the latest Devil's Advocate objections for the strategy it presents", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'Pitch', ${A.id}) returning id`))[0].id as string;
+    await as(A.id, async (tx) => {
+      await tx`insert into campaign_briefs (project_id, workspace_id, brand) values (${P}, ${A.ws}, 'Lumen')`;
+      const [sv] = await tx`insert into strategy_versions (project_id, workspace_id, version, generator, created_by) values (${P}, ${A.ws}, 1, 'llm:test', ${A.id}) returning id`;
+      await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, name, content, created_by) values (${sv.id}, ${P}, ${A.ws}, 1, 'Ritual', ${tx.json({ name: "Ritual", coreIdea: "x", positioningStatement: "y" } as never)}, ${A.id})`;
+      const critique = { overallVerdict: "vulnerable", executiveSummary: "Too close to Competitor A.", critiques: [{ directionSlot: 1, directionName: "Ritual", fatalFlaw: "Competitor A already says this.", weakestEvidence: "One forum thread.", nearestCompetitor: "Competitor A", culturalRisk: "c", competitorCounter: "d", toughestClientQuestion: "Why us?", suggestedDefense: "Own the ritual moment, not the claim." }] };
+      await tx`insert into strategy_critiques (workspace_id, project_id, version_id, critique, generator, created_by) values (${A.ws}, ${P}, ${sv.id}, ${tx.json(critique as never)}, 'llm:test', ${A.id})`;
+    });
+    const snap = await as(A.id, (tx) => buildSnapshot(tx, P, PITCH_PACK_SECTIONS, "Pitch pack"));
+    expect(snap.sections).toContain("objections");
+    expect(snap.objections?.verdict).toBe("vulnerable");
+    expect(snap.objections?.items[0]).toMatchObject({ direction: "Ritual", competitor: "Competitor A", question: "Why us?", answer: "Own the ritual moment, not the claim." });
+  });
+
+  it("uploaders (and admins) can delete brief documents; other members and viewers can't", async () => {
+    const M = await user("mia@a.test");
+    await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'mia@a.test', 'member')`);
+    const [inv] = await as(M.id, (tx) => tx`select id from my_pending_invitations()`);
+    await as(M.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`);
+    const add = (uid: string, name: string) => as(uid, (tx) => tx`insert into brief_documents (project_id, workspace_id, file_name, mime_type, size_bytes, extraction_status, created_by)
+      values (${projectA}, ${A.ws}, ${name}, 'text/plain', 10, 'extracted', ${uid}) returning id`);
+    const [mine] = await add(M.id, "mia.txt");
+    const [alices] = await add(A.id, "alice.txt");
+    expect(await as(M.id, (tx) => tx`delete from brief_documents where id = ${alices.id} returning id`)).toHaveLength(0);
+    expect(await as(V.id, (tx) => tx`delete from brief_documents where id = ${mine.id} returning id`)).toHaveLength(0);
+    expect(await as(M.id, (tx) => tx`delete from brief_documents where id = ${mine.id} returning id`)).toHaveLength(1);
+    expect(await as(A.id, (tx) => tx`delete from brief_documents where id = ${alices.id} returning id`)).toHaveLength(1);
+  });
+
+  it("digest delivery records are server-only", async () => {
+    await denied(as(A.id, (tx) => tx`select * from digest_deliveries`));
+    await denied(as(A.id, (tx) => tx`insert into digest_deliveries (user_id, week_start) values (${A.id}, current_date)`));
   });
 });

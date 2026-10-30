@@ -1,149 +1,130 @@
 "use client";
 
+import { AlertTriangle, CheckCircle2, Crosshair, FileWarning, HelpCircle, Loader2, ShieldAlert, Wand2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, Crosshair, HelpCircle, Loader2, ShieldAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Ago } from "@/components/ui/time";
 import { useToast } from "@/components/ui/toast";
 import type { RedTeamCritique } from "@/lib/ai/schemas";
-import { redTeamStrategyAction } from "@/lib/strategy/actions";
+import { redTeamStrategyAction, reviseDirectionAction, type SavedCritique } from "@/lib/strategy/actions";
 import { cn } from "@/lib/utils";
 
-export function RedTeamButton({ projectId, versionId }: { projectId: string; versionId?: string }) {
+const VERDICT: Record<RedTeamCritique["overallVerdict"], { label: string; tone: "success" | "warning" | "peach" | "danger" }> = {
+  bulletproof: { label: "Ready to pitch", tone: "success" },
+  promising_with_caveats: { label: "Promising, with caveats", tone: "warning" },
+  vulnerable: { label: "Vulnerable", tone: "peach" },
+  high_risk: { label: "High risk", tone: "danger" },
+};
+
+/**
+ * Client Devil's Advocate: the sceptical-CMO review of a strategy version. The latest saved review is
+ * shown without re-running; each objection can be answered with a one-click AI revision of that direction.
+ */
+export function RedTeamButton({ projectId, versionId, llm, canEdit, saved }: { projectId: string; versionId: string; llm: boolean; canEdit: boolean; saved: SavedCritique | null }) {
+  const router = useRouter();
   const { toast } = useToast();
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
-  const [critique, setCritique] = React.useState<{ data: RedTeamCritique; generator: string } | null>(null);
-
-  async function handleRun() {
-    setLoading(true);
-    setOpen(true);
-    const res = await redTeamStrategyAction(projectId, versionId);
-    setLoading(false);
-    if (!res.ok) {
-      toast({ tone: "error", title: "Red-Team review failed", description: res.error });
-      setOpen(false);
-      return;
-    }
-    if (!res.data) {
-      toast({ tone: "error", title: "Red-Team review failed", description: "No critique was returned." });
-      setOpen(false);
-      return;
-    }
-    setCritique({ data: res.data.critique, generator: res.data.generator });
+  const [revising, setRevising] = React.useState<string | null>(null);
+  const [current, setCurrent] = React.useState<SavedCritique | null>(saved);
+  // A newer saved review arriving from the server (after a refresh) replaces what's shown.
+  const [seenId, setSeenId] = React.useState(saved?.id ?? null);
+  if ((saved?.id ?? null) !== seenId) {
+    setSeenId(saved?.id ?? null);
+    setCurrent(saved);
   }
 
-  const verdictStyles: Record<RedTeamCritique["overallVerdict"], { label: string; tone: "success" | "warning" | "peach" | "danger" }> = {
-    bulletproof: { label: "Bulletproof", tone: "success" },
-    promising_with_caveats: { label: "Promising with Caveats", tone: "warning" },
-    vulnerable: { label: "Vulnerable", tone: "peach" },
-    high_risk: { label: "High Risk", tone: "danger" },
-  };
+  async function run() {
+    setLoading(true);
+    setOpen(true);
+    try {
+      const res = await redTeamStrategyAction(projectId, versionId);
+      if (!res.ok || !res.data) {
+        toast({ tone: "error", title: "Devil's Advocate review failed", description: res.ok ? "No critique was returned." : res.error });
+        if (!current) setOpen(false);
+        return;
+      }
+      setCurrent(res.data);
+    } catch {
+      toast({ tone: "error", title: "Devil's Advocate review failed", description: "The request failed or timed out. Try again." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function answer(c: RedTeamCritique["critiques"][number]) {
+    if (!c.directionId) return;
+    setRevising(c.directionId);
+    try {
+      const instruction = `Answer this client objection without weakening what works. Objection: ${c.fatalFlaw} Their toughest question: ${c.toughestClientQuestion} Suggested defence: ${c.suggestedDefense}`.slice(0, 1000);
+      const r = await reviseDirectionAction(c.directionId, instruction);
+      if (!r.ok) return toast({ tone: "error", title: "Revision not saved", description: r.error });
+      toast({ tone: "success", title: `New revision of “${c.directionName}” saved`, description: "It answers the objection; the previous revision is kept in its history." });
+      setOpen(false);
+      router.refresh();
+    } catch {
+      toast({ tone: "error", title: "Revision not saved", description: "The request failed or timed out. Try again." });
+    } finally {
+      setRevising(null);
+    }
+  }
+
+  const trigger = current
+    ? <Button variant="outline" size="sm" onClick={() => setOpen(true)} className="border-coral/40 text-coral hover:bg-coral/10 hover:text-coral"><ShieldAlert className="size-3.5" /> Devil&rsquo;s Advocate · {VERDICT[current.critique.overallVerdict].label}</Button>
+    : <Button variant="outline" size="sm" onClick={run} disabled={!llm || !canEdit} title={!llm ? "Needs an AI model: the critique is never invented from a template." : undefined} className="border-coral/40 text-coral hover:bg-coral/10 hover:text-coral"><ShieldAlert className="size-3.5" /> Devil&rsquo;s Advocate</Button>;
 
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleRun}
-        className="border-coral/40 text-coral hover:bg-coral/10 hover:text-coral"
-      >
-        <ShieldAlert className="size-3.5 text-coral" />
-        Red-team stress test
-      </Button>
-
+      {trigger}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          title="Adversarial Red-Team Stress Test"
-          description="Ruthless partner critique, competitor counters & pitch stress-tests"
-          className="max-h-[90vh] max-w-3xl overflow-y-auto p-6"
-        >
-          <div className="flex items-center justify-between border-b border-line pb-4">
-            <div className="flex items-center gap-2.5">
-              <span className="flex size-8 items-center justify-center rounded-full bg-coral/15 text-coral">
-                <ShieldAlert className="size-4" />
-              </span>
-              <div>
-                <h2 className="text-[16px] font-semibold tracking-tight">Adversarial Red-Team Stress Test</h2>
-                <p className="text-[12px] text-muted">Ruthless partner critique, competitor counters & pitch stress-tests</p>
-              </div>
-            </div>
-            <button onClick={() => setOpen(false)} className="rounded-full p-1 text-muted hover:bg-ivory hover:text-ink">
-              <X className="size-4" />
-            </button>
-          </div>
-
+        <DialogContent title="Client Devil’s Advocate" description="How a sceptical CMO would attack each direction, and what to do about it" className="max-h-[90vh] max-w-3xl overflow-y-auto p-6">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Loader2 className="size-8 animate-spin text-coral" />
-              <p className="mt-4 text-[14px] font-medium">Running adversarial red-team simulation…</p>
-              <p className="mt-1 max-w-sm text-[12px] text-muted">Stress-testing positioning directions against skeptical client scrutiny and competitor counter-attacks.</p>
+              <p className="mt-4 text-[14px] font-medium">Reading the directions like a sceptical client…</p>
+              <p className="mt-1 max-w-sm text-[12px] text-muted">Checking the weakest evidence, who already owns each position, and the hardest questions in the room.</p>
             </div>
-          ) : critique ? (
-            <div className="mt-5 space-y-6">
-              {/* Executive Summary */}
+          ) : current ? (
+            <div className="mt-2 space-y-6">
               <div className="rounded-cc-md border border-line bg-paper p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Overall Strategic Verdict</span>
-                  <Badge tone={verdictStyles[critique.data.overallVerdict].tone}>
-                    {verdictStyles[critique.data.overallVerdict].label}
-                  </Badge>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">Verdict</span>
+                  <Badge tone={VERDICT[current.critique.overallVerdict].tone}>{VERDICT[current.critique.overallVerdict].label}</Badge>
                 </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink">{critique.data.executiveSummary}</p>
-                <p className="mt-2 text-[11px] text-faint">Evaluated by {critique.generator.replace("llm:", "")}</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink">{current.critique.executiveSummary}</p>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-faint">
+                  <span>{current.generator.replace("llm:", "")} · <Ago value={current.createdAt} /> · saved with this strategy version and included in reports</span>
+                  {llm && canEdit && <Button size="sm" variant="ghost" onClick={run}><ShieldAlert /> Run again</Button>}
+                </div>
               </div>
 
-              {/* Critiques per direction */}
-              <div className="space-y-4">
-                {critique.data.critiques.map((c) => (
-                  <div key={c.directionSlot} className="rounded-cc-lg border border-line bg-ivory/50 p-5">
+              {current.critique.critiques.map((c) => (
+                <div key={`${c.directionSlot}-${c.directionId ?? c.directionName}`} className="rounded-cc-lg border border-line bg-ivory/50 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="flex size-5 items-center justify-center rounded-full bg-paper text-[11px] font-semibold text-muted">
-                        0{c.directionSlot}
-                      </span>
+                      <span className="flex size-5 items-center justify-center rounded-full bg-paper text-[11px] font-semibold text-muted">0{c.directionSlot}</span>
                       <h3 className="text-[14px] font-semibold text-ink">{c.directionName}</h3>
                     </div>
-
-                    <div className="mt-4 grid gap-3 text-[12px]">
-                      <div className="rounded-cc-sm border border-coral/20 bg-coral/5 p-3">
-                        <span className="flex items-center gap-1.5 font-semibold text-coral">
-                          <AlertTriangle className="size-3.5" /> Fatal Flaw / Vulnerability
-                        </span>
-                        <p className="mt-1 text-ink">{c.fatalFlaw}</p>
-                      </div>
-
-                      <div className="rounded-cc-sm border border-line bg-paper p-3">
-                        <span className="flex items-center gap-1.5 font-semibold text-warning">
-                          <Flame className="size-3.5 text-warning" /> Cultural & Inauthenticity Risk
-                        </span>
-                        <p className="mt-1 text-muted">{c.culturalRisk}</p>
-                      </div>
-
-                      <div className="rounded-cc-sm border border-line bg-paper p-3">
-                        <span className="flex items-center gap-1.5 font-semibold text-violet">
-                          <Crosshair className="size-3.5 text-violet" /> Competitor Counter-Attack
-                        </span>
-                        <p className="mt-1 text-muted">{c.competitorCounter}</p>
-                      </div>
-
-                      <div className="rounded-cc-sm border border-line bg-paper p-3">
-                        <span className="flex items-center gap-1.5 font-semibold text-ink">
-                          <HelpCircle className="size-3.5 text-ink" /> Toughest Client Pitch Question
-                        </span>
-                        <p className="mt-1 italic text-ink">{c.toughestClientQuestion}</p>
-                      </div>
-
-                      <div className="rounded-cc-sm border border-leaf/30 bg-leaf/10 p-3">
-                        <span className="flex items-center gap-1.5 font-semibold text-leaf">
-                          <CheckCircle2 className="size-3.5" /> Recommended Strategic Defense
-                        </span>
-                        <p className="mt-1 text-ink">{c.suggestedDefense}</p>
-                      </div>
-                    </div>
+                    {llm && canEdit && c.directionId && (
+                      <Button size="sm" variant="outline" disabled={revising !== null} onClick={() => answer(c)}>
+                        {revising === c.directionId ? <Loader2 className="animate-spin" /> : <Wand2 />} Revise to answer this
+                      </Button>
+                    )}
                   </div>
-                ))}
-              </div>
+                  <div className="mt-4 grid gap-3 text-[12px]">
+                    <Point icon={AlertTriangle} title="Biggest vulnerability" className="border-coral/20 bg-coral/5" titleClass="text-coral">{c.fatalFlaw}</Point>
+                    {c.weakestEvidence && <Point icon={FileWarning} title="Weakest evidence" titleClass="text-warning">{c.weakestEvidence}</Point>}
+                    {c.nearestCompetitor && <Point icon={Crosshair} title="Who already owns this" titleClass="text-violet">{c.nearestCompetitor}</Point>}
+                    <Point icon={Crosshair} title="How a competitor would counter" titleClass="text-violet">{c.competitorCounter}</Point>
+                    <Point icon={AlertTriangle} title="Cultural risk" titleClass="text-warning">{c.culturalRisk}</Point>
+                    <Point icon={HelpCircle} title="Toughest question in the room" titleClass="text-ink"><span className="italic">{c.toughestClientQuestion}</span></Point>
+                    <Point icon={CheckCircle2} title="How to answer it" className="border-leaf/30 bg-leaf/10" titleClass="text-leaf">{c.suggestedDefense}</Point>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : null}
         </DialogContent>
@@ -152,10 +133,11 @@ export function RedTeamButton({ projectId, versionId }: { projectId: string; ver
   );
 }
 
-function Flame({ className }: { className?: string }) {
+function Point({ icon: Icon, title, children, className, titleClass }: { icon: React.ComponentType<{ className?: string }>; title: string; children: React.ReactNode; className?: string; titleClass?: string }) {
   return (
-    <svg className={cn("size-3.5", className)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" />
-    </svg>
+    <div className={cn("rounded-cc-sm border border-line bg-paper p-3", className)}>
+      <span className={cn("flex items-center gap-1.5 font-semibold", titleClass)}><Icon className="size-3.5" /> {title}</span>
+      <p className="mt-1 text-ink">{children}</p>
+    </div>
   );
 }

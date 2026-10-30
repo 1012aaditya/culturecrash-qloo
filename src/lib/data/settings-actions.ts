@@ -7,14 +7,13 @@ import { after } from "next/server";
 import { z } from "zod";
 import { localDeleteAccount, localSignIn, localUpdatePassword } from "@/lib/auth/local";
 import { getSessionUser } from "@/lib/auth/session";
-import { supabaseSignIn, supabaseUpdatePassword } from "@/lib/auth/supabase";
+import { supabaseServer, supabaseSignIn, supabaseSignOut, supabaseUpdatePassword } from "@/lib/auth/supabase";
 import { privilegedSql, withUser } from "@/lib/db";
 import { env } from "@/lib/env";
 import { emailConfigured, sendEmail } from "@/lib/email";
 import { invitationEmail } from "@/lib/email/templates";
 import { assertCan, type Role } from "@/lib/permissions";
 import { logActivity } from "./activity";
-import { createNotification } from "./notifications";
 import { friendly, invalid, optText, type Result } from "./action-utils";
 import { isUuid } from "./projects";
 import { getCtx, WORKSPACE_COOKIE } from "./workspace";
@@ -108,7 +107,7 @@ const inviteSchema = z.object({
   role: z.enum(["admin", "member", "viewer"]),
 });
 
-export async function inviteMemberAction(input: z.input<typeof inviteSchema>): Promise<Result<{ outcome: "added" | "invited" }>> {
+export async function inviteMemberAction(input: z.input<typeof inviteSchema>): Promise<Result<{ outcome: "invited" }>> {
   const parsed = inviteSchema.safeParse(input);
   if (!parsed.success) return invalid(parsed.error);
   const ctx = await getCtx();
@@ -119,42 +118,58 @@ export async function inviteMemberAction(input: z.input<typeof inviteSchema>): P
     const outcome = await withUser(ctx.user.id, async (tx) => {
       const [existing] = await tx`select m.role from workspace_members m join profiles p on p.id = m.user_id where m.workspace_id = ${ws} and lower(p.email) = ${email}`;
       if (existing) return "already-member" as const;
-      const [pending] = await tx`select id from workspace_invitations where workspace_id = ${ws} and lower(email) = ${email} and accepted_at is null and revoked_at is null`;
+      const [pending] = await tx`select id from workspace_invitations where workspace_id = ${ws} and lower(email) = ${email} and accepted_at is null and revoked_at is null and declined_at is null`;
       if (pending) return "already-invited" as const;
-      const [r] = await tx`select public.invite_member(${ws}, ${email}, ${role}::public.workspace_role) as outcome`;
-      if (r.outcome === "added") {
-        const [target] = await tx`select p.id from profiles p join workspace_members m on m.user_id = p.id and m.workspace_id = ${ws} where lower(p.email) = ${email}`;
-        if (target) await createNotification(tx, {
-          workspaceId: ws, userId: target.id, actorId: ctx.user.id, kind: "member_added",
-          title: `You were added to ${ctx.workspace.name}`, body: `${ctx.profile.fullName || ctx.profile.email} gave you ${role} access.`, href: "/dashboard",
-        });
-      }
-      await logActivity(tx, {
-        workspaceId: ws, actorId: ctx.user.id, verb: r.outcome === "added" ? "added" : "invited", objectType: "member", objectId: null,
-        summary: r.outcome === "added" ? `added ${email} as ${role}` : `invited ${email} as ${role}`,
-      });
-      return r.outcome as "added" | "invited";
+      // Always a pending invitation: the invitee accepts it from their dashboard once their email is confirmed.
+      await tx`select public.invite_member(${ws}, ${email}, ${role}::public.workspace_role)`;
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, verb: "invited", objectType: "member", objectId: null, summary: `invited ${email} as ${role}` });
+      return "invited" as const;
     });
     if (outcome === "already-member") return { ok: false, error: `${email} is already a member of this workspace.` };
     if (outcome === "already-invited") return { ok: false, error: `${email} already has a pending invitation.` };
     revalidatePath("/settings/team");
     const mail = emailConfigured();
     if (mail) {
-      const msg = invitationEmail({ to: email, workspace: ctx.workspace.name, inviter: ctx.profile.fullName || ctx.profile.email, role, added: outcome === "added" });
+      const msg = invitationEmail({ to: email, workspace: ctx.workspace.name, inviter: ctx.profile.fullName || ctx.profile.email, role });
       after(() => sendEmail(msg).then(() => undefined));
     }
     return {
       ok: true,
       data: { outcome },
-      message: outcome === "added"
-        ? `${email} already had a CultureCrash account and now has access as ${role}.${mail ? " We emailed them." : ""}`
-        : mail
-          ? `Invitation emailed to ${email}. They join as ${role} when they sign up with this address.`
-          : `Invitation recorded for ${email}. Email isn’t configured on this server — share the sign-up link with them; they join as ${role} when they sign up with this address.`,
+      message: mail
+        ? `Invitation emailed to ${email}. They join as ${role} once they sign in with this address and accept it.`
+        : `Invitation recorded for ${email}. Email isn’t configured on this server — ask them to sign in (or sign up) with this address and accept the invitation on their dashboard.`,
     };
   } catch (e) {
     return friendly(e);
   }
+}
+
+/** Invitee side: accept (joins and switches to the workspace) or decline a pending invitation. */
+export async function respondToInvitationAction(invitationId: string, accept: boolean): Promise<Result> {
+  if (!isUuid(invitationId)) return { ok: false, error: "Invalid request." };
+  const ctx = await getCtx();
+  let workspaceId: string;
+  try {
+    workspaceId = await withUser(ctx.user.id, async (tx) => {
+      const [r] = await tx`select public.respond_to_invitation(${invitationId}, ${accept}) as ws`;
+      if (accept) {
+        await logActivity(tx, { workspaceId: r.ws, actorId: ctx.user.id, verb: "joined", objectType: "member", objectId: ctx.user.id, summary: "accepted an invitation and joined the workspace" });
+      }
+      return r.ws as string;
+    });
+  } catch (e) {
+    const err = e as { code?: string };
+    if (err?.code === "42501") return { ok: false, error: "That invitation is no longer open." };
+    return friendly(e);
+  }
+  if (!accept) {
+    revalidatePath("/dashboard");
+    return { ok: true, message: "Invitation declined." };
+  }
+  (await cookies()).set(WORKSPACE_COOKIE, workspaceId, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
+  revalidatePath("/", "layout");
+  redirect("/dashboard");
 }
 
 export async function changeMemberRoleAction(userId: string, role: Role): Promise<Result> {
@@ -311,15 +326,24 @@ export async function deleteAccountAction(confirmEmail: string): Promise<Result>
   if (confirmEmail.trim().toLowerCase() !== ctx.user.email.toLowerCase()) {
     return { ok: false, error: "Type your account email exactly to confirm.", fieldErrors: { confirm: "Does not match your email" } };
   }
-  if (env().AUTH_MODE !== "local") {
-    return { ok: false, error: "Account deletion is handled by a workspace administrator through Supabase Auth in this deployment. Export your data first, then contact your administrator." };
-  }
   const { blocking, soloOwned } = await soleOwnerBlockers(ctx);
   if (blocking.length) {
     return { ok: false, error: `You are the only owner of ${blocking.map((b) => `“${b.name}”`).join(", ")}, which still has other members. Make someone else an owner, or remove the other members, first.` };
   }
   try {
-    await localDeleteAccount(ctx.user.id);
+    if (env().AUTH_MODE === "local") await localDeleteAccount(ctx.user.id);
+    else {
+      // Stored files of workspaces only this user belongs to go first (the database cascade can't reach Storage).
+      const ids = soloOwned.map((w) => w.id);
+      if (ids.length) {
+        const paths = await withUser(ctx.user.id, async (tx) =>
+          (await tx`select storage_path from brief_documents where workspace_id = any(${ids}::uuid[]) and storage_path is not null`).map((r) => r.storage_path as string));
+        await removeStoredFiles(paths);
+      }
+      // The account itself: deleting the auth row cascades to the profile and memberships.
+      await privilegedSql()`delete from auth.users where id = ${ctx.user.id}`;
+      await supabaseSignOut().catch(() => undefined);
+    }
     if (soloOwned.length) {
       // Workspaces this user was the only member of are now orphaned: remove them too.
       // (The owner guard prevents deleting them through RLS while the owner row exists.)
@@ -335,6 +359,17 @@ export async function deleteAccountAction(confirmEmail: string): Promise<Result>
   redirect("/?account=deleted");
 }
 
+/** Removes stored brief files (as the signed-in user, under Storage policies). Throws if any can't be removed. */
+async function removeStoredFiles(paths: string[]) {
+  const e = env();
+  if (!paths.length || e.AUTH_MODE !== "supabase" || !e.NEXT_PUBLIC_SUPABASE_URL) return;
+  const client = await supabaseServer();
+  for (let i = 0; i < paths.length; i += 100) {
+    const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(paths.slice(i, i + 100));
+    if (error) throw new Error("storage cleanup failed");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Retention & workspace deletion
 // ---------------------------------------------------------------------------
@@ -347,8 +382,7 @@ export async function updateRetentionAction(days: number | null): Promise<Result
     assertCan(ctx.workspace.role, "workspace.delete");
     const ws = ctx.workspace.workspaceId;
     await withUser(ctx.user.id, async (tx) => {
-      const rows = await tx`update workspaces set data_retention_days = ${days} where id = ${ws} returning id`;
-      if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });
+      await tx`select public.set_data_retention(${ws}, ${days})`;
       await logActivity(tx, {
         workspaceId: ws, actorId: ctx.user.id, verb: "configured", objectType: "workspace", objectId: ws,
         summary: days ? `set data retention to ${days} days` : "turned off automatic data retention",
@@ -372,18 +406,10 @@ export async function deleteWorkspaceAction(confirmName: string): Promise<Result
   const ws = ctx.workspace;
   if (confirmName.trim() !== ws.name) return { ok: false, error: "Type the workspace name exactly to confirm.", fieldErrors: { confirm: "Does not match the workspace name" } };
   if (ctx.memberships.length < 2) return { ok: false, error: "This is your only workspace. Create another workspace first, or delete your account instead." };
-  const e = env();
   try {
     const paths = await withUser(ctx.user.id, async (tx) =>
       (await tx`select storage_path from brief_documents where workspace_id = ${ws.workspaceId} and storage_path is not null`).map((r) => r.storage_path as string));
-    if (paths.length && e.AUTH_MODE === "supabase" && e.NEXT_PUBLIC_SUPABASE_URL) {
-      const { supabaseServer } = await import("@/lib/auth/supabase");
-      const client = await supabaseServer();
-      for (let i = 0; i < paths.length; i += 100) {
-        const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(paths.slice(i, i + 100));
-        if (error) throw new Error("storage cleanup failed");
-      }
-    }
+    await removeStoredFiles(paths);
     // Inspiration-board images live in their own bucket; remove them before the rows that point at them.
     const { removeBoardFolders } = await import("@/lib/boards/data");
     await removeBoardFolders(await withUser(ctx.user.id, (tx) => tx`select id, workspace_id, project_id from inspiration_boards where workspace_id = ${ws.workspaceId}`) as never);
@@ -410,8 +436,7 @@ export async function updateResearchLimitsAction(input: z.input<typeof limitsSch
     assertCan(ctx.workspace.role, "workspace.delete");
     const ws = ctx.workspace.workspaceId;
     await withUser(ctx.user.id, async (tx) => {
-      const rows = await tx`update workspaces set research_budget_usd_monthly = ${parsed.data.budgetUsd}, research_runs_per_user_daily = ${parsed.data.perUserDaily} where id = ${ws} returning id`;
-      if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });
+      await tx`select public.set_research_limits(${ws}, ${parsed.data.budgetUsd}, ${parsed.data.perUserDaily})`;
       await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, verb: "configured", objectType: "workspace", objectId: ws,
         summary: `set the research budget to $${parsed.data.budgetUsd}/month and ${parsed.data.perUserDaily} runs per person per day` });
     });

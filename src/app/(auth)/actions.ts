@@ -3,15 +3,13 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { env } from "@/lib/env";
+import { safeInternalPath } from "@/lib/safe-path";
 import { localSignIn, localSignOut, localSignUp } from "@/lib/auth/local";
 import { supabaseResetPassword, supabaseSignIn, supabaseSignOut, supabaseSignUp } from "@/lib/auth/supabase";
 
 export type FormState = { error?: string; message?: string; fieldErrors?: Record<string, string> } | undefined;
 
-function safeNext(next: FormDataEntryValue | null) {
-  const v = typeof next === "string" ? next : "";
-  return v.startsWith("/") && !v.startsWith("//") ? v : "/dashboard";
-}
+const safeNext = (next: FormDataEntryValue | null) => safeInternalPath(next);
 
 const signUpSchema = z.object({
   fullName: z.string().trim().min(1, "Tell us your name").max(120),

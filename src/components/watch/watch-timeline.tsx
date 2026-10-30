@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Ago, When } from "@/components/ui/time";
 import { useToast } from "@/components/ui/toast";
 import { checkNowAction, setWatchStatusAction } from "@/lib/watch/actions";
-import type { SourceHealth, WatchItem, WatchRun, WatchView } from "@/lib/watch/data";
+import type { HiddenItem, SourceHealth, WatchItem, WatchRun, WatchView } from "@/lib/watch/data";
 import { cn, formatDate, pluralize } from "@/lib/utils";
 
 const PROVIDER: Record<string, string> = { serper: "Google News (Serper)", exa: "Exa", youtube: "YouTube", page: "website check", rss: "newsroom feed" };
@@ -31,7 +31,7 @@ export function WatchTimeline({ view }: { view: WatchView }) {
         <div>
           <h2 id="watch-timeline" className="text-[20px] font-semibold tracking-tight">Timeline</h2>
           <p className="mt-1 text-[13px] text-muted">
-            {view.totals.stories ? `${pluralize(view.totals.stories, "story", "stories")} collected, ${view.totals.thisWeek} in the last 7 days.` : "News stories that name the company or a competitor, newest first."}
+            {view.totals.stories ? `${pluralize(view.totals.stories, "story", "stories")} about ${pluralize(view.totals.events, "event")}, ${view.totals.thisWeek} collected in the last 7 days.` : "News stories that name the company or a competitor, newest first."}
           </p>
         </div>
         {view.targets.length > 1 && (
@@ -90,13 +90,49 @@ export function WatchTimeline({ view }: { view: WatchView }) {
               )}
               <p className="mt-3 text-[11px] text-faint">
                 Found by {PROVIDER[item.provider] ?? item.provider} <Ago value={item.discoveredAt} />
-                {item.alsoReportedBy > 0 && <> · also reported by {pluralize(item.alsoReportedBy, "other source")}</>}
+                {item.alsoReportedBy > 0 && !item.related.length && <> · also reported by {pluralize(item.alsoReportedBy, "other source")}</>}
               </p>
+              {item.related.length > 0 && (
+                <details className="mt-3 rounded-cc-sm border border-line bg-ivory/50 px-3 py-2 text-[12px]">
+                  <summary className="cursor-pointer text-muted">Same story, covered by {pluralize(item.alsoReportedBy, "more outlet")}</summary>
+                  <ul className="mt-2 space-y-1.5">
+                    {item.related.map((r) => (
+                      <li key={r.id}>
+                        {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer nofollow" className="hover:text-violet-ink">{r.title}</a> : r.title}
+                        {r.publisher && <span className="text-muted"> · {r.publisher}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </li>
           ))}
         </ol>
       )}
+      <HiddenItems items={view.hidden} />
     </div>
+  );
+}
+
+/** What relevance filtering left out, with the reason — never silently dropped. */
+function HiddenItems({ items }: { items: HiddenItem[] }) {
+  if (!items.length) return null;
+  return (
+    <details className="mt-5 rounded-cc-lg border border-dashed border-line bg-paper/60 px-5 py-3 text-[13px]">
+      <summary className="cursor-pointer text-muted">{pluralize(items.length, "item")} hidden as not relevant</summary>
+      <ul className="mt-3 space-y-2.5">
+        {items.map((h) => (
+          <li key={h.id}>
+            <p className="font-medium">
+              {h.url ? <a href={h.url} target="_blank" rel="noopener noreferrer nofollow" className="hover:text-violet-ink">{h.title}</a> : h.title}
+            </p>
+            <p className="text-[12px] text-muted">
+              {h.kind === "listing" ? "Shop listing" : "Name clash"}{h.target && ` · ${h.target}`}{h.publisher && ` · ${h.publisher}`}{h.reason && ` — ${h.reason}`}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

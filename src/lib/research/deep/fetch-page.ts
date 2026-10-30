@@ -21,14 +21,20 @@ export type PageResult = {
 
 const MAX_BYTES = 1_500_000;
 const MAX_TEXT = 20_000;
-const robotsCache = new Map<string, { at: number; disallow: string[] }>();
+const robotsCache = new Map<string, { at: number; rules: RobotsRule[] }>();
 
-/** Minimal robots.txt check for the "*" group (and our UA token). Missing robots.txt allows. */
+export type RobotsRule = { allow: boolean; pattern: string };
+
+/**
+ * robots.txt check (RFC 9309): rules from our own user-agent group if the site has one, otherwise the
+ * "*" group; "*" wildcards and a trailing "$" are honoured; the longest matching rule wins, and Allow wins
+ * a tie. A missing robots.txt allows everything.
+ */
 export async function robotsAllows(url: URL, fetcher: Fetcher, resolve?: Parameters<typeof assertPublicUrl>[1]): Promise<boolean> {
   const key = url.origin;
   let entry = robotsCache.get(key);
   if (!entry || Date.now() - entry.at > 3_600_000) {
-    const disallow: string[] = [];
+    const rules: RobotsRule[] = [];
     try {
       // Redirects are followed by hand so every hop passes the same public-address check as the page.
       let target = `${url.origin}/robots.txt`;
@@ -41,24 +47,23 @@ export async function robotsAllows(url: URL, fetcher: Fetcher, resolve?: Paramet
           target = new URL(location, u).toString();
           continue;
         }
-        if (res.ok) disallow.push(...parseRobots(await res.text()));
+        if (res.ok) rules.push(...parseRobots(await res.text()));
         else await res.body?.cancel();
         break;
       }
     } catch {
       // unreachable robots.txt: treat as no restrictions, the page fetch will fail on its own if the host is down
     }
-    entry = { at: Date.now(), disallow };
+    entry = { at: Date.now(), rules };
     robotsCache.set(key, entry);
   }
-  const path = url.pathname + url.search;
-  return !entry.disallow.some((d) => d && path.startsWith(d));
+  return robotsVerdict(entry.rules, url.pathname + url.search);
 }
 
-export function parseRobots(txt: string): string[] {
-  const out: string[] = [];
-  let applies = false;
-  let sawRule = false;
+/** The rules that apply to us: our own user-agent's group(s) when present, otherwise the "*" group(s). */
+export function parseRobots(txt: string): RobotsRule[] {
+  const groups: { agents: string[]; rules: RobotsRule[] }[] = [];
+  let current: { agents: string[]; rules: RobotsRule[] } | null = null;
   for (const raw of txt.split(/\r?\n/)) {
     const line = raw.replace(/#.*/, "").trim();
     const m = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
@@ -66,15 +71,28 @@ export function parseRobots(txt: string): string[] {
     const [, field, value] = m;
     const f = field.toLowerCase();
     if (f === "user-agent") {
-      if (sawRule) { applies = false; sawRule = false; }
-      const v = value.toLowerCase();
-      if (v === "*" || v.includes("culturecrash")) applies = true;
-    } else if (f === "disallow" || f === "allow") {
-      sawRule = true;
-      if (applies && f === "disallow" && value) out.push(value.replace(/\*.*$/, ""));
+      // Consecutive User-agent lines share one group; a User-agent after rules starts a new one.
+      if (!current || current.rules.length) groups.push((current = { agents: [], rules: [] }));
+      current.agents.push(value.trim().toLowerCase());
+    } else if ((f === "disallow" || f === "allow") && current) {
+      if (value.trim()) current.rules.push({ allow: f === "allow", pattern: value.trim() });
     }
   }
-  return out;
+  const ours = groups.filter((g) => g.agents.some((a) => a !== "*" && a.includes("culturecrash")));
+  return (ours.length ? ours : groups.filter((g) => g.agents.includes("*"))).flatMap((g) => g.rules);
+}
+
+/** Longest matching rule decides; Allow wins ties; no matching rule allows. */
+export function robotsVerdict(rules: RobotsRule[], path: string): boolean {
+  let best: RobotsRule | null = null;
+  for (const r of rules) {
+    const anchored = r.pattern.endsWith("$");
+    const body = anchored ? r.pattern.slice(0, -1) : r.pattern;
+    const re = new RegExp(`^${body.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}${anchored ? "$" : ""}`);
+    if (!re.test(path)) continue;
+    if (!best || r.pattern.length > best.pattern.length || (r.pattern.length === best.pattern.length && r.allow && !best.allow)) best = r;
+  }
+  return !best || best.allow;
 }
 
 /** Pulls readable text and provenance metadata out of HTML without executing anything. */

@@ -38,7 +38,10 @@ const signIn = (u: { id: string; ws: string }, role = "owner") => { ctx.current 
 const calls: { provider: string; q: string }[] = [];
 let exaFails = false;
 const story = (title: string, link: string, snippet: string, source: string, date?: string) => ({ title, link, snippet, source, ...(date ? { date } : {}) });
+/** Extra Nike stories for the relevance test (I). */
+let extraNike: ReturnType<typeof story>[] = [];
 function serperFixture(q: string) {
+  if (q.includes('"Nike"') && extraNike.length) return extraNike;
   if (q.includes('"Nike"')) return [
     story("Nike unveils its fastest racing shoe yet", "https://news.test/nike-racer?utm_source=x", "Nike said the shoe will be sold from November.", "Runner Daily", "3 hours ago"),
     story("Nike unveils its fastest racing shoe yet", "https://other.test/nike-racer-copy", "Nike said the shoe arrives in November, per reports.", "Sports Wire", "5 hours ago"),
@@ -287,4 +290,43 @@ d("Watch Milestone 1 (A–H)", () => {
     expect(view!.lastJob).toMatchObject({ status: "partially_completed" });
     expect(view!.items.every((i) => i.target)).toBe(true);
   }, 60_000);
+
+  it("I: hides listings and name clashes with a reason, groups one event across outlets, and counts only what's relevant", async () => {
+    extraNike = [
+      story("Nike posts record third-quarter revenue as China sales rebound", "https://wire-a.test/nike-q3", "Nike reported record revenue for the third quarter.", "Wire A", "2 hours ago"),
+      story("Nike third-quarter revenue beats forecasts on China sales rebound", "https://wire-b.test/nike-q3", "Nike's Q3 revenue beat forecasts as China sales rebounded.", "Wire B", "3 hours ago"),
+      story("Nike third quarter: revenue record, China sales rebound strongly", "https://wire-c.test/nike-q3", "Nike's third-quarter revenue set a record.", "Wire C", "4 hours ago"),
+      story("Nike the racehorse wins again, says jockey", "https://racing.test/nike-horse", "The horse Nike and her jockey took the stakes.", "Racing Post Test", "1 hour ago"),
+      story("Mens Nike hoodie size L", "https://listings.test/hoodie", "Grey Nike hoodie in good used condition, free returns.", "Listings Test", "1 hour ago"),
+    ];
+    await sql`delete from provider_cache`;
+    await sql`delete from watch_jobs where watch_id = ${watchId}`;
+    await sql`delete from research_documents where watch_id = ${watchId}`;
+    await sql`update watches set next_run_at = now() where id = ${watchId}`;
+    exaFails = false;
+    await cron();
+    const docs = await sql`select canonical_url, watch_relevance, watch_relevance_reason, watch_event_lead, id from research_documents where watch_id = ${watchId} and provider = 'serper'`;
+    const by = (u: string) => docs.find((x) => x.canonical_url === u)!;
+    expect(by("https://racing.test/nike-horse")).toMatchObject({ watch_relevance: "name_clash" });
+    expect(by("https://listings.test/hoodie").watch_relevance).toBe("listing");
+    expect(by("https://listings.test/hoodie").watch_relevance_reason).toMatch(/for sale/);
+    // One event: the earliest-published story leads, the other two point at it.
+    const lead = by("https://wire-c.test/nike-q3");
+    expect(lead.watch_event_lead).toBeNull();
+    expect([by("https://wire-a.test/nike-q3").watch_event_lead, by("https://wire-b.test/nike-q3").watch_event_lead]).toEqual([lead.id, lead.id]);
+
+    const { getWatchView } = await import("@/lib/watch/data");
+    const view = await getWatchView({ user: { id: A.id }, workspace: { workspaceId: A.ws } } as never, nikeClient);
+    const card = view!.items.find((i) => i.id === lead.id)!;
+    expect(card.related.map((r) => r.url).sort()).toEqual(["https://wire-a.test/nike-q3", "https://wire-b.test/nike-q3"]);
+    expect(card.alsoReportedBy).toBe(2);
+    expect(view!.items.some((i) => i.url === "https://wire-a.test/nike-q3" || i.url === "https://racing.test/nike-horse")).toBe(false);
+    expect(view!.hidden.map((h) => h.kind).sort()).toEqual(["listing", "name_clash"]);
+    // Daily counts leave the hidden two out, and see the three Q3 stories as one event.
+    const [nike] = await as(A.id, (tx) => tx`select c.stories_seen, c.events_seen from watch_daily_counts c join watch_targets t on t.id = c.watch_target_id
+      where c.watch_id = ${watchId} and t.name = 'Nike'`);
+    expect(nike.stories_seen - nike.events_seen).toBe(2);
+    expect(await sql`select 1 from research_documents d join watch_observations o on o.document_id = d.id where d.watch_relevance <> 'relevant'`).not.toHaveLength(0);
+    extraNike = [];
+  });
 });

@@ -11,6 +11,7 @@ import type { Hit, ProviderCall } from "@/lib/research/deep/types";
 import { canonicalizeUrl } from "@/lib/research/deep/url";
 import { platformHeadroomUsd } from "@/lib/research/spend";
 import { FAILING_AFTER, SERPER_PAGE_SIZE, buildWatchPlan, matchTarget, nextRunAfter, type WatchTarget, type WatchTask } from "./plan";
+import { refineWatch } from "./refine";
 import { checkSites } from "./sites";
 import { loadKnown, storeItem, type Known } from "./store";
 
@@ -21,7 +22,7 @@ export type JobOutcome = { status: "completed" | "partially_completed" | "failed
 /** Watch results are cached a little under a day: a re-run the same day costs nothing and finds nothing new. */
 const CACHE_HOURS = 20;
 
-type Watch = Record<string, unknown> & { id: string; client_id: string; client_name: string; frequency: "daily" | "weekly" };
+type Watch = Record<string, unknown> & { id: string; client_id: string; client_name: string; client_industry: string | null; frequency: "daily" | "weekly" };
 
 /**
  * Runs one claimed Watch job as the person the watch belongs to, so Row Level Security, the workspace
@@ -89,6 +90,8 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
     added += sites.added;
   }
   if (!stop && Date.now() < deadline) await refreshVideoStats(ctx);
+  // Relevance verdicts and story grouping. Rules only, no network: cheap enough to always run.
+  await refineWatch({ userId, watchId: job.watch_id, context: [watch.client_industry ?? "", ...(watch.keywords as string[])] });
 
   const ran = results.size;
   const failures = [...results.values()].filter((r) => !r.ok);
@@ -230,7 +233,7 @@ async function refreshVideoStats(ctx: { job: ClaimedJob; ws: string; userId: str
 }
 
 async function loadWatch(watchId: string): Promise<Watch | null> {
-  const [w] = await privilegedSql()`select w.*, c.name as client_name,
+  const [w] = await privilegedSql()`select w.*, c.name as client_name, c.industry as client_industry,
       (select m.role from workspace_members m where m.workspace_id = w.workspace_id and m.user_id = w.created_by) as creator_role
     from watches w join clients c on c.id = w.client_id where w.id = ${watchId}`;
   return (w as Watch | undefined) ?? null;

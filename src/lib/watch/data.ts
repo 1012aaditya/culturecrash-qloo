@@ -10,6 +10,8 @@ export type WatchItem = {
   metrics: { views?: number; likes?: number; comments?: number };
   publishedAt: string | null; publishedPrecision: "exact" | "day" | "approximate" | null; discoveredAt: string;
   target: WatchTargetView | null; alsoReportedBy: number;
+  /** Other headlines about the same event, newest first. */
+  related: { id: string; title: string; url: string | null; publisher: string | null }[];
 };
 export type SourceHealth = { provider: string; configured: boolean; lastStatus: "ok" | "empty" | "error" | null; lastAt: string | null; lastError: string | null; failures7d: number; calls7d: number };
 export type WatchRun = {
@@ -20,6 +22,7 @@ export type WatchSource = {
   id: string; url: string; kind: "page" | "feed"; target: string; status: "pending" | "ok" | "blocked" | "robots" | "needs_browser" | "error";
   detail: string | null; lastCheckedAt: string | null; lastChangedAt: string | null; discovered: boolean;
 };
+export type HiddenItem = { id: string; title: string; url: string | null; publisher: string | null; target: string | null; reason: string | null; kind: "listing" | "name_clash" };
 export type WatchView = {
   client: { id: string; name: string };
   watch: null | {
@@ -30,10 +33,11 @@ export type WatchView = {
   targets: WatchTargetView[];
   lastJob: null | { status: string; startedAt: string | null; finishedAt: string | null; found: number; added: number; error: string | null; manual: boolean };
   items: WatchItem[];
+  hidden: HiddenItem[];
   runs: WatchRun[];
   sources: WatchSource[];
   health: SourceHealth[];
-  totals: { stories: number; thisWeek: number };
+  totals: { stories: number; thisWeek: number; events: number };
 };
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -47,20 +51,31 @@ export async function getWatchView(ctx: Ctx, clientId: string): Promise<WatchVie
     const [w] = await tx`select * from watches where client_id = ${clientId}`;
     const configured = { serper: Boolean(e.SERPER_API_KEY), exa: Boolean(e.EXA_API_KEY), youtube: Boolean(e.YOUTUBE_API_KEY) };
     if (!w) {
-      return { client: { id: client.id, name: client.name }, watch: null, targets: [], lastJob: null, items: [], runs: [], sources: [], totals: { stories: 0, thisWeek: 0 },
+      return { client: { id: client.id, name: client.name }, watch: null, targets: [], lastJob: null, items: [], hidden: [], runs: [], sources: [], totals: { stories: 0, thisWeek: 0, events: 0 },
         health: (["serper", "exa", "youtube"] as const).map((p) => ({ provider: p, configured: configured[p], lastStatus: null, lastAt: null, lastError: null, failures7d: 0, calls7d: 0 })) };
     }
     const targets = (await tx`select id, role, name from watch_targets where watch_id = ${w.id} order by (role = 'company') desc, created_at`) as unknown as WatchTargetView[];
     const [job] = await tx`select status, started_at, finished_at, found, added, error_message, run_key from watch_jobs where watch_id = ${w.id} order by created_at desc limit 1`;
     const rows = await tx`
       select d.id, d.title, d.canonical_url, d.publisher, d.provider, d.source_type, d.metrics, d.excerpt, d.published_at, d.published_precision, d.retrieved_at, d.watch_target_id,
-        (select count(*)::int from research_documents x where x.duplicate_of = d.id) as also
+        -- Copies of this headline, plus every story in its event and their copies.
+        (select count(*)::int from research_documents x where x.duplicate_of = d.id
+            or x.watch_event_lead = d.id or x.duplicate_of in (select y.id from research_documents y where y.watch_event_lead = d.id)) as also,
+        (select coalesce(json_agg(json_build_object('id', e.id, 'title', e.title, 'url', e.canonical_url, 'publisher', e.publisher)
+            order by coalesce(e.published_at, e.retrieved_at) desc), '[]'::json)
+          from (select * from research_documents e where e.watch_event_lead = d.id order by coalesce(e.published_at, e.retrieved_at) desc limit 6) e) as related
       from research_documents d
-      where d.watch_id = ${w.id} and d.duplicate_of is null
+      where d.watch_id = ${w.id} and d.duplicate_of is null and d.watch_event_lead is null and coalesce(d.watch_relevance, 'relevant') = 'relevant'
       order by coalesce(d.published_at, d.retrieved_at) desc limit 100`;
+    // Hidden as not relevant: kept, with the reason, for anyone who wants to check.
+    const hidden = await tx`select d.id, d.title, d.canonical_url, d.publisher, d.watch_relevance, d.watch_relevance_reason, t.name as target
+      from research_documents d left join watch_targets t on t.id = d.watch_target_id
+      where d.watch_id = ${w.id} and d.watch_relevance in ('listing', 'name_clash')
+      order by d.retrieved_at desc limit 50`;
     const [totals] = await tx`select count(*) filter (where duplicate_of is null)::int as stories,
-        count(*) filter (where duplicate_of is null and retrieved_at > now() - interval '7 days')::int as week
-      from research_documents where watch_id = ${w.id}`;
+        count(*) filter (where duplicate_of is null and retrieved_at > now() - interval '7 days')::int as week,
+        count(*) filter (where duplicate_of is null and watch_event_lead is null)::int as events
+      from research_documents where watch_id = ${w.id} and coalesce(watch_relevance, 'relevant') = 'relevant'`;
     // Source health from the cost ledger: the last call per provider, and failures over the past week.
     const health = await tx`
       select s.provider, (array_agg(s.status order by s.retrieved_at desc))[1] as last_status, max(s.retrieved_at) as last_at,
@@ -91,7 +106,7 @@ export async function getWatchView(ctx: Ctx, clientId: string): Promise<WatchVie
         id: r.id, title: r.title, url: r.provider === "page" ? String(r.canonical_url).replace(/#change-[0-9a-f]+$/, "") : r.canonical_url,
         publisher: r.publisher, provider: r.provider, sourceType: r.source_type, excerpt: r.excerpt, metrics: r.metrics ?? {},
         publishedAt: iso(r.published_at), publishedPrecision: r.published_precision, discoveredAt: iso(r.retrieved_at)!,
-        target: byId.get(r.watch_target_id) ?? null, alsoReportedBy: r.also,
+        target: byId.get(r.watch_target_id) ?? null, alsoReportedBy: r.also, related: r.related,
       })),
       sources: sources.map((p) => ({
         id: p.id, url: p.url, kind: p.kind, target: p.target, status: p.status, detail: p.status_detail,
@@ -105,7 +120,8 @@ export async function getWatchView(ctx: Ctx, clientId: string): Promise<WatchVie
         const h = health.find((x) => x.provider === p);
         return { provider: p, configured: configured[p], lastStatus: h?.last_status ?? null, lastAt: iso(h?.last_at), lastError: h?.last_error ?? null, failures7d: h?.failures ?? 0, calls7d: h?.calls ?? 0 };
       }),
-      totals: { stories: totals.stories, thisWeek: totals.week },
+      hidden: hidden.map((h) => ({ id: h.id, title: h.title, url: h.canonical_url, publisher: h.publisher, target: h.target, reason: h.watch_relevance_reason, kind: h.watch_relevance })),
+      totals: { stories: totals.stories, thisWeek: totals.week, events: totals.events },
     };
   });
 }

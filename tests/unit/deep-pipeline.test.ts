@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BriefInput } from "@/lib/ai/template";
 import { rulesExtraction, validateExtraction, type ExtractDoc } from "@/lib/research/deep/extract";
-import { extractHtml, fetchPage, parseRobots } from "@/lib/research/deep/fetch-page";
+import { extractHtml, fetchPage, parseRobots, robotsVerdict } from "@/lib/research/deep/fetch-page";
 import { buildPlanV2, countryCode, inferIntent, rulesPlan, sanitizeLlmPlan, selectProviders } from "@/lib/research/deep/planner";
 import type { ProviderInfo } from "@/lib/research/deep/registry";
 import { rulesSynthesis, validateSynthesis } from "@/lib/research/deep/synthesize";
@@ -135,7 +135,30 @@ describe("page retrieval", () => {
     expect(ex.text).not.toMatch(/evil|Menu Home/);
   });
   it("parses robots.txt for the * group", () => {
-    expect(parseRobots("User-agent: Googlebot\nDisallow: /g\n\nUser-agent: *\nDisallow: /private\nAllow: /\n")).toEqual(["/private"]);
+    expect(parseRobots("User-agent: Googlebot\nDisallow: /g\n\nUser-agent: *\nDisallow: /private\nAllow: /\n")).toEqual([
+      { allow: false, pattern: "/private" }, { allow: true, pattern: "/" },
+    ]);
+  });
+  it("prefers a group naming our crawler, and merges consecutive user-agent lines", () => {
+    const txt = "User-agent: *\nDisallow: /\n\nUser-agent: Googlebot\nUser-agent: CultureCrashResearchBot\nDisallow: /drafts\n";
+    expect(parseRobots(txt)).toEqual([{ allow: false, pattern: "/drafts" }]);
+  });
+  it("matches wildcards, end anchors and the longest rule (as real brand sites write them)", () => {
+    // Nike: "Disallow: /*.swf$" must not block the whole site.
+    const nike = parseRobots("User-agent: *\nDisallow: */member/inbox\nDisallow: /*.swf$\nDisallow: /kr/en$\nDisallow: */p/\n");
+    expect(robotsVerdict(nike, "/")).toBe(true);
+    expect(robotsVerdict(nike, "/launch")).toBe(true);
+    expect(robotsVerdict(nike, "/media/intro.swf")).toBe(false);
+    expect(robotsVerdict(nike, "/media/intro.swf?v=2")).toBe(true);
+    expect(robotsVerdict(nike, "/kr/en")).toBe(false);
+    expect(robotsVerdict(nike, "/kr/en-us")).toBe(true);
+    expect(robotsVerdict(nike, "/us/en/member/inbox")).toBe(false);
+    // Longest match wins; Allow wins a tie.
+    const mixed = [{ allow: false, pattern: "/news" }, { allow: true, pattern: "/news/public" }, { allow: true, pattern: "/a" }, { allow: false, pattern: "/a" }];
+    expect(robotsVerdict(mixed, "/news/public/1")).toBe(true);
+    expect(robotsVerdict(mixed, "/news/internal")).toBe(false);
+    expect(robotsVerdict(mixed, "/a")).toBe(true);
+    expect(robotsVerdict([], "/anything")).toBe(true);
   });
   const publicDns = async () => [{ address: "93.184.216.34" }];
   it("honours robots.txt, follows safe redirects only, and skips non-HTML", async () => {

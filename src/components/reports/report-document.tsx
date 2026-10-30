@@ -344,7 +344,7 @@ function VisualWorldSection({ v, urls }: { v: NonNullable<ReportSnapshot["visual
                   </div>
                   <div className="space-y-0.5 p-2.5 text-[12px]">
                     {img.title && <p className="font-medium">{img.title}</p>}
-                    <p className="text-muted">{img.rights !== "reference" && img.rights !== "ai" && `${RIGHTS_LABEL[img.rights]} · `}{img.sourceUrl ? <a href={img.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-violet-ink hover:underline">{hostOf(img.sourceUrl)}</a> : "No source recorded"}</p>
+                    <p className="text-muted">{img.rights !== "reference" && img.rights !== "ai" && `${RIGHTS_LABEL[img.rights]} · `}{img.sourceUrl ? <a href={img.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-violet-ink hover:underline">{hostOf(img.sourceUrl)}</a> : img.rights === "ai" ? "Generated from this project’s research" : "No source recorded"}</p>
                   </div>
                 </li>
               );

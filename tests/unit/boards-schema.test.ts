@@ -100,5 +100,7 @@ describe("evidenceCoverage", () => {
       { type: "note", data: {} }, { type: "group", data: {} },
     ])).toEqual({ sourceable: 5, sourced: 4 });
     expect(evidenceCoverage([{ type: "note", data: {} }])).toEqual({ sourceable: 0, sourced: 0 });
+    // AI concepts are generated, so they are not counted as missing a source.
+    expect(evidenceCoverage([{ type: "image", data: { rights: "ai", sourceUrl: null } }, { type: "image", data: { sourceUrl: null } }])).toEqual({ sourceable: 1, sourced: 0 });
   });
 });

@@ -15,6 +15,7 @@ export const permissions = {
   "research.run": "member",
   "strategy.edit": "member",
   "experiment.edit": "member",
+  "board.edit": "member",
   "report.create": "member",
   "report.export": "viewer",
   "report.share": "member",

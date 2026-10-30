@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ClientHeader } from "@/components/workspace/client-header";
 import { WatchHealth, WatchRunHistory, WatchTimeline } from "@/components/watch/watch-timeline";
 import { WatchConfigForm } from "@/components/watch/watch-config-form";
+import { WatchSourcesForm } from "@/components/watch/watch-sources-form";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { can } from "@/lib/permissions";
@@ -30,6 +31,9 @@ export default async function WatchPage({ params }: PageProps<"/workspace/client
         <aside className="order-1 space-y-4 lg:order-2" aria-label="Watch settings and health">
           <WatchHealth view={view} canEdit={canEdit} />
           <WatchRunHistory runs={view.runs} />
+          {view.watch && (
+            <WatchSourcesForm key={view.sources.map((x) => `${x.id}:${x.status}:${x.target}`).join("|")} clientId={view.client.id} companies={view.targets.map((t) => t.name)} sources={view.sources} canEdit={canEdit} />
+          )}
           <WatchConfigForm
             clientId={view.client.id}
             canEdit={canEdit}

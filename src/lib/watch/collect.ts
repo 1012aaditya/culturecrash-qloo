@@ -3,14 +3,16 @@ import { privilegedSql, withUser, type Tx } from "@/lib/db";
 import { createNotification } from "@/lib/data/notifications";
 import { env } from "@/lib/env";
 import { cacheGet, cacheKey, cachePut } from "@/lib/research/deep/cache";
-import { contentHash, normalizeText } from "@/lib/research/deep/dedupe";
 import { countryCode } from "@/lib/research/deep/planner";
 import { exaSearch } from "@/lib/research/deep/providers/alt-web";
 import { serperNews } from "@/lib/research/deep/providers/serper";
+import { youtubeSearch, youtubeVideoStats } from "@/lib/research/deep/providers/youtube";
 import type { Hit, ProviderCall } from "@/lib/research/deep/types";
-import { canonicalizeUrl, hostOf } from "@/lib/research/deep/url";
+import { canonicalizeUrl } from "@/lib/research/deep/url";
 import { platformHeadroomUsd } from "@/lib/research/spend";
-import { FAILING_AFTER, SERPER_PAGE_SIZE, buildWatchPlan, clipExcerpt, matchTarget, nextRunAfter, type WatchTarget, type WatchTask } from "./plan";
+import { FAILING_AFTER, SERPER_PAGE_SIZE, buildWatchPlan, matchTarget, nextRunAfter, type WatchTarget, type WatchTask } from "./plan";
+import { checkSites } from "./sites";
+import { loadKnown, storeItem, type Known } from "./store";
 
 /** attempts and run_key come from the queue: a scheduled job that fails on its first attempt is retried the same day. */
 export type ClaimedJob = { id: string; watch_id: string; workspace_id: string; attempts?: number; run_key?: string };
@@ -19,7 +21,6 @@ export type JobOutcome = { status: "completed" | "partially_completed" | "failed
 /** Watch results are cached a little under a day: a re-run the same day costs nothing and finds nothing new. */
 const CACHE_HOURS = 20;
 
-type Known = { byUrl: Map<string, string>; byHash: Map<string, string>; byTitle: Map<string, string> };
 type Watch = Record<string, unknown> & { id: string; client_id: string; client_name: string; frequency: "daily" | "weekly" };
 
 /**
@@ -42,16 +43,14 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
   const setup = await withUser(userId, async (tx) => ({
     targets: (await tx`select id, role, name, aliases from watch_targets where watch_id = ${job.watch_id} order by role, created_at`) as unknown as WatchTarget[],
     // What the watch already holds, for duplicate checks across runs (exact URLs are also blocked by a unique index).
-    known: await tx`select id, canonical_url, content_hash, title from research_documents where watch_id = ${job.watch_id} and retrieved_at > now() - interval '30 days'`,
+    known: await loadKnown(tx, job.watch_id),
   }));
   if (!setup.targets.length) return finish(userId, job, watch, { status: "failed", found: 0, added: 0, error: "No company is set on this watch.", retryable: false });
 
-  const known: Known = {
-    byUrl: new Map(setup.known.filter((k) => k.canonical_url).map((k) => [k.canonical_url as string, k.id as string])),
-    byHash: new Map(setup.known.filter((k) => k.content_hash).map((k) => [k.content_hash as string, k.id as string])),
-    byTitle: new Map(setup.known.map((k) => [normalizeText(k.title as string), k.id as string])),
-  };
-  const tasks = buildWatchPlan(setup.targets, { keywords: watch.keywords as string[], lastSuccessAt: watch.last_success_at ? new Date(watch.last_success_at as string) : null });
+  const known = setup.known;
+  const tasks = buildWatchPlan(setup.targets, {
+    keywords: watch.keywords as string[], lastSuccessAt: watch.last_success_at ? new Date(watch.last_success_at as string) : null, youtube: Boolean(env().YOUTUBE_API_KEY),
+  });
   const country = countryCode(watch.market as string | null);
   const ctx = { job, ws, userId, country, targets: setup.targets, known };
 
@@ -64,6 +63,7 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
   const attempt = async (task: WatchTask) => {
     const r = await runTask(ctx, task);
     if (r.budgetStop) { stop = r.budgetStop; return false; }
+    if (r.skipped) return true;
     found += r.found;
     added += r.added;
     if (r.full) full.add(task.key);
@@ -82,6 +82,14 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
     if (Date.now() > deadline || !(await attempt(task))) break;
   }
 
+  // Websites and feeds, then fresh view counts for recent videos. Neither changes whether the searches succeeded.
+  if (!stop && Date.now() < deadline) {
+    const sites = await checkSites({ ws, watchId: job.watch_id, jobId: job.id, known, userId, deadline });
+    found += sites.found;
+    added += sites.added;
+  }
+  if (!stop && Date.now() < deadline) await refreshVideoStats(ctx);
+
   const ran = results.size;
   const failures = [...results.values()].filter((r) => !r.ok);
   const unconfigured = [...new Set(failures.filter((r) => r.config).map((r) => r.provider))];
@@ -98,12 +106,12 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
   return finish(userId, job, watch, { status, found, added, error, retryable });
 }
 
-type TaskResult = { ok: boolean; config: boolean; found: number; added: number; full: boolean; budgetStop?: string };
+type TaskResult = { ok: boolean; config: boolean; found: number; added: number; full: boolean; budgetStop?: string; skipped?: boolean };
 
 async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; country: string | null; targets: WatchTarget[]; known: Known }, task: WatchTask): Promise<TaskResult> {
   const { job, ws, userId, country, targets, known } = ctx;
   const e = env();
-  const price = task.provider === "serper" ? e.SERPER_USD_PER_REQUEST : e.EXA_USD_PER_REQUEST;
+  const price = task.provider === "serper" ? e.SERPER_USD_PER_REQUEST : task.provider === "exa" ? e.EXA_USD_PER_REQUEST : 0;
   const cached = await withUser(userId, async (tx) => {
     await tx`update watch_jobs set heartbeat_at = now() where id = ${job.id}`;
     return cacheGet<Hit[]>(tx, ws, task.provider, cacheKeyFor(task, country));
@@ -111,6 +119,8 @@ async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; count
   if (!cached) {
     const budgetStop = await withUser(userId, (tx) => overBudget(tx, ws, price));
     if (budgetStop) return { ok: false, config: false, found: 0, added: 0, full: false, budgetStop };
+    // YouTube is free but rationed: skip it (without failing anything) once today's quota share is used.
+    if (task.provider === "youtube" && !(await youtubeQuotaLeft(101))) return { ok: true, config: false, found: 0, added: 0, full: false, skipped: true };
   }
   const call = cached ? fromCache(cached, task, country) : await search(task, country);
   const searched = targets.find((t) => t.id === task.targetId)!;
@@ -124,41 +134,19 @@ async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; count
       const url = canonicalizeUrl(hit.url);
       if (!target || !url) continue;
       f++;
-      const hash = contentHash(`${hit.title}\n${hit.snippet}`);
-      let docId = known.byUrl.get(url) ?? known.byHash.get(hash) ?? null;
-      if (!docId) {
-        // The same story on another site (same headline) is kept but linked, so it shows once with "also reported by".
-        const title = normalizeText(hit.title);
-        const duplicateOf = title.length > 24 ? known.byTitle.get(title) ?? null : null;
-        const [row] = await tx`
-          insert into research_documents (workspace_id, watch_id, watch_target_id, watch_job_id, provider, source_type, canonical_url, external_id, title, publisher,
-            published_at, published_precision, retrieved_at, excerpt, content_hash, extraction_status, duplicate_of, discovery_query, usage_restrictions, is_demo)
-          values (${ws}, ${job.watch_id}, ${target.id}, ${job.id}, ${hit.provider}, 'news', ${url}, ${hit.externalId}, ${hit.title.slice(0, 500)},
-            ${hit.publisher ?? hostOf(url)}, ${hit.publishedAt}, ${hit.publishedAt ? hit.publishedPrecision ?? "exact" : null}, now(),
-            ${clipExcerpt(hit.snippet)}, ${hash}, 'snippet', ${duplicateOf}, ${task.query}, ${hit.usageRestrictions}, false)
-          on conflict (watch_id, canonical_url) where watch_id is not null and canonical_url is not null do nothing
-          returning id`;
-        // A concurrent insert of the same URL loses the race quietly; look the winner up so the sighting still counts.
-        docId = (row?.id as string | undefined) ?? ((await tx`select id from research_documents where watch_id = ${job.watch_id} and canonical_url = ${url}`)[0]?.id as string | undefined) ?? null;
-        if (row) {
-          a++;
-          if (!duplicateOf && title.length > 24) known.byTitle.set(title, row.id as string);
-        }
-      }
-      if (!docId) continue;
-      known.byUrl.set(url, docId);
-      known.byHash.set(hash, docId);
-      await tx`insert into watch_observations (workspace_id, watch_id, watch_job_id, watch_target_id, document_id, provider, task_key, rank)
-        values (${ws}, ${job.watch_id}, ${job.id}, ${target.id}, ${docId}, ${task.provider}, ${task.key}, ${i + 1})
-        on conflict (watch_job_id, document_id, task_key) do nothing`;
+      const res = await storeItem(tx, { ws, watchId: job.watch_id, jobId: job.id, known }, { ...hit, url, query: task.query }, target.id, task.key, i + 1);
+      if (res.added) a++;
+      // A new video's public counts are its first engagement reading.
+      if (res.added && res.docId && hit.provider === "youtube" && Object.keys(hit.metrics).length) await videoStatsRow(tx, ws, job, res.docId, hit.metrics);
     }
     return { found: f, added: a };
   });
-  return { ok: call.ok, config: call.errorKind === "config", ...n, full: call.ok && call.data.length >= SERPER_PAGE_SIZE };
+  return { ok: call.ok, config: call.errorKind === "config", ...n, full: call.ok && task.provider === "serper" && call.data.length >= SERPER_PAGE_SIZE };
 }
 
 const paramsFor = (task: WatchTask, country: string | null) => task.provider === "serper"
   ? { q: task.query, window: task.window, country, count: SERPER_PAGE_SIZE, ...(task.page > 1 ? { page: task.page } : {}) }
+  : task.provider === "youtube" ? { q: task.query, since: task.since.slice(0, 10), country, count: 10 }
   : { q: task.query, since: task.since.slice(0, 10), category: "news", count: 8 };
 const cacheKeyFor = (task: WatchTask, country: string | null) => cacheKey(`watch:${task.provider}`, task.query, paramsFor(task, country));
 
@@ -173,6 +161,9 @@ async function search(task: WatchTask, country: string | null): Promise<Provider
     return e.SERPER_API_KEY
       ? serperNews({ query: task.query, window: task.window, page: task.page, count: SERPER_PAGE_SIZE, country, apiKey: e.SERPER_API_KEY, usdPerCall: e.SERPER_USD_PER_REQUEST })
       : notConfigured("SERPER_API_KEY");
+  }
+  if (task.provider === "youtube") {
+    return e.YOUTUBE_API_KEY ? youtubeSearch({ query: task.query, count: 10, regionCode: country, publishedAfter: task.since, apiKey: e.YOUTUBE_API_KEY }) : notConfigured("YOUTUBE_API_KEY");
   }
   return e.EXA_API_KEY ? exaSearch({ query: task.query, count: 8, apiKey: e.EXA_API_KEY, usdPerCall: e.EXA_USD_PER_REQUEST, startPublishedDate: task.since, category: "news" }) : notConfigured("EXA_API_KEY");
 }
@@ -194,6 +185,48 @@ async function overBudget(tx: Tx, ws: string, price: number): Promise<string | n
   const platform = await platformHeadroomUsd();
   if (platform !== null && platform < price) return "Stopped: this server's monthly spending limit is reached.";
   return null;
+}
+
+/** Units used today on the server's YouTube key, across all workspaces (the quota resets at midnight Pacific time). */
+async function youtubeQuotaLeft(units: number): Promise<boolean> {
+  const [{ used }] = await privilegedSql()`select coalesce(sum(units), 0)::int as used from research_sources
+    where provider = 'youtube' and retrieved_at >= (date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles')`;
+  return used + units <= env().YOUTUBE_DAILY_UNIT_CAP;
+}
+
+async function videoStatsRow(tx: Tx, ws: string, job: ClaimedJob, docId: string, m: Record<string, number>) {
+  await tx`insert into watch_video_stats (workspace_id, watch_id, document_id, watch_job_id, views, likes, comments)
+    values (${ws}, ${job.watch_id}, ${docId}, ${job.id}, ${m.views ?? null}, ${m.likes ?? null}, ${m.comments ?? null})`;
+}
+
+/**
+ * Engagement history: one videos.list call (1 quota unit per 50 videos) refreshes the public counts of
+ * the watch's videos from the last 30 days. Older videos are left alone, and the retention job clears
+ * their YouTube data, as YouTube's terms require.
+ */
+async function refreshVideoStats(ctx: { job: ClaimedJob; ws: string; userId: string }) {
+  const key = env().YOUTUBE_API_KEY;
+  if (!key) return;
+  const { job, ws, userId } = ctx;
+  const videos = await withUser(userId, (tx) => tx`select id, external_id from research_documents
+    where watch_id = ${job.watch_id} and provider = 'youtube' and external_id is not null and retrieved_at > now() - interval '30 days'
+      and watch_job_id is distinct from ${job.id}
+    order by retrieved_at desc limit 50`);
+  if (!videos.length || !(await youtubeQuotaLeft(1))) return;
+  const call = await youtubeVideoStats({ ids: videos.map((v) => v.external_id as string), apiKey: key });
+  await withUser(userId, async (tx) => {
+    await tx`insert into research_sources (watch_job_id, workspace_id, provider, endpoint, params, status, http_status, result_count, duration_ms, error_message,
+        raw_response, units, cost_usd_estimated, cost_usd_actual, cached, question_key)
+      values (${job.id}, ${ws}, 'youtube', 'videos', ${tx.json({ part: "statistics", count: String(videos.length) })}, ${call.status}, ${call.httpStatus},
+        ${Object.keys(call.data).length}, ${call.durationMs}, ${call.error}, null, ${call.units}, 0, null, false, ${`${job.watch_id}:youtube:stats`})`;
+    if (!call.ok) return;
+    for (const v of videos) {
+      const m = call.data[v.external_id as string];
+      if (!m) continue;
+      await videoStatsRow(tx, ws, job, v.id as string, m);
+      await tx`update research_documents set metrics = ${tx.json(m as never)} where id = ${v.id}`;
+    }
+  });
 }
 
 async function loadWatch(watchId: string): Promise<Watch | null> {

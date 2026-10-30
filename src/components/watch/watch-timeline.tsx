@@ -11,11 +11,12 @@ import { checkNowAction, setWatchStatusAction } from "@/lib/watch/actions";
 import type { SourceHealth, WatchItem, WatchRun, WatchView } from "@/lib/watch/data";
 import { cn, formatDate, pluralize } from "@/lib/utils";
 
-const PROVIDER: Record<string, string> = { serper: "Google News (Serper)", exa: "Exa" };
+const PROVIDER: Record<string, string> = { serper: "Google News (Serper)", exa: "Exa", youtube: "YouTube", page: "website check", rss: "newsroom feed" };
+const KIND: Record<string, string> = { video: "Video", brand_site: "Company site" };
 
 /** A publication date as precise as the source gave it — never the time we found the story. */
 function Published({ item }: { item: WatchItem }) {
-  if (!item.publishedAt) return <span className="text-faint">Publication date not given</span>;
+  if (!item.publishedAt) return <span className="text-faint">{item.provider === "page" ? "Detected" : "Publication date not given"}{item.provider === "page" && <> <Ago value={item.discoveredAt} /></>}</span>;
   if (item.publishedPrecision === "approximate") return <span title="The source gave a relative date, such as “3 days ago”">around {formatDate(item.publishedAt)}</span>;
   return <span>{formatDate(item.publishedAt)}</span>;
 }
@@ -69,6 +70,7 @@ export function WatchTimeline({ view }: { view: WatchView }) {
             <li key={item.id} className="rounded-cc-lg border border-line bg-paper p-5">
               <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
                 {item.target && <Badge tone={item.target.role === "company" ? "violet" : "peach"}>{item.target.name}</Badge>}
+                {KIND[item.sourceType] && <Badge tone="outline">{item.provider === "page" ? "Website change" : KIND[item.sourceType]}</Badge>}
                 <span>{item.publisher ?? "Unknown publisher"}</span>
                 <span aria-hidden>·</span>
                 <Published item={item} />
@@ -81,6 +83,11 @@ export function WatchTimeline({ view }: { view: WatchView }) {
                 ) : item.title}
               </h3>
               {item.excerpt && <p className="mt-1.5 line-clamp-3 text-[13px] leading-relaxed text-ink/80">{item.excerpt}</p>}
+              {item.metrics.views !== undefined && (
+                <p className="mt-1.5 text-[12px] text-muted">
+                  {item.metrics.views.toLocaleString()} views{item.metrics.likes !== undefined && ` · ${item.metrics.likes.toLocaleString()} likes`}{item.metrics.comments !== undefined && ` · ${item.metrics.comments.toLocaleString()} comments`}
+                </p>
+              )}
               <p className="mt-3 text-[11px] text-faint">
                 Found by {PROVIDER[item.provider] ?? item.provider} <Ago value={item.discoveredAt} />
                 {item.alsoReportedBy > 0 && <> · also reported by {pluralize(item.alsoReportedBy, "other source")}</>}

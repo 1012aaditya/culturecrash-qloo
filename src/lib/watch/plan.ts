@@ -8,7 +8,7 @@ export type WatchTarget = { id: string; role: "company" | "competitor"; name: st
 export type WatchTask = {
   key: string;
   targetId: string;
-  provider: "serper" | "exa";
+  provider: "serper" | "exa" | "youtube";
   query: string;
   /** Serper results page. Page 2 runs only when page 1 came back full (see `afterFull`). */
   page: number;
@@ -27,9 +27,10 @@ const DEFAULT_TOPICS = ["launch", "campaign", "partnership", "collaboration", "a
 /**
  * Per target: Serper news for the name on its own and for the name with the watch's topics — each with a
  * second page of results when the first is full — plus one Exa news search from just before the last
- * successful check. A daily run for a company and two competitors makes 9 to 15 calls.
+ * successful check, and — when YouTube is set up — one YouTube search. A daily run for a company and two
+ * competitors makes 9 to 18 calls.
  */
-export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[]; lastSuccessAt: Date | null; now?: Date }): WatchTask[] {
+export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[]; lastSuccessAt: Date | null; now?: Date; youtube?: boolean }): WatchTask[] {
   const now = opts.now ?? new Date();
   const recent = opts.lastSuccessAt && now.getTime() - opts.lastSuccessAt.getTime() < 1.5 * DAY;
   const window: "d" | "w" = recent ? "d" : "w";
@@ -47,6 +48,8 @@ export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[
       { ...base, key: `${t.id}:serper:topics`, provider: "serper" as const, query: topicsQ, page: 1 },
       { ...base, key: `${t.id}:serper:topics:p2`, provider: "serper" as const, query: topicsQ, page: 2, afterFull: `${t.id}:serper:topics` },
       { ...base, key: `${t.id}:exa`, provider: "exa" as const, query: `${name} ${topics.join(" ")} news`, page: 1 },
+      // Videos that name the company, published since the last check (one search: 101 of YouTube's daily quota units).
+      ...(opts.youtube ? [{ ...base, key: `${t.id}:youtube`, provider: "youtube" as const, query: nameQ, page: 1 }] : []),
     ];
   });
 }

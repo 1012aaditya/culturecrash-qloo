@@ -40,6 +40,8 @@ export async function runRetention() {
     // excerpts and statistics are cleared (the citation — URL, title, dates — stays for provenance).
     const youtube = await tx`update research_documents set excerpt = null, metrics = '{}'::jsonb
       where provider = 'youtube' and retrieved_at < now() - interval '30 days' and (excerpt is not null or metrics <> '{}'::jsonb) returning id`;
+    // The same 30-day rule for Watch's YouTube view/like/comment history.
+    const videoStats = await tx`delete from watch_video_stats where fetched_at < now() - interval '30 days' returning id`;
     await tx`delete from provider_cache where expires_at < now()`;
     const links = await tx`delete from shared_report_links where expires_at is not null and expires_at < now() - interval '30 days' returning id`;
     // Watch findings follow the workspace's retention period like other collected working data.
@@ -48,11 +50,19 @@ export async function runRetention() {
       where d.watch_id is not null and w.id = d.workspace_id and w.data_retention_days is not null
         and d.retrieved_at < now() - make_interval(days => w.data_retention_days)
       returning d.id`;
+    // Website snapshots follow retention too, but each page keeps its latest three: change detection compares against them.
+    const snapshots = await tx`
+      delete from watch_page_snapshots s using workspaces w
+      where w.id = s.workspace_id and w.data_retention_days is not null
+        and s.fetched_at < now() - make_interval(days => w.data_retention_days)
+        and s.id not in (select x.id from watch_page_snapshots x where x.page_id = s.page_id order by x.fetched_at desc limit 3)
+      returning s.id`;
     // Backstop for runs and generation tasks nobody has looked at since their worker died.
     const staleRuns = await sweepStaleRuns(tx);
     const staleTasks = await sweepStaleTasks(tx);
     return {
       staleRunsClosed: staleRuns, staleTasksClosed: staleTasks, watchDocumentsDeleted: watchDocs.length,
+      watchVideoStatsDeleted: videoStats.length, watchSnapshotsDeleted: snapshots.length,
       rawResponsesCleared: raw.length, conversationsDeleted: conv.length, activityDeleted: activity.length,
       tasksDeleted: tasks.length, youtubeExcerptsExpired: youtube.length, pilotRequestsDeleted: pilots.length, expiredLinksDeleted: links.length,
     };

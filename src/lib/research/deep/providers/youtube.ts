@@ -30,9 +30,14 @@ export async function youtubeSearch(opts: { query: string; count?: number; regio
     empty: (d) => d.length === 0,
   });
   if (!search.ok || !search.data.length) return search;
-  // Public statistics (views, likes, comments) — only the fields YouTube returns.
-  const ids = search.data.map((h) => h.externalId!).join(",");
-  const stats = await requestJson<Record<string, Record<string, number>>>({
+  const stats = await youtubeVideoStats({ ids: search.data.map((h) => h.externalId!), apiKey: opts.apiKey, fetcher: opts.fetcher });
+  return { ...search, units: search.units + stats.units, durationMs: search.durationMs + stats.durationMs, data: search.data.map((h) => ({ ...h, metrics: stats.data[h.externalId!] ?? {} })) };
+}
+
+/** Public statistics (views, likes, comments) for up to 50 videos: one videos.list call, 1 quota unit. Only the fields YouTube returns. */
+export async function youtubeVideoStats(opts: { ids: string[]; apiKey: string; fetcher?: Fetcher }): Promise<ProviderCall<Record<string, Record<string, number>>>> {
+  const ids = opts.ids.slice(0, 50).join(",");
+  return requestJson<Record<string, Record<string, number>>>({
     url: `https://www.googleapis.com/youtube/v3/videos?${new URLSearchParams({ part: "statistics", id: ids, key: opts.apiKey })}`,
     params: { part: "statistics", id: ids }, fallback: {}, units: 1, usdPerCall: 0, fetcher: opts.fetcher, attempts: 2,
     parse: (b) => Object.fromEntries(((b as { items?: unknown[] })?.items ?? []).map((it) => {
@@ -46,5 +51,4 @@ export async function youtubeSearch(opts: { query: string; count?: number; regio
     })),
     empty: () => false,
   });
-  return { ...search, units: search.units + stats.units, durationMs: search.durationMs + stats.durationMs, data: search.data.map((h) => ({ ...h, metrics: stats.data[h.externalId!] ?? {} })) };
 }

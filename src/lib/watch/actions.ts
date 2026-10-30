@@ -109,3 +109,46 @@ export async function checkNowAction(clientId: string): Promise<Result> {
   revalidatePath(path(clientId));
   return { ok: true, message: "Checking now. New stories appear here in about a minute." };
 }
+
+const sourceSchema = z.array(z.object({
+  target: z.string().trim().min(1).max(120),
+  url: z.string().trim().max(2000).url("Enter a full web address, starting with https://")
+    .refine((u) => /^https?:\/\//i.test(u), "Only http(s) addresses can be watched")
+    .refine((u) => { const h = new URL(u).hostname; return !/^(localhost|.*\.(local|localhost|internal))$/i.test(h) && !/^\d+\.\d+\.\d+\.\d+$/.test(h); }, "Use the site's public web address"),
+})).max(15);
+
+/** RSS/Atom addresses are watched as feeds; everything else as a page. */
+const kindOf = (url: string) => (/(?:\/feed\/?|\/rss\/?|\.rss|\.xml|atom)(?:$|[?#])/i.test(url) ? "feed" : "page");
+
+/**
+ * Replaces the websites and feeds a watch follows. Rows are matched by address, so a page that stays
+ * keeps its history and status; a removed page takes its snapshots with it.
+ */
+export async function saveWatchSourcesAction(clientId: string, input: { target: string; url: string }[]): Promise<Result> {
+  if (!isUuid(clientId)) return { ok: false, error: "Invalid client." };
+  const parsed = sourceSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the addresses." };
+  const ctx = await getCtx();
+  try {
+    assertCan(ctx.workspace.role, "client.edit");
+    const ws = ctx.workspace.workspaceId;
+    await withUser(ctx.user.id, async (tx) => {
+      const [w] = await tx`select id from watches where client_id = ${clientId} and workspace_id = ${ws}`;
+      if (!w) throw Object.assign(new Error("Set up the watch first."), { code: "54000" });
+      const targets = await tx`select id, name from watch_targets where watch_id = ${w.id}`;
+      const desired = parsed.data.map((s) => ({ ...s, url: new URL(s.url).toString(), targetId: targets.find((t) => String(t.name).toLowerCase() === s.target.toLowerCase())?.id as string | undefined }));
+      if (desired.some((d) => !d.targetId)) throw Object.assign(new Error("Pick one of the watched companies for each address."), { code: "54000" });
+      const keep = desired.map((d) => d.url);
+      await tx`delete from watch_pages where watch_id = ${w.id} and not (url = any(${keep}))`;
+      for (const d of desired) {
+        await tx`insert into watch_pages (workspace_id, watch_id, watch_target_id, url, kind)
+          values (${ws}, ${w.id}, ${d.targetId!}, ${d.url}, ${kindOf(d.url)})
+          on conflict (watch_id, url) do update set watch_target_id = excluded.watch_target_id`;
+      }
+    });
+  } catch (e) {
+    return friendly(e);
+  }
+  revalidatePath(path(clientId));
+  return { ok: true, message: "Websites saved. They're checked with the next daily run." };
+}

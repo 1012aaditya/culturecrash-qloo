@@ -31,6 +31,9 @@ const schema = z.object({
   EXA_API_KEY: opt(z.string().min(8)),
   FIRECRAWL_API_KEY: opt(z.string().min(8)),
   YOUTUBE_API_KEY: opt(z.string().min(8)),
+  // YouTube's free quota is 10,000 units a day per key (a search costs 100). Watch stops searching
+  // YouTube once this many units have been used today, leaving room for research.
+  YOUTUBE_DAILY_UNIT_CAP: z.coerce.number().int().min(0).default(8000),
   REDDIT_CLIENT_ID: opt(z.string().min(8)),
   REDDIT_CLIENT_SECRET: opt(z.string().min(8)),
   // Reddit requires approval for commercial use of its Data API; set to "approved" only once granted.

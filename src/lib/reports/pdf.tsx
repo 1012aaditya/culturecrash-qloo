@@ -303,7 +303,7 @@ function VisualWorldPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualWo
               )}
               {img.title ? <Text style={{ fontSize: 8.5, fontFamily: "Helvetica-Bold", marginTop: 3 }}>{img.title}</Text> : null}
               <Text style={[st.small, img.rights === "reference" || img.rights === "ai" ? { color: "#8a3d22" } : {}]}>{RIGHTS[img.rights]}</Text>
-              {img.sourceUrl ? <Link src={img.sourceUrl} style={[st.small, { color: C.violet }]}>{img.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}</Link> : <Text style={st.small}>No source recorded</Text>}
+              {img.sourceUrl ? <Link src={img.sourceUrl} style={[st.small, { color: C.violet }]}>{img.sourceUrl.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}</Link> : img.rights === "ai" ? null : <Text style={st.small}>No source recorded</Text>}
             </View>
           );
         })}

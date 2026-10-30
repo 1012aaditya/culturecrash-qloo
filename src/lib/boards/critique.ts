@@ -28,7 +28,7 @@ export function digestCards(cards: Card[]) {
     switch (c.type) {
       case "image": {
         const fit = d.fit as { level?: string; tags?: string[]; descriptors?: string[] } | undefined;
-        return { ref, type: "image", caption: d.title, source: d.sourceUrl ? "yes" : "none", rights: d.rights ?? "reference", looks: fit?.descriptors, audienceFit: fit ? `${fit.level}${fit.tags?.length ? ` (${fit.tags.join(", ")})` : ""}` : "not checked", colours: d.palette };
+        return { ref, type: "image", caption: d.title, source: d.rights === "ai" ? "generated" : d.sourceUrl ? "yes" : "none", rights: d.rights ?? "reference", looks: fit?.descriptors, audienceFit: fit ? `${fit.level}${fit.tags?.length ? ` (${fit.tags.join(", ")})` : ""}` : "not checked", colours: d.palette };
       }
       case "note": return { ref, type: "note", text: String(d.text ?? "").slice(0, 300) };
       case "link": return { ref, type: "link", title: d.title, site: d.siteName, note: String(d.note ?? "").slice(0, 200) };

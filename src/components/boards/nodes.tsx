@@ -151,7 +151,7 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
               <a href={data.sourceUrl} target="_blank" rel="noopener noreferrer" className="nodrag flex min-w-0 items-center gap-1 text-[11px] text-violet-ink hover:underline">
                 <ExternalLink className="size-3 shrink-0" /><span className="truncate">{host(data.sourceUrl)}</span>
               </a>
-            ) : !presenting && (
+            ) : !presenting && rights !== "ai" && (
               <button type="button" disabled={!canEdit} onClick={() => setEditingSource(true)} className="nodrag flex items-center gap-1 rounded-full bg-peach/50 px-1.5 py-0.5 text-[10.5px] text-[#8a3d22] enabled:hover:bg-peach">
                 <AlertTriangle className="size-3" /> {canEdit ? "Add source" : "No source"}
               </button>

@@ -155,11 +155,12 @@ export function mediaPaths(nodes: { type?: string; data: Record<string, unknown>
 }
 
 /** Cards that can carry a source (images, links, Qloo entities, evidence) and how many of them do. */
+/** AI concepts are generated, not found, so they have no source to cite and are left out. */
 export function evidenceCoverage(nodes: { type?: string; data: Record<string, unknown> }[]) {
   let sourceable = 0;
   let sourced = 0;
   for (const n of nodes) {
-    if (n.type === "image") { sourceable++; if (n.data.sourceUrl) sourced++; }
+    if (n.type === "image") { if (n.data.rights === "ai") continue; sourceable++; if (n.data.sourceUrl) sourced++; }
     else if (n.type === "link") { sourceable++; if (n.data.url) sourced++; }
     else if (n.type === "entity" || n.type === "evidence") { sourceable++; sourced++; }
   }

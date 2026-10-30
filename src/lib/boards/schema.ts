@@ -4,13 +4,25 @@ import { z } from "zod";
 export const BOARD_NODE_TYPES = ["image", "note", "link", "entity", "group"] as const;
 export type BoardNodeType = (typeof BOARD_NODE_TYPES)[number];
 
-export type ImageData = { path: string | null; url?: string; title: string; sourceUrl: string | null; palette: string[] };
-export type NoteData = { text: string; tone: "paper" | "lilac" | "peach" };
-export type LinkData = { url: string; title: string; note: string };
-export type EntityData = {
+/** Fields every card may carry. `locked` cards cannot be moved, resized or deleted until unlocked. */
+export type CommonData = { locked?: boolean };
+/** `url` / `thumbUrl` / `imageUrl`-style fields ending in Url are signed at load time and never stored. */
+export type ImageData = CommonData & {
+  path: string | null; thumbPath: string | null; url?: string; thumbUrl?: string;
+  title: string; alt: string; sourceUrl: string | null; palette: string[];
+};
+export type NoteData = CommonData & { text: string; tone: "paper" | "lilac" | "peach" };
+export type LinkData = CommonData & { url: string; title: string; note: string; siteName: string; imagePath: string | null; previewUrl?: string };
+export type EntityData = CommonData & {
   entityId: string; name: string; type: string; role: string; affinity: number | null; imageUrl: string | null; evidenceId: string | null;
 };
-export type GroupData = { label: string };
+export type GroupData = CommonData & { label: string };
+
+/**
+ * Signed-URL fields filled in at load time and stripped before saving, per card type. A link card's
+ * `url` is its real address and is kept; only an image card's `url` is a signed display URL.
+ */
+export const TRANSIENT_KEYS: Partial<Record<BoardNodeType, readonly string[]>> = { image: ["url", "thumbUrl"], link: ["previewUrl"] };
 
 export const MAX_NODES = 400;
 
@@ -42,27 +54,37 @@ const nodeSchema = z.object({
 
 export type StoredNode = z.infer<typeof nodeSchema>;
 
+/** A storage path is kept only inside this board's own media folder. */
+const ownPath = (v: unknown, prefix: string) => (typeof v === "string" && v.startsWith(prefix) && !v.includes("..") && v.length <= 300 ? v : null);
+
 /** Cleans one node's data for its type: drops unknown fields, unsafe links and foreign storage paths. */
 function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix: string): Record<string, unknown> {
+  const common = d.locked === true ? { locked: true } : {};
   switch (type) {
     case "image": {
-      const path = typeof d.path === "string" && d.path.startsWith(mediaPrefix) && !d.path.includes("..") ? d.path : null;
       const palette = z.array(hex).max(6).catch([]).parse(d.palette);
-      return { path, title: str(200).parse(d.title ?? ""), sourceUrl: safeUrl(d.sourceUrl), palette } satisfies Omit<ImageData, "url">;
+      return {
+        ...common, path: ownPath(d.path, mediaPrefix), thumbPath: ownPath(d.thumbPath, mediaPrefix), title: str(200).parse(d.title ?? ""),
+        alt: str(300).parse(d.alt ?? ""), sourceUrl: safeUrl(d.sourceUrl), palette,
+      } satisfies Omit<ImageData, "url" | "thumbUrl">;
     }
     case "note":
-      return { text: str(4000).parse(d.text ?? ""), tone: z.enum(["paper", "lilac", "peach"]).catch("paper").parse(d.tone) } satisfies NoteData;
+      return { ...common, text: str(4000).parse(d.text ?? ""), tone: z.enum(["paper", "lilac", "peach"]).catch("paper").parse(d.tone) } satisfies NoteData;
     case "link":
-      return { url: safeUrl(d.url) ?? "", title: str(200).parse(d.title ?? ""), note: str(1000).parse(d.note ?? "") } satisfies LinkData;
+      return {
+        ...common, url: safeUrl(d.url) ?? "", title: str(200).parse(d.title ?? ""), note: str(1000).parse(d.note ?? ""),
+        siteName: str(120).parse(d.siteName ?? ""), imagePath: ownPath(d.imagePath, mediaPrefix),
+      } satisfies Omit<LinkData, "previewUrl">;
     case "entity":
       return {
+        ...common,
         entityId: str(80).parse(d.entityId ?? ""), name: str(200).parse(d.name ?? ""), type: str(40).parse(d.type ?? ""), role: str(20).parse(d.role ?? ""),
         affinity: typeof d.affinity === "number" && Number.isFinite(d.affinity) ? d.affinity : null,
         imageUrl: d.imageUrl && String(d.imageUrl).startsWith("https://") ? safeUrl(d.imageUrl) : null,
         evidenceId: typeof d.evidenceId === "string" ? d.evidenceId.slice(0, 80) : null,
       } satisfies EntityData;
     case "group":
-      return { label: str(120).parse(d.label ?? "") } satisfies GroupData;
+      return { ...common, label: str(120).parse(d.label ?? "") } satisfies GroupData;
   }
 }
 
@@ -91,4 +113,16 @@ export function boardPalette(nodes: { type?: string; data: Record<string, unknow
     for (const c of n.data.palette) if (typeof c === "string") count.set(c.toLowerCase(), (count.get(c.toLowerCase()) ?? 0) + 1);
   }
   return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c]) => c);
+}
+
+/** Every stored file a board's cards use (full images, thumbnails, link previews). */
+export function mediaPaths(nodes: { type?: string; data: Record<string, unknown> }[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    for (const k of n.type === "image" ? ["path", "thumbPath"] : n.type === "link" ? ["imagePath"] : []) {
+      const v = n.data[k];
+      if (typeof v === "string" && v) out.push(v);
+    }
+  }
+  return [...new Set(out)];
 }

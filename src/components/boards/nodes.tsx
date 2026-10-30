@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import * as React from "react";
-import { NodeResizer, useReactFlow, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ExternalLink, Link2, Sparkles } from "lucide-react";
+import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
+import { AlertTriangle, ExternalLink, Link2, Lock, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
 import type { EntityData, GroupData, ImageData, LinkData, NoteData } from "@/lib/boards/schema";
@@ -11,17 +11,23 @@ import { safeUrl } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 
 /** Board-level context the cards need: edit rights and where links resolve. */
-export const BoardCtx = React.createContext<{ canEdit: boolean; projectId: string }>({ canEdit: false, projectId: "" });
+export const BoardCtx = React.createContext<{ canEdit: boolean; projectId: string; onMediaError: () => void }>({ canEdit: false, projectId: "", onMediaError: () => {} });
+
+/** Small badge on locked cards; locked cards can't be moved, resized or deleted until unlocked. */
+function LockBadge({ locked }: { locked?: boolean }) {
+  if (!locked) return null;
+  return <span title="Locked" className="absolute right-1.5 top-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-ink/70 text-white"><Lock className="size-3" /></span>;
+}
 
 const VIOLET = "#8064F5";
 const card = "h-full w-full overflow-hidden rounded-cc border bg-paper shadow-card transition-shadow";
 const ring = (selected: boolean) => (selected ? "border-violet shadow-[0_0_0_3px_rgba(128,100,245,0.22)]" : "border-line");
 
-function Resizer({ selected, minWidth = 140, minHeight = 80, keepAspectRatio }: { selected: boolean; minWidth?: number; minHeight?: number; keepAspectRatio?: boolean }) {
+function Resizer({ selected, locked, minWidth = 140, minHeight = 80, keepAspectRatio }: { selected: boolean; locked?: boolean; minWidth?: number; minHeight?: number; keepAspectRatio?: boolean }) {
   const { canEdit } = React.useContext(BoardCtx);
   return (
     <NodeResizer
-      isVisible={selected && canEdit}
+      isVisible={selected && canEdit && !locked}
       minWidth={minWidth}
       minHeight={minHeight}
       keepAspectRatio={keepAspectRatio}
@@ -55,28 +61,34 @@ function host(url: string) {
   }
 }
 
-export function ImageNode({ id, data, selected }: NodeProps<Node<ImageData>>) {
+export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError } = React.useContext(BoardCtx);
+  const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
   const [draft, setDraft] = React.useState(data.sourceUrl ?? "");
+  // The thumbnail is enough until the card is shown wider than it on screen.
+  const src = (width ?? 260) * zoom > 600 ? data.url ?? data.thumbUrl : data.thumbUrl ?? data.url;
   const saveSource = () => {
-    const url = safeUrl(draft);
-    update({ sourceUrl: url });
+    update({ sourceUrl: safeUrl(draft) });
     setEditingSource(false);
   };
   return (
     <>
-      <Resizer selected={selected} keepAspectRatio />
-      <figure className={cn(card, ring(selected), "flex flex-col")}>
+      <Resizer selected={selected} locked={data.locked} keepAspectRatio />
+      <figure className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} />
         <div className="relative min-h-0 flex-1 bg-ivory">
-          {data.url
+          {src
             // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
-            ? <img src={data.url} alt={data.title || "Reference image"} draggable={false} className="h-full w-full object-cover" />
+            ? <img src={src} alt={data.alt || data.title || "Reference image"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className="h-full w-full object-cover" />
             : <div className="flex h-full items-center justify-center text-[12px] text-muted">Image unavailable</div>}
         </div>
         <figcaption className="space-y-1 border-t border-line px-2.5 py-2">
           <InlineText value={data.title} onChange={(v) => update({ title: v })} placeholder="Caption" className="text-[12px] font-medium" />
+          {selected && canEdit && (
+            <InlineText value={data.alt ?? ""} onChange={(v) => update({ alt: v })} placeholder="Alt text: describe the image" className="text-[11px] text-muted" />
+          )}
           <div className="flex items-center justify-between gap-2">
             {editingSource ? (
               <form className="nodrag flex w-full gap-1" onSubmit={(e) => { e.preventDefault(); saveSource(); }}>
@@ -113,8 +125,9 @@ export function NoteNode({ id, data, selected }: NodeProps<Node<NoteData>>) {
   const { canEdit } = React.useContext(BoardCtx);
   return (
     <>
-      <Resizer selected={selected} minHeight={60} />
-      <div className={cn(card, ring(selected), NOTE_TONES[data.tone], "flex flex-col p-3")}>
+      <Resizer selected={selected} locked={data.locked} minHeight={60} />
+      <div className={cn(card, ring(selected), NOTE_TONES[data.tone], "relative flex flex-col p-3")}>
+        <LockBadge locked={data.locked} />
         <InlineText multiline value={data.text} onChange={(v) => update({ text: v })} placeholder="Write a note…" className="flex-1 text-[13px] leading-relaxed" />
         {selected && canEdit && (
           <div className="nodrag mt-1 flex gap-1" role="group" aria-label="Note colour">
@@ -131,18 +144,26 @@ export function NoteNode({ id, data, selected }: NodeProps<Node<NoteData>>) {
 
 export function LinkNode({ id, data, selected }: NodeProps<Node<LinkData>>) {
   const update = useUpdate(id);
+  const { onMediaError } = React.useContext(BoardCtx);
   return (
     <>
-      <Resizer selected={selected} minHeight={90} />
-      <div className={cn(card, ring(selected), "flex flex-col gap-1.5 p-3")}>
-        <p className="flex items-center gap-1.5 text-[11px] text-muted"><Link2 className="size-3.5 text-violet" /> {data.url ? host(data.url) : "No link"}</p>
-        <InlineText value={data.title} onChange={(v) => update({ title: v })} placeholder="Title" className="text-[14px] font-medium tracking-tight" />
-        <InlineText multiline value={data.note} onChange={(v) => update({ note: v })} placeholder="Why it matters" className="min-h-0 flex-1 text-[12px] text-muted" />
-        {data.url && (
-          <a href={data.url} target="_blank" rel="noopener noreferrer" className="nodrag inline-flex w-fit items-center gap-1 rounded-full bg-lilac/60 px-2 py-0.5 text-[11px] font-medium text-violet-ink hover:bg-lilac">
-            Open source <ExternalLink className="size-3" />
-          </a>
+      <Resizer selected={selected} locked={data.locked} minHeight={90} />
+      <div className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} />
+        {data.previewUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- preview stored in the board's private bucket
+          <img src={data.previewUrl} alt="" loading="lazy" onError={onMediaError} className="h-28 w-full shrink-0 border-b border-line object-cover" />
         )}
+        <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-3">
+          <p className="flex items-center gap-1.5 text-[11px] text-muted"><Link2 className="size-3.5 text-violet" /> <span className="truncate">{data.siteName || (data.url ? host(data.url) : "No link")}</span></p>
+          <InlineText value={data.title} onChange={(v) => update({ title: v })} placeholder="Title" className="text-[14px] font-medium tracking-tight" />
+          <InlineText multiline value={data.note} onChange={(v) => update({ note: v })} placeholder="Why it matters" className="min-h-0 flex-1 text-[12px] text-muted" />
+          {data.url && (
+            <a href={data.url} target="_blank" rel="noopener noreferrer" className="nodrag inline-flex w-fit items-center gap-1 rounded-full bg-lilac/60 px-2 py-0.5 text-[11px] font-medium text-violet-ink hover:bg-lilac">
+              Open source <ExternalLink className="size-3" />
+            </a>
+          )}
+        </div>
       </div>
     </>
   );
@@ -153,8 +174,9 @@ export function EntityNode({ data, selected }: NodeProps<Node<EntityData>>) {
   const theme = TYPE_THEME[data.type] ?? "culture";
   return (
     <>
-      <Resizer selected={selected} minWidth={160} minHeight={150} />
-      <div className={cn(card, ring(selected), "flex flex-col")}>
+      <Resizer selected={selected} locked={data.locked} minWidth={160} minHeight={150} />
+      <div className={cn(card, ring(selected), "relative flex flex-col")}>
+        <LockBadge locked={data.locked} />
         <EntityImage src={data.imageUrl} theme={theme} seed={data.entityId || data.name} rounded={false} className="min-h-0 flex-1" />
         <div className="space-y-1 border-t border-line px-2.5 py-2">
           <p className="truncate text-[13px] font-medium tracking-tight">{data.name}</p>
@@ -175,8 +197,9 @@ export function GroupNode({ id, data, selected }: NodeProps<Node<GroupData>>) {
   const update = useUpdate(id);
   return (
     <>
-      <Resizer selected={selected} minWidth={220} minHeight={160} />
-      <div className={cn("h-full w-full rounded-cc-lg border-2 border-dashed bg-lilac/15", selected ? "border-violet" : "border-lavender/70")}>
+      <Resizer selected={selected} locked={data.locked} minWidth={220} minHeight={160} />
+      <div className={cn("relative h-full w-full rounded-cc-lg border-2 border-dashed bg-lilac/15", selected ? "border-violet" : "border-lavender/70")}>
+        <LockBadge locked={data.locked} />
         <div className="-translate-y-full px-1 pb-1">
           <InlineText value={data.label} onChange={(v) => update({ label: v })} placeholder="Group name" className="cc-eyebrow w-64 text-violet-ink" />
         </div>

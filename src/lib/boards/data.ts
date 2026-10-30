@@ -2,7 +2,7 @@ import "server-only";
 import { withUser, type Tx } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Ctx } from "@/lib/data/workspace";
-import type { EntityData } from "./schema";
+import { mediaPaths, type EntityData } from "./schema";
 
 export const BOARD_BUCKET = "board-media";
 const SIGNED_URL_SECONDS = 60 * 60 * 6;
@@ -32,7 +32,24 @@ export async function signPaths(paths: string[]): Promise<Map<string, string>> {
 }
 
 const imagePaths = (nodes: Record<string, unknown>[]) =>
-  nodes.flatMap((n) => (n.type === "image" && typeof (n.data as { path?: unknown })?.path === "string" ? [(n.data as { path: string }).path] : []));
+  nodes.flatMap((n) => {
+    const d = n.data as { path?: unknown; thumbPath?: unknown } | undefined;
+    const p = d?.thumbPath ?? d?.path;
+    return n.type === "image" && typeof p === "string" ? [p] : [];
+  });
+
+/** Adds signed display URLs to every stored file a set of cards uses (`url`, `thumbUrl`, `previewUrl`). */
+export async function signNodes(nodes: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  const signed = await signPaths(mediaPaths(nodes as { type?: string; data: Record<string, unknown> }[]));
+  return nodes.map((n) => {
+    const d = n.data as Record<string, unknown>;
+    if (n.type === "image") {
+      return { ...n, data: { ...d, url: typeof d.path === "string" ? signed.get(d.path) : undefined, thumbUrl: typeof d.thumbPath === "string" ? signed.get(d.thumbPath) : undefined } };
+    }
+    if (n.type === "link" && typeof d.imagePath === "string") return { ...n, data: { ...d, previewUrl: signed.get(d.imagePath) } };
+    return n;
+  });
+}
 
 export async function listBoards(ctx: Ctx, projectId: string): Promise<BoardSummary[]> {
   const rows = await withUser(ctx.user.id, (tx) => tx`
@@ -49,12 +66,7 @@ export async function listBoards(ctx: Ctx, projectId: string): Promise<BoardSumm
 export async function getBoard(ctx: Ctx, projectId: string, boardId: string): Promise<BoardDoc | null> {
   const [row] = await withUser(ctx.user.id, (tx) => tx`select * from inspiration_boards where id = ${boardId} and project_id = ${projectId}`);
   if (!row) return null;
-  const nodes = ((row.content?.nodes ?? []) as Record<string, unknown>[]);
-  const signed = await signPaths(imagePaths(nodes));
-  const withUrls = nodes.map((n) => {
-    const d = n.data as { path?: string };
-    return n.type === "image" && d?.path ? { ...n, data: { ...d, url: signed.get(d.path) } } : n;
-  });
+  const withUrls = await signNodes((row.content?.nodes ?? []) as Record<string, unknown>[]);
   return { id: row.id, projectId: row.project_id, name: row.name, revision: row.revision, palette: row.palette ?? [], content: { nodes: withUrls, viewport: row.content?.viewport ?? null } };
 }
 

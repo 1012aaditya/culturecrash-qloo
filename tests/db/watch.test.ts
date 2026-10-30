@@ -95,7 +95,7 @@ d("Watch Milestone 1 (A–H)", () => {
       await sql.unsafe(text);
     }
     // The app's own connection points at the test database; the cron route and actions use it unchanged.
-    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local" });
+    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "0" });
     globalThis.__ccSql = undefined;
     vi.stubGlobal("fetch", fakeFetch);
 

@@ -3,13 +3,16 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { withUser } from "@/lib/db";
 import { logActivity } from "@/lib/data/activity";
 import { friendly, invalid, type Result } from "@/lib/data/action-utils";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
+import { env } from "@/lib/env";
 import { assertCan } from "@/lib/permissions";
+import { withUser, type Tx } from "@/lib/db";
 import { processWatchJob } from "./collect";
+import { backfillKeys } from "./plan";
+import { runHistoryWorkers } from "./schedule";
 
 const name = z.string().trim().min(1, "Enter a name").max(120);
 const watchSchema = z.object({
@@ -34,6 +37,7 @@ export async function saveWatchAction(clientId: string, input: z.input<typeof wa
   const names = [d.company, ...d.competitors].map((n) => n.toLowerCase());
   if (new Set(names).size !== names.length) return { ok: false, error: "The company and competitors must all be different." };
   const ctx = await getCtx();
+  let backfill = false;
   try {
     assertCan(ctx.workspace.role, "client.edit");
     const ws = ctx.workspace.workspaceId;
@@ -56,14 +60,17 @@ export async function saveWatchAction(clientId: string, input: z.input<typeof wa
         if (match) await tx`update watch_targets set role = ${t.role}, name = ${t.name} where id = ${match.id}`;
         else await tx`insert into watch_targets (watch_id, workspace_id, role, name) values (${w.id}, ${ws}, ${t.role}, ${t.name})`;
       }
+      // Fill in the last 30 days straight away, so the dashboard has history from the start.
+      if (w.created && (await queueHistory(tx, w.id, ws))) backfill = true;
       await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, verb: w.created ? "created" : "updated", objectType: "watch", objectId: w.id,
         summary: `${w.created ? "started watching" : "updated the watch on"} ${client.name}${d.competitors.length ? ` and ${d.competitors.join(", ")}` : ""}` });
     });
   } catch (e) {
     return friendly(e);
   }
+  if (backfill) after(() => runHistoryWorkers());
   revalidatePath(path(clientId));
-  return { ok: true, message: "Watch saved. The next daily check will collect news." };
+  return { ok: true, message: backfill ? "Watch started. The last 30 days of news are loading now." : "Watch saved." };
 }
 
 export async function setWatchStatusAction(clientId: string, status: "active" | "paused"): Promise<Result> {
@@ -151,4 +158,38 @@ export async function saveWatchSourcesAction(clientId: string, input: { target: 
   }
   revalidatePath(path(clientId));
   return { ok: true, message: "Websites saved. They're checked with the next daily run." };
+}
+
+/** Queues the watch's history chunks that don't exist yet; true when any were added. */
+async function queueHistory(tx: Tx, watchId: string, ws: string): Promise<boolean> {
+  const keys = backfillKeys(env().WATCH_BACKFILL_DAYS);
+  if (!keys.length) return false;
+  const rows = await tx`insert into watch_jobs (watch_id, workspace_id, run_key)
+    select ${watchId}, ${ws}, k from unnest(${keys}::text[]) as k
+    on conflict (watch_id, run_key) do nothing returning id`;
+  return rows.length > 0;
+}
+
+/** Fills in the last 30 days for a watch that doesn't have its history yet (once per watch). */
+export async function loadHistoryAction(clientId: string): Promise<Result> {
+  if (!isUuid(clientId)) return { ok: false, error: "Invalid request." };
+  if (env().WATCH_BACKFILL_DAYS === 0) return { ok: false, error: "History loading is turned off on this server." };
+  const ctx = await getCtx();
+  try {
+    assertCan(ctx.workspace.role, "client.edit");
+    const start = await withUser(ctx.user.id, async (tx) => {
+      const [w] = await tx`select id, workspace_id from watches where client_id = ${clientId} and workspace_id = ${ctx.workspace.workspaceId}`;
+      if (!w) return false;
+      const added = await queueHistory(tx, w.id, w.workspace_id);
+      // Chunks the daily run queued but hasn't reached yet are started now too.
+      const [{ waiting }] = await tx`select count(*)::int as waiting from watch_jobs where watch_id = ${w.id} and run_key like 'backfill:%' and status = 'queued'`;
+      return added || waiting > 0;
+    });
+    if (!start) return { ok: false, error: "History is already loaded or loading for this watch." };
+    after(() => runHistoryWorkers());
+  } catch (e) {
+    return friendly(e);
+  }
+  revalidatePath(path(clientId));
+  return { ok: true, message: "Loading the last 30 days. This takes about two minutes." };
 }

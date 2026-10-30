@@ -18,6 +18,8 @@ export type WatchTask = {
   window: "d" | "w";
   /** Exa's lower bound on publication time (ISO). */
   since: string;
+  /** Upper bound on publication time (ISO); set only for history backfill. */
+  until?: string;
 };
 
 const DAY = 86_400_000;
@@ -52,6 +54,44 @@ export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[
       ...(opts.youtube ? [{ ...base, key: `${t.id}:youtube`, provider: "youtube" as const, query: nameQ, page: 1 }] : []),
     ];
   });
+}
+
+/** Days of history a new watch is filled in with. */
+export const BACKFILL_DAYS = 30;
+/** History is loaded in chunks of this many days, one job each, so parallel workers share it. */
+export const BACKFILL_CHUNK_DAYS = 5;
+
+/** Job run keys for a watch's history: "backfill:d0-7", "backfill:d7-14", … */
+export function backfillKeys(days = BACKFILL_DAYS): string[] {
+  const keys: string[] = [];
+  for (let from = 0; from < days; from += BACKFILL_CHUNK_DAYS) keys.push(`backfill:d${from}-${Math.min(from + BACKFILL_CHUNK_DAYS, days)}`);
+  return keys;
+}
+
+/** The day range ("days ago", end exclusive) a history job covers. */
+export function backfillRange(runKey: string): { from: number; to: number } | null {
+  const m = /^backfill:d(\d+)-(\d+)$/.exec(runKey);
+  return m ? { from: Number(m[1]), to: Number(m[2]) } : null;
+}
+
+/**
+ * History backfill, collected exactly like the daily check — the same searches, one UTC day at a time — so
+ * every day in the charts was gathered the same way and days can be compared fairly. Each search is limited
+ * to its day, so even a vague "2 weeks ago" from Serper lands on the right date. Days `from`..`to` ago.
+ */
+export function buildBackfillPlan(targets: WatchTarget[], opts: { now?: Date; from?: number; to?: number; keywords?: string[] } = {}): WatchTask[] {
+  const now = opts.now ?? new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const tasks: WatchTask[] = [];
+  for (let ago = opts.from ?? 0; ago < (opts.to ?? BACKFILL_DAYS); ago++) {
+    const start = today - ago * DAY;
+    const end = Math.min(start + DAY - 1000, now.getTime());
+    const day = buildWatchPlan(targets, { keywords: opts.keywords ?? [], lastSuccessAt: null, now });
+    for (const t of day) {
+      tasks.push({ ...t, key: `${t.key}:day${ago}`, since: new Date(start).toISOString(), until: new Date(end).toISOString(), afterFull: t.afterFull ? `${t.afterFull}:day${ago}` : undefined });
+    }
+  }
+  return tasks;
 }
 
 /** Results per Serper page; a full first page means there are probably more worth fetching. */

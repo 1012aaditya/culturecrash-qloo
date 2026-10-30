@@ -2,6 +2,7 @@ import "server-only";
 import { privilegedSql } from "@/lib/db";
 import { env } from "@/lib/env";
 import { processWatchJob, type ClaimedJob } from "./collect";
+import { backfillKeys } from "./plan";
 
 /** Vercel Hobby runs cron once a day, so one run must finish every due watch; stop well before 300 s. */
 const RUN_BUDGET_MS = 240_000;
@@ -44,6 +45,14 @@ export async function runWatchCron(opts: { now?: Date; budgetMs?: number; dispat
     on conflict (watch_id, run_key) do nothing
     returning id`;
 
+  // Watches that have never had their history filled in get it once (new watches usually already have).
+  const keys = backfillKeys(env().WATCH_BACKFILL_DAYS);
+  if (keys.length) {
+    await sql`insert into watch_jobs (watch_id, workspace_id, run_key)
+      select w.id, w.workspace_id, k from watches w, unnest(${keys}::text[]) as k where w.status = 'active'
+      on conflict (watch_id, run_key) do nothing`;
+  }
+
   const [{ queued }] = await sql`select count(*)::int as queued from watch_jobs where status = 'queued' and attempts < ${MAX_ATTEMPTS}`;
   const extra = Math.min(MAX_EXTRA_WORKERS, Math.max(0, Math.ceil(queued / JOBS_PER_WORKER) - 1));
   const dispatch = opts.dispatch ?? callWorkerRoute;
@@ -61,6 +70,11 @@ export async function runWatchCron(opts: { now?: Date; budgetMs?: number; dispat
   if (retried.length) results.push(...(await drain(deadline)));
 
   return { revived: revived.length, enqueued: enqueued.length, workers: extra, retried: retried.length, processed: results.length, results, ms: Date.now() - started };
+}
+
+/** Workers that load a watch's history in parallel inside one request (each history chunk takes about 100 s). */
+export async function runHistoryWorkers(count = 3) {
+  await Promise.allSettled(Array.from({ length: count }, () => runWatchWorker({ budgetMs: 270_000 })));
 }
 
 /** One extra worker: claims and processes jobs until its own time budget runs out. Never starts more workers. */

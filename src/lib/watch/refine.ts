@@ -1,9 +1,9 @@
 import "server-only";
-import { withUser } from "@/lib/db";
+import { withUser, type Tx } from "@/lib/db";
 import { classify, EVENT_WINDOW_DAYS, groupStories } from "./relevance";
 
-/** Stories regrouped on each run: wide enough to catch late coverage of an event, small enough to stay fast. */
-const REGROUP_DAYS = 14;
+/** Stories regrouped on each run: the backfilled month plus a margin, still small enough to stay fast. */
+const REGROUP_DAYS = 35;
 
 /**
  * After collection: gives every new story a relevance verdict, then regroups recent relevant stories
@@ -11,6 +11,7 @@ const REGROUP_DAYS = 14;
  */
 export async function refineWatch(ctx: { userId: string; watchId: string; context: string[] }) {
   await withUser(ctx.userId, async (tx) => {
+    await lockWatch(tx, ctx.watchId);
     const names = (await tx`select name from watch_targets where watch_id = ${ctx.watchId}`).map((t) => t.name as string);
     const unrated = await tx`select id, title, excerpt, provider, source_type from research_documents where watch_id = ${ctx.watchId} and watch_relevance is null`;
     for (const d of unrated) {
@@ -29,4 +30,13 @@ export async function refineWatch(ctx: { userId: string; watchId: string; contex
       if ((s.watch_event_lead ?? null) !== value) await tx`update research_documents set watch_event_lead = ${value} where id = ${s.id}`;
     }
   });
+}
+
+/**
+ * Serialises work that rewrites a watch's stories (relevance, grouping, AI labels). History chunks run in
+ * parallel workers; without this, two finishing at once deadlock updating the same rows. Held to the end
+ * of the transaction.
+ */
+export async function lockWatch(tx: Tx, watchId: string) {
+  await tx`select pg_advisory_xact_lock(hashtext(${`watch:${watchId}`}))`;
 }

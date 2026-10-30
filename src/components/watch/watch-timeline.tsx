@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Ago, When } from "@/components/ui/time";
 import { useToast } from "@/components/ui/toast";
+import { TopicBadge } from "@/components/watch/watch-dashboard";
 import { checkNowAction, setWatchStatusAction } from "@/lib/watch/actions";
 import type { HiddenItem, SourceHealth, WatchItem, WatchRun, WatchView } from "@/lib/watch/data";
 import { cn, formatDate, pluralize } from "@/lib/utils";
@@ -71,6 +72,7 @@ export function WatchTimeline({ view }: { view: WatchView }) {
               <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
                 {item.target && <Badge tone={item.target.role === "company" ? "violet" : "peach"}>{item.target.name}</Badge>}
                 {KIND[item.sourceType] && <Badge tone="outline">{item.provider === "page" ? "Website change" : KIND[item.sourceType]}</Badge>}
+                <TopicBadge topic={item.topic} />
                 <span>{item.publisher ?? "Unknown publisher"}</span>
                 <span aria-hidden>·</span>
                 <Published item={item} />
@@ -127,7 +129,7 @@ function HiddenItems({ items }: { items: HiddenItem[] }) {
               {h.url ? <a href={h.url} target="_blank" rel="noopener noreferrer nofollow" className="hover:text-violet-ink">{h.title}</a> : h.title}
             </p>
             <p className="text-[12px] text-muted">
-              {h.kind === "listing" ? "Shop listing" : "Name clash"}{h.target && ` · ${h.target}`}{h.publisher && ` · ${h.publisher}`}{h.reason && ` — ${h.reason}`}
+              {h.kind === "listing" ? "Shop listing" : h.kind === "off_topic" ? "Not about the brand" : "Name clash"}{h.target && ` · ${h.target}`}{h.publisher && ` · ${h.publisher}`}{h.reason && ` — ${h.reason}`}
             </p>
           </li>
         ))}
@@ -270,6 +272,42 @@ export function WatchRunHistory({ runs }: { runs: WatchRun[] }) {
           </li>
         ))}
       </ol>
+    </div>
+  );
+}
+
+/** One line above the dashboard and story list: when it last ran, when it runs next, and Check now. */
+export function WatchStatusBar({ view, canEdit }: { view: WatchView; canEdit: boolean }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [pending, start] = React.useTransition();
+  const busy = view.lastJob?.status === "running" || view.lastJob?.status === "queued" || view.history?.status === "running";
+  // While a check (or the history load) runs, refresh every few seconds so results appear when they land.
+  React.useEffect(() => {
+    if (!busy) return;
+    const t = window.setInterval(() => router.refresh(), 5000);
+    const stop = window.setTimeout(() => window.clearInterval(t), 5 * 60_000);
+    return () => { window.clearInterval(t); window.clearTimeout(stop); };
+  }, [busy, router]);
+  const w = view.watch;
+  if (!w) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-[13px] text-muted">
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {w.status === "active" ? <Badge tone="success"><CheckCircle2 /> Active</Badge> : <Badge tone="outline"><Pause /> Paused</Badge>}
+        <span>Last checked {w.lastAttemptedAt ? <Ago value={w.lastAttemptedAt} /> : "not yet"}</span>
+        {w.status === "active" && <span>· Next check <When value={w.nextCheckAt} /></span>}
+        {busy && <span className="inline-flex items-center gap-1.5 text-violet-ink"><RefreshCw className="size-3.5 animate-spin" /> Checking now…</span>}
+      </p>
+      {canEdit && w.status === "active" && (
+        <Button size="sm" variant="outline" disabled={pending || busy} onClick={() => start(async () => {
+          const r = await checkNowAction(view.client.id);
+          toast(r.ok ? { tone: "success", title: "Check started", description: r.message } : { tone: "error", title: r.error ?? "That didn’t work." });
+          router.refresh();
+        })}>
+          <RefreshCw className={cn(pending && "animate-spin")} /> Check now
+        </Button>
+      )}
     </div>
   );
 }

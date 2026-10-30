@@ -103,7 +103,8 @@ export const EVENT_WINDOW_DAYS = 4;
 export const EVENT_THRESHOLD = 0.34;
 
 /**
- * Groups stories about the same event: same company, published within EVENT_WINDOW_DAYS, and sharing
+ * Groups stories about the same event: same company, published within EVENT_WINDOW_DAYS of the event's
+ * first story, and sharing
  * distinctive words (weighted by rarity across the watch, so "Q3" or "Vegam" count far more than
  * "launch"). Returns a map from story id to the id of the event's first story. Deterministic: stories
  * are processed oldest first and join the best-matching earlier event.
@@ -127,8 +128,9 @@ export function groupStories(stories: Story[], targetNames: string[]): Map<strin
     let best: { event: string; score: number } | null = null;
     for (const [event, list] of members) {
       if (list[0].targetId !== s.targetId) continue;
+      // Measured from the event's first story, so an event can't grow into a chain across the month.
+      if (s.at - list[0].at > EVENT_WINDOW_DAYS * 86_400_000) continue;
       for (const m of list) {
-        if (Math.abs(s.at - m.at) > EVENT_WINDOW_DAYS * 86_400_000) continue;
         const theirs = bags.get(m.id)!;
         const shared = [...mine].filter((w) => theirs.has(w) && df.get(w)! < n);
         if (shared.length < 2) continue;

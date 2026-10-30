@@ -109,7 +109,7 @@ d("Watch Milestone 2: persistent monitoring", () => {
       if (/storage\.(buckets|objects)/.test(text)) continue;
       await sql.unsafe(text);
     }
-    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local" });
+    Object.assign(process.env, { DATABASE_URL: url.toString(), CRON_SECRET: SECRET, SERPER_API_KEY: "serper-test-key", EXA_API_KEY: "exa-test-key", AUTH_MODE: "local", WATCH_BACKFILL_DAYS: "0" });
     globalThis.__ccSql = undefined;
     vi.stubGlobal("fetch", fakeFetch);
     O = await user("olivia@o.test");

@@ -106,6 +106,8 @@ export async function serperNews(opts: {
   count?: number;
   /** Results page (1-based); page 2 holds results 11–20. */
   page?: number;
+  /** A fixed date range instead of the recency window (Watch's history backfill). */
+  range?: { from: Date; to: Date };
   country?: string | null;
   apiKey: string;
   usdPerCall?: number;
@@ -115,7 +117,8 @@ export async function serperNews(opts: {
   const q = opts.query.slice(0, 400);
   const num = Math.min(opts.count ?? 10, 20);
   const gl = opts.country && /^[a-z]{2}$/i.test(opts.country) ? opts.country.toLowerCase() : undefined;
-  const tbs = `qdr:${opts.window}`;
+  const mdy = (d: Date) => `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
+  const tbs = opts.range ? `cdr:1,cd_min:${mdy(opts.range.from)},cd_max:${mdy(opts.range.to)}` : `qdr:${opts.window}`;
   const page = opts.page && opts.page > 1 ? opts.page : undefined;
   return requestJson<Hit[]>({
     url: "https://google.serper.dev/news",
@@ -133,7 +136,12 @@ export async function serperNews(opts: {
       const title = str(o.title);
       const url = str(o.link);
       if (!title || !url) return [];
-      const date = parseNewsDate(str(o.date), opts.now);
+      let date = parseNewsDate(str(o.date), opts.now);
+      // A relative date ("3 weeks ago") is coarse; inside a fixed range the item can't be outside it.
+      if (date && opts.range && date.precision === "approximate") {
+        const t = Math.min(Math.max(Date.parse(date.at), opts.range.from.getTime()), opts.range.to.getTime());
+        date = { at: new Date(t).toISOString(), precision: "approximate" };
+      }
       return [{
         provider: "serper", sourceType: "news", url, externalId: null,
         title: decodeEntities(title), snippet: decodeEntities(str(o.snippet) ?? "").slice(0, 1500),

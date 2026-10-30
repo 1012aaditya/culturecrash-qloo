@@ -34,6 +34,8 @@ const schema = z.object({
   // YouTube's free quota is 10,000 units a day per key (a search costs 100). Watch stops searching
   // YouTube once this many units have been used today, leaving room for research.
   YOUTUBE_DAILY_UNIT_CAP: z.coerce.number().int().min(0).default(8000),
+  // Days of news history a new watch is filled in with (0 = off).
+  WATCH_BACKFILL_DAYS: z.coerce.number().int().min(0).max(60).default(30),
   REDDIT_CLIENT_ID: opt(z.string().min(8)),
   REDDIT_CLIENT_SECRET: opt(z.string().min(8)),
   // Reddit requires approval for commercial use of its Data API; set to "approved" only once granted.

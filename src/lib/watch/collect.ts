@@ -10,14 +10,27 @@ import { youtubeSearch, youtubeVideoStats } from "@/lib/research/deep/providers/
 import type { Hit, ProviderCall } from "@/lib/research/deep/types";
 import { canonicalizeUrl } from "@/lib/research/deep/url";
 import { platformHeadroomUsd } from "@/lib/research/spend";
-import { FAILING_AFTER, SERPER_PAGE_SIZE, buildWatchPlan, matchTarget, nextRunAfter, type WatchTarget, type WatchTask } from "./plan";
-import { refineWatch } from "./refine";
+import { classifyWatch } from "./classify";
+import { FAILING_AFTER, SERPER_PAGE_SIZE, backfillRange, buildBackfillPlan, buildWatchPlan, matchTarget, nextRunAfter, type WatchTarget, type WatchTask } from "./plan";
+import { lockWatch, refineWatch } from "./refine";
 import { checkSites } from "./sites";
 import { loadKnown, storeItem, type Known } from "./store";
 
 /** attempts and run_key come from the queue: a scheduled job that fails on its first attempt is retried the same day. */
 export type ClaimedJob = { id: string; watch_id: string; workspace_id: string; attempts?: number; run_key?: string };
 export type JobOutcome = { status: "completed" | "partially_completed" | "failed"; found: number; added: number; error: string | null; retryable: boolean };
+
+/** Searches running at once within one job (each spends most of its time waiting on the provider). */
+const SEARCH_CONCURRENCY = 4;
+const TIME_LIMIT = "Stopped at the time limit; the rest runs next time.";
+
+/** Runs `fn` over `items`, at most `limit` at a time. */
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]);
+  }));
+}
 
 /** Watch results are cached a little under a day: a re-run the same day costs nothing and finds nothing new. */
 const CACHE_HOURS = 20;
@@ -49,7 +62,10 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
   if (!setup.targets.length) return finish(userId, job, watch, { status: "failed", found: 0, added: 0, error: "No company is set on this watch.", retryable: false });
 
   const known = setup.known;
-  const tasks = buildWatchPlan(setup.targets, {
+  // A backfill job fills in the last 30 days by publication week; every other job is the usual check.
+  const backfill = isBackfill(job);
+  const range = backfill ? backfillRange(job.run_key!) : null;
+  const tasks = backfill ? buildBackfillPlan(setup.targets, { from: range?.from ?? 0, to: range?.to ?? 0, keywords: watch.keywords as string[] }) : buildWatchPlan(setup.targets, {
     keywords: watch.keywords as string[], lastSuccessAt: watch.last_success_at ? new Date(watch.last_success_at as string) : null, youtube: Boolean(env().YOUTUBE_API_KEY),
   });
   const country = countryCode(watch.market as string | null);
@@ -72,26 +88,34 @@ export async function processWatchJob(job: ClaimedJob, opts: { deadline?: number
     return true;
   };
 
-  for (const task of tasks) {
-    if (task.afterFull && !full.has(task.afterFull)) continue; // page 1 wasn't full: no page 2
-    if (Date.now() > deadline) { stop = "Stopped at the time limit; the rest runs next time."; break; }
-    if (!(await attempt(task))) break;
-  }
+  // Searches wait on the network, so a few run at once. First pages first: a second page only runs when its
+  // first page came back full.
+  const run = (list: WatchTask[]) => pool(list, SEARCH_CONCURRENCY, async (task) => {
+    if (stop) return;
+    if (task.afterFull && !full.has(task.afterFull)) return; // page 1 wasn't full: no page 2
+    if (Date.now() > deadline) { stop = TIME_LIMIT; return; }
+    await attempt(task);
+  });
+  await run(tasks.filter((t) => !t.afterFull));
+  await run(tasks.filter((t) => t.afterFull));
   // One more try for searches that failed for reasons that can pass (timeouts, rate limits, 5xx).
-  const retry = tasks.filter((t) => { const r = results.get(t.key); return r && !r.ok && !r.config; });
-  for (const task of stop ? [] : retry) {
-    if (Date.now() > deadline || !(await attempt(task))) break;
-  }
+  if (!stop) await run(tasks.filter((t) => { const r = results.get(t.key); return r && !r.ok && !r.config; }));
 
   // Websites and feeds, then fresh view counts for recent videos. Neither changes whether the searches succeeded.
-  if (!stop && Date.now() < deadline) {
+  if (!backfill && !stop && Date.now() < deadline) {
     const sites = await checkSites({ ws, watchId: job.watch_id, jobId: job.id, known, userId, deadline });
     found += sites.found;
     added += sites.added;
   }
-  if (!stop && Date.now() < deadline) await refreshVideoStats(ctx);
-  // Relevance verdicts and story grouping. Rules only, no network: cheap enough to always run.
-  await refineWatch({ userId, watchId: job.watch_id, context: [watch.client_industry ?? "", ...(watch.keywords as string[])] });
+  if (!backfill && !stop && Date.now() < deadline) await refreshVideoStats(ctx);
+  // Rules first (listings, name clashes), then Claude labels relevance, topic and importance, then events are
+  // regrouped without anything Claude hid.
+  const refine = () => refineWatch({ userId, watchId: job.watch_id, context: [watch.client_industry ?? "", ...(watch.keywords as string[])] });
+  await refine();
+  if (!stop && Date.now() < deadline) {
+    const c = await classifyWatch({ userId, ws, watchId: job.watch_id, jobId: job.id, industry: watch.client_industry, deadline });
+    if (c.hidden) await refine();
+  }
 
   const ran = results.size;
   const failures = [...results.values()].filter((r) => !r.ok);
@@ -128,6 +152,9 @@ async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; count
   const call = cached ? fromCache(cached, task, country) : await search(task, country);
   const searched = targets.find((t) => t.id === task.targetId)!;
   const n = await withUser(userId, async (tx) => {
+    // Searches run in parallel, but saving is one at a time per watch: two saves inserting overlapping
+    // stories in different orders would otherwise deadlock on the unique story index.
+    await lockWatch(tx, job.watch_id);
     await ledger(tx, job.id, ws, task, call);
     if (!call.ok) return { found: 0, added: 0 };
     if (!cached) await cachePut(tx, ws, task.provider, cacheKeyFor(task, country), call.data, CACHE_HOURS);
@@ -147,10 +174,14 @@ async function runTask(ctx: { job: ClaimedJob; ws: string; userId: string; count
   return { ok: call.ok, config: call.errorKind === "config", ...n, full: call.ok && task.provider === "serper" && call.data.length >= SERPER_PAGE_SIZE };
 }
 
+const isBackfill = (job: ClaimedJob) => Boolean(job.run_key?.startsWith("backfill:"));
+
 const paramsFor = (task: WatchTask, country: string | null) => task.provider === "serper"
-  ? { q: task.query, window: task.window, country, count: SERPER_PAGE_SIZE, ...(task.page > 1 ? { page: task.page } : {}) }
+  ? task.until
+    ? { q: task.query, day: task.since.slice(0, 10), country, count: SERPER_PAGE_SIZE, ...(task.page > 1 ? { page: task.page } : {}) }
+    : { q: task.query, window: task.window, country, count: SERPER_PAGE_SIZE, ...(task.page > 1 ? { page: task.page } : {}) }
   : task.provider === "youtube" ? { q: task.query, since: task.since.slice(0, 10), country, count: 10 }
-  : { q: task.query, since: task.since.slice(0, 10), category: "news", count: 8 };
+  : { q: task.query, since: task.since.slice(0, 10), ...(task.until ? { until: task.until.slice(0, 10) } : {}), category: "news", count: 8 };
 const cacheKeyFor = (task: WatchTask, country: string | null) => cacheKey(`watch:${task.provider}`, task.query, paramsFor(task, country));
 
 function fromCache(data: Hit[], task: WatchTask, country: string | null): ProviderCall<Hit[]> {
@@ -162,13 +193,18 @@ async function search(task: WatchTask, country: string | null): Promise<Provider
   const e = env();
   if (task.provider === "serper") {
     return e.SERPER_API_KEY
-      ? serperNews({ query: task.query, window: task.window, page: task.page, count: SERPER_PAGE_SIZE, country, apiKey: e.SERPER_API_KEY, usdPerCall: e.SERPER_USD_PER_REQUEST })
+      ? serperNews({
+        query: task.query, window: task.window, page: task.page, count: SERPER_PAGE_SIZE, country, apiKey: e.SERPER_API_KEY, usdPerCall: e.SERPER_USD_PER_REQUEST,
+        ...(task.until ? { range: { from: new Date(task.since), to: new Date(task.until) } } : {}),
+      })
       : notConfigured("SERPER_API_KEY");
   }
   if (task.provider === "youtube") {
     return e.YOUTUBE_API_KEY ? youtubeSearch({ query: task.query, count: 10, regionCode: country, publishedAfter: task.since, apiKey: e.YOUTUBE_API_KEY }) : notConfigured("YOUTUBE_API_KEY");
   }
-  return e.EXA_API_KEY ? exaSearch({ query: task.query, count: 8, apiKey: e.EXA_API_KEY, usdPerCall: e.EXA_USD_PER_REQUEST, startPublishedDate: task.since, category: "news" }) : notConfigured("EXA_API_KEY");
+  return e.EXA_API_KEY
+    ? exaSearch({ query: task.query, count: 8, apiKey: e.EXA_API_KEY, usdPerCall: e.EXA_USD_PER_REQUEST, startPublishedDate: task.since, endPublishedDate: task.until, category: "news" })
+    : notConfigured("EXA_API_KEY");
 }
 
 const notConfigured = (k: string): ProviderCall<Hit[]> => ({ ok: false, data: [], status: "error", httpStatus: null, durationMs: 0, error: `${k} is not set on this server`, errorKind: "config", units: 0, costUsdEstimated: 0, costUsdActual: null, params: {}, raw: null, cached: false });
@@ -270,6 +306,14 @@ async function finish(userId: string, job: ClaimedJob, watch: Watch, out: JobOut
   await withUser(userId, async (tx) => {
     await tx`update watch_jobs set status = ${out.status}, finished_at = now(), found = ${out.found}, added = ${out.added}, error_message = ${out.error}, retryable = ${out.retryable}
       where id = ${job.id}`;
+    if (isBackfill(job)) {
+      // A history chunk that ran out of time goes back in the queue and carries on; searches it already
+      // made come from the cache, so the next worker picks up where this one stopped.
+      if (out.error?.startsWith(TIME_LIMIT)) {
+        await tx`update watch_jobs set status = 'queued', attempts = 0, finished_at = null, started_at = null where id = ${job.id}`;
+      }
+      return; // filling in history doesn't move the daily schedule or count as a check
+    }
     const [w] = await tx`update watches set last_attempted_at = now(), next_run_at = ${nextRunAfter(watch.frequency, new Date())},
         last_success_at = case when ${out.status}::text <> 'failed' then now() else last_success_at end,
         consecutive_failures = case when ${counted}::boolean then consecutive_failures + 1 when ${out.status}::text = 'failed' then consecutive_failures else 0 end,

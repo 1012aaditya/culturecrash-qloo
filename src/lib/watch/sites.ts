@@ -4,6 +4,7 @@ import { withUser } from "@/lib/db";
 import { fetchPage } from "@/lib/research/deep/fetch-page";
 import { canonicalizeUrl, hostOf } from "@/lib/research/deep/url";
 import { BLOCKED_RECHECK_DAYS, FEED_MAX_AGE_DAYS, classifyFetch, normalizeLines, pageDiff, pageLabel, parseFeed, summarizeChange } from "./pages";
+import { lockWatch } from "./refine";
 import { storeItem, type StoreCtx } from "./store";
 
 type Page = { id: string; url: string; kind: "page" | "feed"; watch_target_id: string; status: string; last_checked_at: Date | null };
@@ -50,6 +51,7 @@ async function checkPage(ctx: StoreCtx & { userId: string }, page: Page): Promis
   const lines = normalizeLines(r.text);
   const hash = createHash("sha256").update(lines.join("\n")).digest("hex");
   return withUser(ctx.userId, async (tx) => {
+    await lockWatch(tx, ctx.watchId);
     const recent = await tx`select content_hash, lines from watch_page_snapshots where page_id = ${page.id} order by fetched_at desc limit 3`;
     const snapshot = () => tx`insert into watch_page_snapshots (workspace_id, watch_id, page_id, watch_job_id, content_hash, lines)
       values (${ctx.ws}, ${ctx.watchId}, ${page.id}, ${ctx.jobId}, ${hash}, ${lines})`;
@@ -97,6 +99,7 @@ async function checkFeed(ctx: StoreCtx & { userId: string }, page: Page): Promis
   }
   const oldest = Date.now() - FEED_MAX_AGE_DAYS * 86_400_000;
   return withUser(ctx.userId, async (tx) => {
+    await lockWatch(tx, ctx.watchId);
     let found = 0, added = 0;
     for (const [i, item] of feed.items.slice(0, 30).entries()) {
       // Undated items are kept: a feed's order already says they're current, and no date is invented for them.

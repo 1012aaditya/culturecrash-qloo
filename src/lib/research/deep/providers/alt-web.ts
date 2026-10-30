@@ -24,12 +24,15 @@ export async function exaSearch(opts: {
   query: string; count?: number; apiKey: string; usdPerCall: number; fetcher?: Fetcher;
   /** Only results published on or after this ISO time (Watch's incremental window). */
   startPublishedDate?: string;
+  /** Only results published on or before this ISO time (Watch's history backfill). */
+  endPublishedDate?: string;
   /** Restrict to one Exa category, e.g. "news". */
   category?: "news";
 }): Promise<ProviderCall<Hit[]>> {
   const params: Record<string, string> = {
     query: opts.query.slice(0, 400), numResults: String(Math.min(opts.count ?? 8, 10)),
-    ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}), ...(opts.category ? { category: opts.category } : {}),
+    ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}), ...(opts.endPublishedDate ? { endPublishedDate: opts.endPublishedDate } : {}),
+    ...(opts.category ? { category: opts.category } : {}),
   };
   return requestJson<Hit[]>({
     url: "https://api.exa.ai/search",
@@ -42,6 +45,7 @@ export async function exaSearch(opts: {
         numResults: Number(params.numResults),
         contents: { highlights: true },
         ...(opts.startPublishedDate ? { startPublishedDate: opts.startPublishedDate } : {}),
+        ...(opts.endPublishedDate ? { endPublishedDate: opts.endPublishedDate } : {}),
         ...(opts.category ? { category: opts.category } : {}),
       }),
     },

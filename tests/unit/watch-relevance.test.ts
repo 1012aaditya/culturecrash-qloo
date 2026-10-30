@@ -78,6 +78,12 @@ describe("story grouping", () => {
     ], ["Nike", "Adidas", "Puma"]);
     expect([g.get("a"), g.get("b"), g.get("c")]).toEqual(["a", "b", "c"]);
   });
+  it("never chains similar stories into one month-long event", () => {
+    const daily = Array.from({ length: 10 }, (_, i) => s(`d${i}`, "puma", "Puma reports quarterly results and narrows its loss guidance", T0 + i * day));
+    const g = groupStories(daily, ["Puma"]);
+    expect(new Set(g.values()).size).toBeGreaterThanOrEqual(2);
+    for (const [id, lead] of g) expect(daily.find((x) => x.id === id)!.at - daily.find((x) => x.id === lead)!.at).toBeLessThanOrEqual(4 * day);
+  });
   it("gives the same answer whatever order stories arrive in", () => {
     const a = groupStories(corpus, ["Nike", "Adidas", "Puma"]);
     const b = groupStories([...corpus].reverse(), ["Nike", "Adidas", "Puma"]);

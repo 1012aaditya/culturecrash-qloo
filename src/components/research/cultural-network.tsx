@@ -230,7 +230,7 @@ export function CulturalNetwork({
                 <EntityImage src={n.imageUrl} theme={TYPE_THEME[n.type] ?? theme} seed={n.providerId} rounded={false} className="absolute inset-0" />
                 {n.culturalTier === "white_space" && (
                   <span className="absolute left-2 top-2 z-10 rounded-full bg-emerald-600/90 px-1.5 py-0.5 text-[9px] font-bold text-white shadow backdrop-blur">
-                    🎯 White-Space
+                    🎯 Leans to brand
                   </span>
                 )}
                 {n.culturalTier === "subcultural_orbit" && (

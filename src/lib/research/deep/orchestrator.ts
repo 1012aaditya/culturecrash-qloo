@@ -6,12 +6,12 @@ import { loadBrief } from "@/lib/data/briefs";
 import { logActivity, trackEvent } from "@/lib/data/activity";
 import { env } from "@/lib/env";
 import { ensureChunks, searchBrandDocs } from "./brand-docs";
-import { Budget, DEPTH_PROFILES, llmCostUsd, type BudgetLimits } from "./budget";
+import { Budget, DEPTH_PROFILES, llmCostUsd, synthesisEstimateUsd, type BudgetLimits } from "./budget";
 import { cacheGet, cacheKey, cachePut } from "./cache";
 import { dedupe, independentCount, isRepeatQuery, mergeClaims, tokens } from "./dedupe";
 import { extractionPrompt, extractionSchema, rulesExtraction, validateExtraction, type ExtractDoc } from "./extract";
 import { fetchPage } from "./fetch-page";
-import { buildPlanV2, countryCode, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan } from "./planner";
+import { buildPlanV2, countryCode, FIRST_ROUND_SHARE, llmPlanSchema, pickQlooEntities, QLOO_PICKS, qlooQuestions, sanitizeLlmPlan, shareAcross } from "./planner";
 import { exaSearch, tavilySearch } from "./providers/alt-web";
 import { braveSearch } from "./providers/brave";
 import { demoSearch } from "./providers/demo";
@@ -138,7 +138,9 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     await ensureChunks(tx, projectId);
     const [{ n }] = await tx`select count(*)::int as n from brand_document_chunks where project_id = ${projectId}`;
     const [webSetting] = await tx`select enabled from integration_settings where workspace_id = ${ws} and provider = 'web_research'`;
-    return { brief: brief!, hasBrandDocs: n > 0, webEnabled: webSetting ? Boolean(webSetting.enabled) : true };
+    // Demo runs never search the client's real documents: fictional sources and real brand material
+    // must not end up side by side in one report.
+    return { brief: brief!, hasBrandDocs: !isDemo && n > 0, webEnabled: webSetting ? Boolean(webSetting.enabled) : true };
   });
   let registry: ProviderInfo[] = providerRegistry({ demo: isDemo });
   if (!ctx.webEnabled) {
@@ -183,7 +185,12 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const stop = await halt();
     if (stop) { stopReason = stop; break; }
     budget.usage.rounds = round;
-    const tasks: Task[] = round === 1 ? plan.questions.flatMap((q) => (plan.byQuestion[q.key] ?? []).flatMap((p) => q.queries.map((query) => ({ q, provider: p, query })))) : followUpTasks(plan, coverage, queriesRun);
+    // Round 1 rotates through questions so each gets searched before any gets a second search, and
+    // leaves a quarter of the calls for follow-ups on whatever is still thin.
+    const tasks: Task[] = round === 1
+      ? shareAcross(plan.questions.map((q) => (plan.byQuestion[q.key] ?? []).flatMap((p) => q.queries.map((query) => ({ q, provider: p, query })))),
+        limits.maxRounds > 1 ? Math.ceil(limits.maxProviderCalls * FIRST_ROUND_SHARE) : limits.maxProviderCalls)
+      : followUpTasks(plan, coverage, queriesRun);
     if (!tasks.length) { if (round > 1) stopReason = "no_follow_up"; break; }
     await save({ stage: round === 1 ? "searching" : "follow_up" });
 
@@ -234,7 +241,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   // ================================================================ helpers
   async function runProvider(t: Task, round: number): Promise<Hit[]> {
     const info = registry.find((p) => p.key === t.provider);
-    const params = { q: t.query, country, freshness };
+    const params = { q: t.query, country, freshness, count: resultCount(t.provider) };
     const key = cacheKey(t.provider, t.query, params);
     if (t.provider === "brand_docs") {
       const hits = await withUser(userId, (tx) => searchBrandDocs(tx, projectId, t.query));
@@ -244,7 +251,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     if (info && info.cacheTtlHours > 0 && !isDemo) {
       const cached = await withUser(userId, (tx) => cacheGet<Hit[]>(tx, ws, t.provider, key));
       if (cached) {
-        budget.record(t.provider, { ok: true, units: 0, usdEstimated: 0, usdActual: null, ms: 0 });
+        budget.record(t.provider, { ok: true, kind: "cache", units: 0, usdEstimated: 0, usdActual: null, ms: 0 });
         await withUser(userId, (tx) => ledger(tx, t.provider, "search", { params: { q: t.query }, status: cached.length ? "ok" : "empty", httpStatus: null, durationMs: 0, error: null, raw: null, units: 0, costUsdEstimated: 0, costUsdActual: null, cached: true, count: cached.length, questionKey: t.q.key, round }));
         return cached;
       }
@@ -265,17 +272,24 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   async function callProvider(p: ProviderKey, query: string): Promise<ProviderCall<Hit[]>> {
     switch (p) {
       case "demo_web": return demoSearch(query);
-      case "serper": return serperSearch({ query, count: depth === "quick" ? 5 : 8, country, apiKey: e.SERPER_API_KEY!, usdPerCall: e.SERPER_USD_PER_REQUEST });
-      case "brave": return braveSearch({ query, count: depth === "quick" ? 5 : 8, country, freshness, apiKey: e.BRAVE_API_KEY!, usdPerCall: e.BRAVE_USD_PER_REQUEST });
+      case "serper": return serperSearch({ query, count: resultCount(p), country, apiKey: e.SERPER_API_KEY!, usdPerCall: e.SERPER_USD_PER_REQUEST });
+      case "brave": return braveSearch({ query, count: resultCount(p), country, freshness, apiKey: e.BRAVE_API_KEY!, usdPerCall: e.BRAVE_USD_PER_REQUEST });
       case "tavily": return tavilySearch({ query, count: 8, apiKey: e.TAVILY_API_KEY!, usdPerCall: e.TAVILY_USD_PER_REQUEST });
       case "exa": return exaSearch({ query, count: 8, apiKey: e.EXA_API_KEY!, usdPerCall: e.EXA_USD_PER_REQUEST });
       case "youtube": return youtubeSearch({ query, count: 5, regionCode: country, publishedAfter: freshness === "any" ? null : new Date(Date.now() - (freshness === "month" ? 31 : 366) * 86_400_000).toISOString(), apiKey: e.YOUTUBE_API_KEY! });
       case "reddit": return redditSearch({ query, count: 8, timeframe: freshness, clientId: e.REDDIT_CLIENT_ID!, clientSecret: e.REDDIT_CLIENT_SECRET! });
       case "wikipedia": return wikipediaSearch({ query, count: 3 });
       case "google_suggest": return googleSuggest({ query, country });
-      case "hacker_news": return hackerNewsSearch({ query, count: depth === "quick" ? 4 : 8 });
+      case "hacker_news": return hackerNewsSearch({ query, count: resultCount(p) });
       default: return { ok: false, data: [], status: "error", httpStatus: null, durationMs: 0, error: `Unknown provider ${p}`, errorKind: "permanent", units: 0, costUsdEstimated: 0, costUsdActual: null, params: {}, raw: null, cached: false };
     }
+  }
+
+  /** Results requested per call; part of the cache key, so a 5-result answer is never reused for an 8-result request. */
+  function resultCount(p: ProviderKey) {
+    if (p === "serper" || p === "brave") return depth === "quick" ? 5 : 8;
+    if (p === "hacker_news") return depth === "quick" ? 4 : 8;
+    return p === "youtube" ? 5 : p === "wikipedia" ? 3 : 8;
   }
 
   function estimateUsd(p: ProviderKey) {
@@ -347,8 +361,16 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   }
 
   async function extractClaims(newDocs: Doc[], questions: ResearchQuestion[], llmOn: boolean) {
-    // Only the most relevant new documents go to extraction, within the per-job cap.
-    const batchDocs = newDocs.slice(0, Math.max(0, limits.maxDocsToModel - docsSentToModel));
+    // Only the most relevant new documents go to extraction, within the per-job cap: ranked by how
+    // well they match their question, and shared across questions so one can't take every slot.
+    const relevance = (d: Doc) => {
+      const qs = questions.filter((q) => d.questionKeys.includes(q.key));
+      const want = new Set(tokens(qs.map((q) => `${q.text} ${q.queries.join(" ")}`).join(" ")));
+      return tokens(`${d.title ?? ""} ${d.text.slice(0, 3000)}`).filter((t) => want.has(t)).length;
+    };
+    const groups = questions.map((q) => newDocs.filter((d) => d.questionKeys[0] === q.key).sort((a, b) => relevance(b) - relevance(a)));
+    const ungrouped = newDocs.filter((d) => !questions.some((q) => q.key === d.questionKeys[0]));
+    const batchDocs = shareAcross([...groups, ungrouped], Math.max(0, limits.maxDocsToModel - docsSentToModel));
     docsSentToModel += batchDocs.length;
     const drafts: { draft: ClaimDraft; batch: Doc[]; method: string }[] = [];
     for (const batch of sleepless(batchDocs, 6)) {
@@ -425,7 +447,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     // Past the deadline there is no time for a model call: the rules-based synthesis is used instead.
     if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled && Date.now() < deadline - 20_000) {
       const model = depth === "quick" ? e.LLM_MODEL_FAST : e.LLM_MODEL;
-      const out = await llm("synthesize", model, depth === "quick" ? 0.01 : 0.12, () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
+      const out = await llm("synthesize", model, synthesisEstimateUsd(model, depth), () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
         prompt: synthesisPrompt(brief, plan.objective, plan.questions, synthClaims, coverage, affinity.ok ? affinity.summary : null, qlooObs) }), true);
       if (out) { synthesis = validateSynthesis(out, new Set(synthClaims.map((c) => c.id)), new Set(plan.questions.map((q) => q.key)), qlooIds); generator = `llm:${model}`; }
       else synthesis.limitations.unshift("The LLM synthesis was skipped (budget) or failed; this summary restates the strongest source claims.");

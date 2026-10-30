@@ -309,9 +309,12 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       profileOf?: string;
       hop?: number;
       subculturalAnchor?: string;
+      /** Hop-2 only: Qloo's score relative to the anchor entity, not to this audience. */
+      orbitScore?: number | null;
     };
     const results: Result[] = [];
-    for (const target of plan.targets) {
+    // One insights request per entity type, run in parallel (they're independent); results keep target order.
+    const perTarget = await Promise.all(plan.targets.map(async (target) => {
       const isPlace = target === "urn:entity:place" || target === "urn:entity:destination";
       const params = {
         filterType: target,
@@ -324,11 +327,12 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
         explainability: seedIds.length + tagIds.length > 0,
         excludeEntities: seedIds,
       };
-      if (!seedIds.length && !tagIds.length && !isPlace && !params.signalLocationQuery) continue;
+      if (!seedIds.length && !tagIds.length && !isPlace && !params.signalLocationQuery) return [];
       const res = await guard("/v2/insights", { "filter.type": target }, () => client.insights(params));
       if (res && res.call.status === "empty") emptyTypes.push(target.replace("urn:entity:", ""));
-      res?.call.data.forEach((entity) => results.push({ entity, sourceId: res.sourceId, role: "result", hop: 1 }));
-    }
+      return (res?.call.data ?? []).map((entity): Result => ({ entity, sourceId: res!.sourceId, role: "result", hop: 1 }));
+    }));
+    results.push(...perTarget.flat());
     if (plan.includeTags && (seedIds.length || tagIds.length || plan.location)) {
       const res = await guard("/v2/insights", { "filter.type": "urn:tag" }, () => client.tagInsights({ signalEntities: seedIds, signalTags: tagIds, signalLocationQuery: plan.location ?? undefined, signalDemographicsAge: ageSignal, take: TAG_TAKE }));
       res?.call.data.filter((t) => !(t.type ?? "").startsWith("urn:tag:genre:") && !tagIds.includes(t.providerId)).slice(0, MAX_TASTE_TAGS).forEach((t) => results.push({
@@ -360,6 +364,7 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     const hop2Edges: Hop2Edge[] = [];
     const hop2Anchors = results
       .filter((r) => r.role === "result" && r.entity.type !== "tag" && (r.entity.affinity ?? 0) >= 0.72)
+      .sort((a, b) => (b.entity.affinity ?? 0) - (a.entity.affinity ?? 0))
       .slice(0, 2);
 
     for (const anchor of hop2Anchors) {
@@ -375,19 +380,17 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
       if (hop2Res && hop2Res.call.status === "ok") {
         for (const ent of hop2Res.call.data) {
           if (!results.some((existing) => existing.entity.providerId === ent.providerId)) {
+            // The score Qloo returns here relates the entity to the anchor, not to this audience: it is
+            // kept apart (orbitScore) and never stored as the entity's audience affinity.
             results.push({
-              entity: ent,
+              entity: { ...ent, affinity: null },
               sourceId: hop2Res.sourceId,
               role: "result",
-              profileOf: `Subcultural orbit of ${anchor.entity.name}`,
               hop: 2,
               subculturalAnchor: anchor.entity.name,
+              orbitScore: ent.affinity,
             });
-            hop2Edges.push({
-              fromProviderId: anchor.entity.providerId,
-              toProviderId: ent.providerId,
-              score: ent.affinity ?? 0.8,
-            });
+            if (ent.affinity !== null) hop2Edges.push({ fromProviderId: anchor.entity.providerId, toProviderId: ent.providerId, score: ent.affinity });
           }
         }
       }
@@ -422,35 +425,31 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
         obs.push({ id: ev.id, claim: "", entityName: s.entity.name, entityType: s.entity.type, affinity: null, role: "seed" });
       }
       for (const r of results) {
-        let culturalTier: "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit" = "consensus";
+        // A tier compares how Qloo explains the entity by the brand's signal versus competitors'. Without
+        // both a resolved brand and a resolved competitor (and explainability covering them) there is
+        // nothing to compare, so the entity stays unclassified rather than guessed from affinity alone.
+        let culturalTier: "white_space" | "consensus" | "competitor_stronghold" | "subcultural_orbit" | "unclassified" = "unclassified";
         let deltaScore = 0;
         if (r.hop === 2) {
           culturalTier = "subcultural_orbit";
-          deltaScore = 0.5;
-        } else if (r.entity.explainability && r.entity.explainability.length > 0) {
+        } else if (primaryBrandId && competitorIds.size > 0 && r.entity.explainability?.length) {
           let brandScore = 0;
           let compScore = 0;
           for (const ex of r.entity.explainability) {
-            if (primaryBrandId && ex.entityId === primaryBrandId) brandScore += Number(ex.score) || 0;
+            if (ex.entityId === primaryBrandId) brandScore += Number(ex.score) || 0;
             else if (competitorIds.has(ex.entityId)) compScore += Number(ex.score) || 0;
           }
           const total = brandScore + compScore;
           if (total > 0) {
             deltaScore = (brandScore - compScore) / total;
-            if (deltaScore >= 0.25) culturalTier = "white_space";
-            else if (deltaScore <= -0.25) culturalTier = "competitor_stronghold";
-            else culturalTier = "consensus";
-          } else {
-            culturalTier = (r.entity.affinity ?? 0) >= 0.72 ? "white_space" : "consensus";
+            culturalTier = deltaScore >= 0.25 ? "white_space" : deltaScore <= -0.25 ? "competitor_stronghold" : "consensus";
           }
-        } else {
-          culturalTier = (r.entity.affinity ?? 0) >= 0.75 ? "white_space" : "consensus";
         }
 
         const [ent] = await tx`
           insert into cultural_entities (run_id, project_id, workspace_id, source_id, provider_entity_id, name, entity_type, role, affinity, popularity, tags, properties)
           values (${runId}, ${run.project_id}, ${ws}, ${r.sourceId}, ${r.entity.providerId}, ${r.entity.name}, ${r.entity.type}, ${r.role}, ${r.entity.affinity}, ${r.entity.popularity},
-            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability, image_url: r.entity.imageUrl ?? null, profile_of: r.profileOf ?? null, cultural_tier: culturalTier, delta_score: Number(deltaScore.toFixed(2)), hop: r.hop ?? 1, subcultural_anchor: r.subculturalAnchor ?? null })})
+            ${tx.json(r.entity.tags)}, ${tx.json({ description: r.entity.description, disambiguation: r.entity.disambiguation, explainability: r.entity.explainability, image_url: r.entity.imageUrl ?? null, profile_of: r.profileOf ?? null, cultural_tier: culturalTier, delta_score: Number(deltaScore.toFixed(2)), hop: r.hop ?? 1, subcultural_anchor: r.subculturalAnchor ?? null, orbit_score: r.orbitScore ?? null })})
           on conflict (run_id, provider_entity_id, role) do nothing returning id`;
         if (!ent) continue;
         idByProvider.set(r.entity.providerId, ent.id);
@@ -459,32 +458,29 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
           if (from) await tx`insert into entity_relationships (run_id, workspace_id, from_entity_id, to_entity_id, relation, value, source_id) values (${runId}, ${ws}, ${from}, ${ent.id}, 'explainability', ${ex.score}, ${r.sourceId})`;
         }
         const value = r.entity.affinity;
-        const tierPrefix = culturalTier === "white_space"
-          ? "[White-Space] "
-          : culturalTier === "subcultural_orbit"
-          ? `[Subcultural Orbit · ${r.subculturalAnchor ?? "Anchor"}] `
-          : culturalTier === "competitor_stronghold"
-          ? "[Competitor Stronghold] "
-          : "";
+        // Claim text says exactly what was compared, and nothing when nothing was.
         const tierSuffix = culturalTier === "white_space"
-          ? " (shows strong brand divergence vs competitors)."
-          : culturalTier === "subcultural_orbit"
-          ? ` (discovered through 2-hop traversal around ${r.subculturalAnchor ?? "white-space territory"}).`
+          ? " Qloo explains it more by the brand’s own signal than by the competitors’ (leans to the brand)."
           : culturalTier === "competitor_stronghold"
-          ? " (predominantly indexed to competitor audience)."
+          ? " Qloo explains it more by the competitors’ signals than by the brand’s (leans to competitors)."
+          : culturalTier === "consensus"
+          ? " Qloo explains it about equally by the brand’s and the competitors’ signals."
           : "";
-        const baseClaim = r.profileOf
+        const baseClaim = r.hop === 2
+          ? `Qloo returned “${r.entity.name}” (${r.entity.type}) as related to “${r.subculturalAnchor}”${r.orbitScore != null ? ` (score ${r.orbitScore.toFixed(2)} relative to that entity, not to this audience)` : ""}.`
+          : r.profileOf
           ? `Qloo’s profile for “${r.profileOf}” carries the tag “${r.entity.name}”.`
           : r.role === "tag"
           ? `Qloo associated the taste tag “${r.entity.name}” with the signal (${signalLabel || "location"})${value !== null ? `, affinity ${value.toFixed(2)}` : ""}.`
           : `Qloo returned “${r.entity.name}” (${r.entity.type}) for the signal ${signalLabel || "(location only)"}${value !== null ? ` with affinity ${value.toFixed(2)}` : " without an affinity value"}.`;
-        const claim = `${tierPrefix}${baseClaim}${tierSuffix}`;
+        const claim = `${baseClaim}${tierSuffix}`;
 
         const [ev] = await tx`
           insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim, source_provider, source_ref, retrieved_at, raw_metadata, normalized_value, entity_ids, is_demo, created_by, limitations)
           values (${run.project_id}, ${ws}, ${runId}, 'provider_observation', ${claim}, ${provider}, ${r.entity.providerId}, now(),
             ${tx.json({ source_id: r.sourceId, role: r.role, popularity: r.entity.popularity, profile_of: r.profileOf ?? null, cultural_tier: culturalTier, hop: r.hop ?? 1, subcultural_anchor: r.subculturalAnchor ?? null })}, ${value}, ${[ent.id]}, ${isDemo}, ${userId},
-            ${r.profileOf ? "Profile tags describe how Qloo catalogues the brand; they are not an affinity measurement for the audience." : AFFINITY_LIMITATION}) returning id`;
+            ${r.profileOf ? "Profile tags describe how Qloo catalogues the brand; they are not an affinity measurement for the audience."
+              : r.hop === 2 ? "A second-hop result: related to another returned entity, not measured against this audience." : AFFINITY_LIMITATION}) returning id`;
         obs.push({ id: ev.id, claim, entityName: r.entity.name, entityType: r.entity.type, affinity: value, role: r.role });
       }
 
@@ -521,7 +517,9 @@ async function affinityStage(userId: string, run: Record<string, any>, embedded:
     if (isDemo) {
       interpretation = templateInterpretation(brief!, observations, seedNames);
       generator = "demo-template";
-    } else if ((await llmEnabled(userId, ws)) && observations.some((o) => o.role !== "seed")) {
+    } else if (!embedded && (await llmEnabled(userId, ws)) && observations.some((o) => o.role !== "seed")) {
+      // Only standalone Qloo runs get their own model interpretation. In a multi-source job the final
+      // synthesis interprets Qloo and web evidence together, so a second, unbudgeted call would be waste.
       try {
         const out = await generateStructured({ schema: researchInterpretationSchema, prompt: interpretationPrompt(brief!, observations, plan) });
         const valid = new Set(observations.map((o) => o.id));

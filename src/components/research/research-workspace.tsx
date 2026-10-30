@@ -221,7 +221,7 @@ export function ResearchWorkspace(p: Props) {
                 aria-pressed={tierFilter === "white_space"}
                 className={cn("flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors", tierFilter === "white_space" ? "bg-emerald-600 text-white shadow-sm" : "text-emerald-700 hover:bg-emerald-50")}
               >
-                🎯 White-Space
+                🎯 Leans to brand
               </button>
               <button
                 onClick={() => setTierFilter("subcultural_orbit")}
@@ -346,7 +346,7 @@ export function ResearchWorkspace(p: Props) {
                         <td className="py-2">
                           {e.culturalTier === "white_space" ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
-                              🎯 White-Space
+                              🎯 Leans to brand
                             </span>
                           ) : e.culturalTier === "competitor_stronghold" ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-coral/10 px-2 py-0.5 text-[10px] font-medium text-coral">
@@ -571,8 +571,8 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
           <h2 className="cc-display mt-1 text-3xl">{e.name}</h2>
           {e.culturalTier === "white_space" && (
             <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-800">
-              <span>🎯 Exclusive White-Space</span>
-              <span className="text-[10px] text-emerald-600/90 font-normal">· High brand divergence</span>
+              <span>🎯 Leans to brand</span>
+              <span className="text-[10px] text-emerald-600/90 font-normal">· Qloo explains it more by the brand’s signal than competitors’</span>
             </div>
           )}
           {e.culturalTier === "subcultural_orbit" && (
@@ -585,8 +585,8 @@ function EntityPanel({ entity: e, entities, relationships, sources, run, project
           )}
           {e.culturalTier === "competitor_stronghold" && (
             <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1 text-[11px] font-semibold text-coral">
-              <span>🛡️ Competitor Stronghold</span>
-              <span className="text-[10px] text-coral/80 font-normal">· Favors competitor audience</span>
+              <span>🛡️ Leans to competitors</span>
+              <span className="text-[10px] text-coral/80 font-normal">· Qloo explains it more by competitors’ signals</span>
             </div>
           )}
           {e.culturalTier === "consensus" && e.role === "result" && (

@@ -153,6 +153,14 @@ export function WatchHealth({ view, canEdit }: { view: WatchView; canEdit: boole
   const router = useRouter();
   const { toast } = useToast();
   const [pending, start] = React.useTransition();
+  const busy = view.lastJob?.status === "running" || view.lastJob?.status === "queued";
+  // While a check runs, refresh every few seconds so the page shows the result when it lands (checks take under a minute).
+  React.useEffect(() => {
+    if (!busy) return;
+    const t = window.setInterval(() => router.refresh(), 5000);
+    const stop = window.setTimeout(() => window.clearInterval(t), 5 * 60_000);
+    return () => { window.clearInterval(t); window.clearTimeout(stop); };
+  }, [busy, router]);
   const w = view.watch;
   if (!w) return null;
 

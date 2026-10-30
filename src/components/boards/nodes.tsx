@@ -3,7 +3,7 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileCheck2, GripHorizontal, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
 import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, NoteData } from "@/lib/boards/schema";
@@ -182,8 +182,13 @@ export function NoteNode({ id, data, selected }: NodeProps<Node<NoteData>>) {
   return (
     <>
       <Resizer selected={selected} locked={data.locked} minHeight={60} />
-      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), NOTE_TONES[data.tone], "relative flex flex-col p-3")}>
+      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), NOTE_TONES[data.tone], "relative flex flex-col px-3 pb-3")}>
         <LockBadge locked={data.locked} /><CommentBadge id={id} />
+        {/* The text area takes text selection, not drags, so the note is moved by this strip. */}
+        <div className={cn("-mx-3 mb-1 flex h-6 shrink-0 items-center justify-center text-ink/25", canEdit && !data.locked && "cursor-grab hover:text-ink/50 active:cursor-grabbing")}
+          title={canEdit && !data.locked ? "Drag to move" : undefined} aria-hidden="true">
+          <GripHorizontal className="size-4" />
+        </div>
         <InlineText multiline value={data.text} onChange={(v) => update({ text: v })} placeholder="Write a note…" className="flex-1 text-[13px] leading-relaxed" />
         {selected && canEdit && (
           <div className="nodrag mt-1 flex gap-1" role="group" aria-label="Note colour">

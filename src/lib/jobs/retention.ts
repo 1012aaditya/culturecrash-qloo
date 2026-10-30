@@ -1,5 +1,6 @@
 import "server-only";
 import { privilegedSql } from "@/lib/db";
+import { sweepStaleRuns, sweepStaleTasks } from "@/lib/research/lifecycle";
 
 /**
  * Daily retention job (privileged; runs only from the authenticated cron route).
@@ -41,7 +42,11 @@ export async function runRetention() {
       where provider = 'youtube' and retrieved_at < now() - interval '30 days' and (excerpt is not null or metrics <> '{}'::jsonb) returning id`;
     await tx`delete from provider_cache where expires_at < now()`;
     const links = await tx`delete from shared_report_links where expires_at is not null and expires_at < now() - interval '30 days' returning id`;
+    // Backstop for runs and generation tasks nobody has looked at since their worker died.
+    const staleRuns = await sweepStaleRuns(tx);
+    const staleTasks = await sweepStaleTasks(tx);
     return {
+      staleRunsClosed: staleRuns, staleTasksClosed: staleTasks,
       rawResponsesCleared: raw.length, conversationsDeleted: conv.length, activityDeleted: activity.length,
       tasksDeleted: tasks.length, youtubeExcerptsExpired: youtube.length, pilotRequestsDeleted: pilots.length, expiredLinksDeleted: links.length,
     };

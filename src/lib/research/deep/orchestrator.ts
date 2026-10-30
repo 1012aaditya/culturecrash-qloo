@@ -25,6 +25,7 @@ import { scoreClaim } from "./quality";
 import { providerRegistry, type ProviderInfo } from "./registry";
 import { rulesSynthesis, synthesisPrompt, synthesisSchema, validateSynthesis, type Coverage, type QlooObservation, type Report, type SynthClaim } from "./synthesize";
 import type { ClaimDraft, ClaimType, Depth, Hit, ProviderCall, ProviderKey, QlooPick, ResearchPlanV2, ResearchQuestion } from "./types";
+import { RUN_DEADLINE_MS } from "../lifecycle";
 import { platformHeadroomUsd } from "../spend";
 
 export type AffinityOutcome =
@@ -51,13 +52,16 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
  * Stages are explicit and persisted; every external call goes through the budget and the
  * provenance ledger; partial results survive provider failures, budget stops and cancellation.
  */
-export async function runDeepResearch(userId: string, run: Record<string, unknown>, affinityStage: () => Promise<AffinityOutcome>) {
+export async function runDeepResearch(userId: string, run: Record<string, unknown>, affinityStage: () => Promise<AffinityOutcome>, deadline = Date.now() + RUN_DEADLINE_MS) {
   const runId = run.id as string;
   const ws = run.workspace_id as string;
   const projectId = run.project_id as string;
   const isDemo = run.mode === "demo";
   const depth = (run.depth as Depth) ?? "standard";
   const limits: BudgetLimits = { ...DEPTH_PROFILES[depth], ...((run.budget as Partial<BudgetLimits>) ?? {}) };
+  // The search budget ends 30 s before the hard deadline, so there is always time to synthesise and save.
+  limits.maxSeconds = Math.min(limits.maxSeconds, Math.max(30, (deadline - Date.now()) / 1000 - 30));
+  const pastDeadline = () => Date.now() > deadline - 30_000;
   const e = env();
 
   const headroom = await withUser(userId, async (tx) => {
@@ -87,7 +91,21 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   const save = (patch: { stage?: string; coverage?: Coverage[] }) => withUser(userId, (tx) =>
     tx`update research_runs set stage = coalesce(${patch.stage ?? null}, stage), usage = ${tx.json({ ...budget.usage, elapsedSeconds: Math.round(budget.elapsedSeconds()) } as never)},
       coverage = coalesce(${patch.coverage ? tx.json(patch.coverage as never) : null}::jsonb, coverage), started_by_heartbeat = now() where id = ${runId}`);
-  const cancelled = async () => (await withUser(userId, (tx) => tx`select cancel_requested_at from research_runs where id = ${runId}`))[0]?.cancel_requested_at != null;
+  // Checked inside every round (at most every 3 s). It doubles as the heartbeat, so a working run is
+  // never mistaken for a dead one.
+  let cancelFlag = false;
+  let cancelCheckedAt = 0;
+  const cancelled = async () => {
+    if (cancelFlag || Date.now() - cancelCheckedAt < 3000) return cancelFlag;
+    cancelCheckedAt = Date.now();
+    const [r] = await withUser(userId, (tx) => tx`update research_runs set started_by_heartbeat = now() where id = ${runId} returning cancel_requested_at, status`);
+    // Only a real cancel stops the worker. A run a sweep closed as stale or timed out keeps going: its
+    // own result, if it gets there before the deadline, replaces the placeholder (see finish()).
+    cancelFlag = !r || r.cancel_requested_at != null || r.status === "cancelled";
+    return cancelFlag;
+  };
+  /** Why new work should not start now, if it shouldn't. */
+  const halt = async () => ((await cancelled()) ? "cancelled" : pastDeadline() ? "time_limit" : null);
   const ledger = (tx: Tx, provider: string, endpoint: string, call: Pick<ProviderCall<unknown>, "params" | "status" | "httpStatus" | "durationMs" | "error" | "raw" | "units" | "costUsdEstimated" | "costUsdActual" | "cached"> & { count: number; questionKey?: string | null; round?: number; tokensIn?: number; tokensOut?: number }) =>
     tx`insert into research_sources (run_id, workspace_id, provider, endpoint, params, status, http_status, result_count, duration_ms, error_message, raw_response,
         question_key, round, units, cost_usd_estimated, cost_usd_actual, tokens_in, tokens_out, cached)
@@ -162,7 +180,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
   const country = countryCode(plan.geography);
 
   for (let round = 1; round <= limits.maxRounds; round++) {
-    if (await cancelled()) { stopReason = "cancelled"; break; }
+    const stop = await halt();
+    if (stop) { stopReason = stop; break; }
     budget.usage.rounds = round;
     const tasks: Task[] = round === 1 ? plan.questions.flatMap((q) => (plan.byQuestion[q.key] ?? []).flatMap((p) => q.queries.map((query) => ({ q, provider: p, query })))) : followUpTasks(plan, coverage, queriesRun);
     if (!tasks.length) { if (round > 1) stopReason = "no_follow_up"; break; }
@@ -170,6 +189,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
 
     const before = new Set(claims.filter((c) => c.score >= 0.45).flatMap((c) => c.documentIds.map((id) => docs.find((d) => d.id === id)?.group)));
     const results = await pool(tasks, 3, async (t) => {
+      const stop = await halt();
+      if (stop) { stopReason = stop; return { t, hits: [] as Hit[] }; }
       const allowed = budget.canSpend("provider", estimateUsd(t.provider));
       if (!allowed.ok) { stopReason = allowed.reason!; return { t, hits: [] as Hit[] }; }
       queriesRun.push(t.query);
@@ -184,7 +205,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const toFetch = rankForRetrieval(fresh.filter(({ h }) => h.url && (h.sourceType === "web_page" || h.sourceType === "news") && !known.has(h.url)), pagesThisRound);
     const pages = new Map<string, Awaited<ReturnType<typeof fetchPage>>>();
     await pool(toFetch, 3, async ({ h }) => {
-      if (!budget.canSpend("page", 0).ok) return;
+      if (!budget.canSpend("page", 0).ok || (await halt())) return;
       const page = await fetchPage(h.url!);
       budget.record("page_fetch", { ok: page.status === "extracted", kind: "page", units: 1, usdEstimated: 0, usdActual: null, ms: page.durationMs });
       pages.set(h.url!, page);
@@ -199,7 +220,7 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
 
     const gaps = coverage.filter((c) => c.priority <= 2 && c.status !== "sufficient");
     if (!gaps.length) { stopReason = "sufficient_coverage"; break; }
-    if (["budget_limit", "time_limit", "provider_call_limit"].includes(stopReason) && stopReason !== "sufficient_coverage") break;
+    if (["budget_limit", "time_limit", "provider_call_limit", "cancelled"].includes(stopReason)) break;
     if (round > 1) {
       const after = new Set(claims.filter((c) => c.score >= 0.45).flatMap((c) => c.documentIds.map((id) => docs.find((d) => d.id === id)?.group)));
       if (after.size <= before.size) { stopReason = "low_marginal_gain"; break; }
@@ -401,7 +422,8 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const qlooIds = new Set(qlooObs.map((o) => o.id));
     let generator = "rules";
     let synthesis = rulesSynthesis(plan.questions, synthClaims, coverage, qlooObs, brief);
-    if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled) {
+    // Past the deadline there is no time for a model call: the rules-based synthesis is used instead.
+    if (useLlm && (synthClaims.length || qlooObs.length) && !isCancelled && Date.now() < deadline - 20_000) {
       const model = depth === "quick" ? e.LLM_MODEL_FAST : e.LLM_MODEL;
       const out = await llm("synthesize", model, depth === "quick" ? 0.01 : 0.12, () => generateStructured({ schema: synthesisSchema, model, effort: depth === "deep" ? "high" : "medium", maxTokens: 12000,
         prompt: synthesisPrompt(brief, plan.objective, plan.questions, synthClaims, coverage, affinity.ok ? affinity.summary : null, qlooObs) }), true);
@@ -423,6 +445,11 @@ export async function runDeepResearch(userId: string, run: Record<string, unknow
     const status = isCancelled ? "cancelled" : docs.length === 0 && !qlooOk ? "failed" : completeness === "complete" && (qlooOk || affinity?.ok === false && affinity.skipped) ? "completed" : "partially_completed";
 
     await withUser(userId, async (tx) => {
+      // Write the result only if the run is still open, or was closed from outside for time/staleness
+      // without a report (then the real report is better than the placeholder). Never after a cancel or a finished run.
+      const [open] = await tx`select 1 from research_runs where id = ${runId}
+        and (status in ('queued', 'running') or (stop_reason in ('time_limit', 'stale') and report is null)) for update`;
+      if (!open) return;
       // Interpretations and hypotheses are stored as such — never as source facts.
       for (const f of report.findings.filter((x) => x.kind === "interpretation")) {
         await tx`insert into evidence_items (project_id, workspace_id, run_id, evidence_type, claim_type, claim, source_provider, raw_metadata, question_key, is_demo, created_by, review_status, limitations)

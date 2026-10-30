@@ -3,6 +3,7 @@ import { llmEnabled } from "@/lib/ai/enabled";
 import "server-only";
 import { env } from "@/lib/env";
 import { runDeepResearch, type AffinityOutcome } from "./deep/orchestrator";
+import { closeRun, RUN_DEADLINE_MS } from "./lifecycle";
 import { generateStructured, tag, TEMPLATE_GENERATOR } from "@/lib/ai";
 import { researchInterpretationSchema, type ResearchInterpretation } from "@/lib/ai/schemas";
 import { templateInterpretation, type BriefInput, type Observation } from "@/lib/ai/template";
@@ -133,6 +134,8 @@ async function recordSource(tx: Tx, runId: string, ws: string, provider: string,
     values (${runId}, ${ws}, ${provider}, ${call.endpoint}, ${tx.json(call.params)}, ${call.status ?? "error"}, ${call.httpStatus ?? null},
       ${Array.isArray(call.data) ? call.data.length : 0}, ${call.durationMs ?? null}, ${call.error ?? null}, ${tx.json(capRaw(call.raw) as never)}, ${call.retrievedAt ?? new Date().toISOString()})
     returning id`;
+  // Each recorded call is also a heartbeat: the Qloo stage can take minutes and must not look dead.
+  await tx`update research_runs set started_by_heartbeat = now() where id = ${runId}`;
   return row.id as string;
 }
 
@@ -149,30 +152,45 @@ async function setTask(tx: Tx, runId: string, status: string, error?: string | n
  * Live runs never fall back to fixtures.
  */
 export async function executeRun(userId: string, runId: string) {
+  // The platform kills this function at maxDuration and nothing runs after that, so a watchdog closes
+  // the run (keeping what it collected) shortly before, whatever the worker is doing at the time.
+  const deadline = Date.now() + RUN_DEADLINE_MS;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
   try {
-    await runResearch(userId, runId);
+    await Promise.race([
+      runResearch(userId, runId, deadline),
+      new Promise<void>((resolve) => {
+        watchdog = setTimeout(() => {
+          withUser(userId, (tx) => closeRun(tx, runId, "time_limit")).catch(() => undefined).finally(resolve);
+        }, RUN_DEADLINE_MS);
+      }),
+    ]);
   } finally {
+    clearTimeout(watchdog);
     await notifyResearchFinished(userId, runId).catch(() => undefined);
   }
 }
 
-async function runResearch(userId: string, runId: string) {
+async function runResearch(userId: string, runId: string, deadline: number) {
   const run = await withUser(userId, async (tx) => {
-    const [r] = await tx`update research_runs set status = 'running', started_at = now(), stage = 'planning' where id = ${runId} and status = 'queued' returning *`;
+    // A run cancelled while still queued never starts.
+    const [r] = await tx`update research_runs set status = 'running', started_at = now(), started_by_heartbeat = now(), stage = 'planning'
+      where id = ${runId} and status = 'queued' and cancel_requested_at is null returning *`;
     if (r) await setTask(tx, runId, "running");
+    else if ((await tx`select 1 from research_runs where id = ${runId} and status = 'queued' and cancel_requested_at is not null`).length) await closeRun(tx, runId, "cancelled");
     return r;
   });
-  if (!run) return; // already picked up or not visible to this user
+  if (!run) return; // already picked up, cancelled, or not visible to this user
   if (run.depth) {
     // Multi-source research: Qloo runs as one embedded stage; the orchestrator owns the job's status.
     try {
-      await runDeepResearch(userId, run, () => affinityStage(userId, run, true));
+      await runDeepResearch(userId, run, () => affinityStage(userId, run, true), deadline);
     } catch (e) {
       console.error("[research] deep run failed", runId, e instanceof Error ? e.message : e);
       await withUser(userId, async (tx) => {
         const [{ n }] = await tx`select count(*)::int as n from research_documents where run_id = ${runId}`;
         await tx`update research_runs set status = ${n > 0 ? "partially_completed" : "failed"}, stage = 'done', stop_reason = 'error', completed_at = now(),
-          error_code = 'internal', error_message = 'The research job stopped unexpectedly. Sources collected before the error are kept.' where id = ${runId}`;
+          error_code = 'internal', error_message = 'The research job stopped unexpectedly. Sources collected before the error are kept.' where id = ${runId} and status in ('queued', 'running')`;
         await setTask(tx, runId, n > 0 ? "completed" : "failed", "Research job stopped unexpectedly");
       });
     }

@@ -36,9 +36,21 @@ export function ResearchLauncher({ projectId, providers, qlooConfigured, webEnab
     if (pending) return;
     key.current ??= crypto.randomUUID();
     setPending(true);
-    const res = await startResearchAction({ projectId, mode: "live", idempotencyKey: key.current, depth, question: question.trim() || null, freshness });
-    setPending(false);
-    key.current = null;
+    let res: Awaited<ReturnType<typeof startResearchAction>>;
+    try {
+      res = await startResearchAction({ projectId, mode: "live", idempotencyKey: key.current, depth, question: question.trim() || null, freshness });
+    } catch {
+      res = { ok: false, error: "The request failed. Check your connection and try again." };
+    } finally {
+      setPending(false);
+      key.current = null;
+    }
+    if (!res.ok && res.activeRunId) {
+      setOpen(false);
+      toast({ tone: "info", title: "A research run is already in progress", description: "Showing it now. Start another once it finishes, or cancel it." });
+      router.push(`/projects/${projectId}/research?run=${res.activeRunId}`);
+      return router.refresh();
+    }
     if (!res.ok) return toast({ tone: "error", title: "Research not started", description: res.error });
     setOpen(false);
     toast({ tone: "success", title: res.reused ? "A research job is already running" : "Research started" });

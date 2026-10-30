@@ -8,6 +8,7 @@ import { assertCan } from "@/lib/permissions";
 import { DEPTH_PROFILES } from "./deep/budget";
 import type { Depth } from "./deep/types";
 import { buildPlan } from "./engine";
+import { closeRun, sweepStaleRuns } from "./lifecycle";
 import { platformHeadroomUsd } from "./spend";
 
 export type JobOptions = {
@@ -20,7 +21,7 @@ export type JobOptions = {
   freshness?: "month" | "year" | "any";
   parentRunId?: string | null;
 };
-export type JobResult = { ok: true; runId: string; reused: boolean } | { ok: false; error: string; status?: number };
+export type JobResult = { ok: true; runId: string; reused: boolean } | { ok: false; error: string; status?: number; activeRunId?: string };
 
 /**
  * Creates (or reuses) a research job. Shared by the server action and the REST API so both
@@ -47,12 +48,11 @@ export async function createResearchJob(ctx: Ctx, o: JobOptions): Promise<JobRes
     // Idempotency: double-clicks and retries of the same request reuse the job.
     const [same] = await tx`select id from research_runs where project_id = ${o.projectId} and idempotency_key = ${o.idempotencyKey}`;
     if (same) return { ok: true as const, runId: same.id as string, reused: true };
-    // Stale jobs (worker lost: no heartbeat for 10 minutes) are closed so they can't block new work.
-    await tx`update research_runs set status = case when exists (select 1 from research_documents d where d.run_id = research_runs.id) then 'partially_completed'::run_status else 'failed'::run_status end,
-        stage = 'done', stop_reason = 'stale', completed_at = now(), error_message = 'The research worker stopped responding; results collected before that are kept.'
-      where project_id = ${o.projectId} and status in ('queued', 'running') and coalesce(started_by_heartbeat, started_at, created_at) < now() - interval '10 minutes'`;
+    // Close runs whose worker is gone first, so a dead run can't block new work.
+    await sweepStaleRuns(tx, o.projectId);
     const [active] = await tx`select id from research_runs where project_id = ${o.projectId} and status in ('queued', 'running') limit 1`;
-    if (active) return { ok: true as const, runId: active.id as string, reused: true };
+    // A different request while a run is active is refused, not silently merged into that run.
+    if (active) return { ok: false as const, error: "A research run is already in progress for this campaign. Wait for it to finish or cancel it first.", status: 409, activeRunId: active.id as string };
 
     if (o.mode === "live") {
       const [{ my_email_confirmed: confirmed }] = await tx`select public.my_email_confirmed()`;
@@ -101,6 +101,11 @@ export async function createResearchJob(ctx: Ctx, o: JobOptions): Promise<JobRes
 /** Requests cancellation; the orchestrator stops at its next checkpoint and keeps partial results. */
 export async function cancelResearchJob(ctx: Ctx, runId: string): Promise<{ ok: boolean; error?: string }> {
   assertCan(ctx.workspace.role, "research.run");
-  const rows = await withUser(ctx.user.id, (tx) => tx`update research_runs set cancel_requested_at = now() where id = ${runId} and status in ('queued', 'running') and cancel_requested_at is null returning id`);
-  return rows.length ? { ok: true } : { ok: false, error: "This research job is not running." };
+  return withUser(ctx.user.id, async (tx) => {
+    const [r] = await tx`update research_runs set cancel_requested_at = now() where id = ${runId} and status in ('queued', 'running') and cancel_requested_at is null returning status`;
+    if (!r) return { ok: false, error: "This research job is not running." };
+    // A run that hasn't started yet is closed straight away; a running one stops at its next checkpoint.
+    if (r.status === "queued") await closeRun(tx, runId, "cancelled");
+    return { ok: true };
+  });
 }

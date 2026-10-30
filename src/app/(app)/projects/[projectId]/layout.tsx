@@ -5,6 +5,10 @@ import { ProjectPresence } from "@/components/projects/project-presence";
 import { DemoBadge } from "@/components/states";
 import { getProjectContext } from "@/lib/data/project-context";
 
+// Strategy, creative-brief, opportunity and copilot generation run as server actions on these pages and
+// can take minutes with a model: allow the same 300 s as research instead of the platform default.
+export const maxDuration = 300;
+
 export default async function ProjectLayout({ children, params }: LayoutProps<"/projects/[projectId]">) {
   const { projectId } = await params;
   const { project, stages } = await getProjectContext(projectId);

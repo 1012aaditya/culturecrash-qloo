@@ -10,6 +10,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCopilotTool } from "@/lib/ai/copilot-tools";
 import { buildSnapshot } from "@/lib/reports/snapshot";
+import { closeRun, sweepStaleRuns, sweepStaleTasks } from "@/lib/research/lifecycle";
 
 const admin = process.env.TEST_DATABASE_ADMIN_URL;
 const d = admin ? describe : describe.skip;
@@ -308,5 +309,52 @@ d("Row Level Security and workspace isolation", () => {
     expect(snap.evidence.some((e) => e.type === "hypothesis" || e.type === "ai_interpretation")).toBe(false);
     expect(snap.opportunities[0].claims?.[0].support).toBe("verified");
     expect(snap.limitations.join(" ")).not.toMatch(/No public-web research provider was configured/);
+  });
+
+  it("dead research runs are closed (keeping what they found), live ones are left alone", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'Lifecycle', ${A.id}) returning id`))[0].id as string;
+    const mk = (key: string, extra: string) => as(A.id, async (tx) => {
+      // Older runs on this project are finished first: only one may be active at a time.
+      await tx`update research_runs set status = 'completed' where project_id = ${P} and status in ('queued', 'running')`;
+      const [r] = await tx`insert into research_runs (project_id, workspace_id, mode, provider, question, idempotency_key, depth, status) values (${P}, ${A.ws}, 'live', 'multi-source', 'q', ${key}, 'quick', 'running') returning id`;
+      await tx.unsafe(`update research_runs set ${extra} where id = '${r.id}'`);
+      await tx`insert into background_tasks (workspace_id, project_id, kind, label, status, ref_id) values (${A.ws}, ${P}, 'research_run', 'r', 'running', ${r.id})`;
+      return r.id as string;
+    });
+    // Heartbeat 5 minutes old, with a stored document: closed as partially completed.
+    const dead = await mk(`dead-${Date.now()}`, "started_at = now() - interval '5 minutes', started_by_heartbeat = now() - interval '5 minutes'");
+    await as(A.id, (tx) => tx`insert into research_documents (run_id, project_id, workspace_id, provider, source_type, title) values (${dead}, ${P}, ${A.ws}, 'brave', 'web_page', 'kept')`);
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(1);
+    const [d] = await as(A.id, (tx) => tx`select status, stop_reason from research_runs where id = ${dead}`);
+    expect([d.status, d.stop_reason]).toEqual(["partially_completed", "stale"]);
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where ref_id = ${dead}`))[0].status).toBe("completed");
+    // Closing is one-shot: a late worker or a second sweep can't reopen or re-close it.
+    expect(await as(A.id, (tx) => closeRun(tx, dead, "time_limit"))).toBe(false);
+    // A fresh heartbeat means the worker is alive.
+    const live = await mk(`live-${Date.now()}`, "started_at = now() - interval '1 minute', started_by_heartbeat = now()");
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(0);
+    // Running longer than the function limit is dead whatever its heartbeat says; nothing collected = failed.
+    await as(A.id, (tx) => tx`update research_runs set started_at = now() - interval '7 minutes' where id = ${live}`);
+    expect(await as(A.id, (tx) => sweepStaleRuns(tx, P))).toBe(1);
+    expect((await as(A.id, (tx) => tx`select status from research_runs where id = ${live}`))[0].status).toBe("failed");
+  });
+
+  it("a project can have only one active research run", async () => {
+    const P = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'One at a time', ${A.id}) returning id`))[0].id as string;
+    const insert = (key: string) => as(A.id, (tx) => tx`insert into research_runs (project_id, workspace_id, mode, provider, question, idempotency_key, depth, status) values (${P}, ${A.ws}, 'live', 'multi-source', 'q', ${key}, 'quick', 'queued') returning id`);
+    const [first] = await insert(`a-${Date.now()}`);
+    await expect(insert(`b-${Date.now()}`)).rejects.toThrow(/research_runs_one_active_per_project|duplicate key/);
+    // Cancelling a queued run closes it at once, which frees the project.
+    expect(await as(A.id, (tx) => closeRun(tx, first.id, "cancelled"))).toBe(true);
+    expect((await as(A.id, (tx) => tx`select status from research_runs where id = ${first.id}`))[0].status).toBe("cancelled");
+    await insert(`c-${Date.now()}`);
+  });
+
+  it("generation tasks left running by a killed request are closed", async () => {
+    const [t] = await as(A.id, (tx) => tx`insert into background_tasks (workspace_id, project_id, kind, label, status, started_at) values (${A.ws}, ${projectA}, 'strategy_generation', 's', 'running', now() - interval '10 minutes') returning id`);
+    const [fresh] = await as(A.id, (tx) => tx`insert into background_tasks (workspace_id, project_id, kind, label, status, started_at) values (${A.ws}, ${projectA}, 'creative_brief', 'c', 'running', now()) returning id`);
+    expect(await as(A.id, (tx) => sweepStaleTasks(tx, projectA))).toBe(1);
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${t.id}`))[0].status).toBe("failed");
+    expect((await as(A.id, (tx) => tx`select status from background_tasks where id = ${fresh.id}`))[0].status).toBe("running");
   });
 });

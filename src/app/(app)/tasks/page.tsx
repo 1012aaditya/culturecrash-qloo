@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AutoRefresh } from "@/components/tasks/auto-refresh";
 import { getCtx } from "@/lib/data/workspace";
+import { withUser } from "@/lib/db";
+import { sweepStaleTasks } from "@/lib/research/lifecycle";
 import { listTasks, type TaskRow } from "@/lib/data/workspace-admin";
 import { cn, formatDateTime, timeAgo } from "@/lib/utils";
 
@@ -33,6 +35,8 @@ export default async function TasksPage({ searchParams }: PageProps<"/tasks">) {
   const raw = Array.isArray(sp.status) ? sp.status[0] : sp.status;
   const status = FILTERS.find((f) => f === raw) ?? null;
   const ctx = await getCtx();
+  // Generation tasks whose request was killed mid-way are closed before listing, so none spins forever.
+  await withUser(ctx.user.id, (tx) => sweepStaleTasks(tx));
   const tasks = await listTasks(ctx, status);
   const anyActive = tasks.some((t) => t.status === "queued" || t.status === "running");
 

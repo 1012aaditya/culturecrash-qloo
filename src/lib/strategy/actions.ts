@@ -153,47 +153,53 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
     const taskId = await startTask(tx, ctx, projectId, "strategy_generation", `Strategy directions · ${brief.name}`);
     return { run, brief, obs, opps, taskId };
   });
-  const demo = input.run?.mode === "demo";
-  let directions: DirectionContent[];
-  let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
-  if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
-    try {
-      const r = await generateStructured({
-        schema: strategySchema,
-        prompt: [
-          `Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources. ${CITE_RULES}`,
-          tag("brief", briefJson(input.brief)),
-          tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
-        ].join("\n\n"),
-      });
-      directions = r.data.directions.slice(0, 3);
-      generator = r.generator;
-      if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
-    } catch (e) {
-      await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
-      return { ok: false, error: llmMessage(e) };
+  // Any failure after the task row exists must close it, or it shows as running forever.
+  try {
+    const demo = input.run?.mode === "demo";
+    let directions: DirectionContent[];
+    let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
+    if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
+      try {
+        const r = await generateStructured({
+          schema: strategySchema,
+          prompt: [
+            `Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources. ${CITE_RULES}`,
+            tag("brief", briefJson(input.brief)),
+            tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
+          ].join("\n\n"),
+        });
+        directions = r.data.directions.slice(0, 3);
+        generator = r.generator;
+        if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
+      } catch (e) {
+        await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
+        return { ok: false, error: llmMessage(e) };
+      }
+    } else {
+      directions = templateStrategy(input.brief, input.obs, input.opps.map((o) => o.title as string)).directions;
     }
-  } else {
-    directions = templateStrategy(input.brief, input.obs, input.opps.map((o) => o.title as string)).directions;
+    const evidence = evidenceText(input.obs);
+    const ws = ctx.workspace.workspaceId;
+    const version = await withUser(ctx.user.id, async (tx) => {
+      const [{ v }] = await tx`select coalesce(max(version), 0) + 1 as v from strategy_versions where project_id = ${projectId}`;
+      const [sv] = await tx`insert into strategy_versions (project_id, workspace_id, version, run_id, generator, is_demo, created_by)
+        values (${projectId}, ${ws}, ${v}, ${input.run?.id ?? null}, ${generator}, ${demo}, ${ctx.user.id}) returning id`;
+      for (const [i, d] of directions.entries()) {
+        const content = groundDirection(directionSchema.parse(d), evidence);
+        await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, name, content, evidence_ids, is_exploratory, created_by)
+          values (${sv.id}, ${projectId}, ${ws}, ${i + 1}, ${content.name.slice(0, 200)}, ${tx.json(content as never)}, ${content.evidenceIds}, ${content.isExploratory}, ${ctx.user.id})`;
+      }
+      await trackEvent(tx, { workspaceId: ws, userId: ctx.user.id, event: "strategy_generated", projectId, metadata: { version: v, generator } });
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "generated", objectType: "strategy", objectId: sv.id, summary: `generated strategy version ${v} (three directions)` });
+      return v as number;
+    });
+    await finishTask(ctx, input.taskId, "completed", `/projects/${projectId}/strategy?version=${version}`);
+    revalidatePath(`/projects/${projectId}/strategy`);
+    return { ok: true, data: { version } };
+  } catch (e) {
+    await finishTask(ctx, input.taskId, "failed", null, llmMessage(e)).catch(() => undefined);
+    return { ok: false, error: llmMessage(e) };
   }
-  const evidence = evidenceText(input.obs);
-  const ws = ctx.workspace.workspaceId;
-  const version = await withUser(ctx.user.id, async (tx) => {
-    const [{ v }] = await tx`select coalesce(max(version), 0) + 1 as v from strategy_versions where project_id = ${projectId}`;
-    const [sv] = await tx`insert into strategy_versions (project_id, workspace_id, version, run_id, generator, is_demo, created_by)
-      values (${projectId}, ${ws}, ${v}, ${input.run?.id ?? null}, ${generator}, ${demo}, ${ctx.user.id}) returning id`;
-    for (const [i, d] of directions.entries()) {
-      const content = groundDirection(directionSchema.parse(d), evidence);
-      await tx`insert into strategy_directions (version_id, project_id, workspace_id, slot, name, content, evidence_ids, is_exploratory, created_by)
-        values (${sv.id}, ${projectId}, ${ws}, ${i + 1}, ${content.name.slice(0, 200)}, ${tx.json(content as never)}, ${content.evidenceIds}, ${content.isExploratory}, ${ctx.user.id})`;
-    }
-    await trackEvent(tx, { workspaceId: ws, userId: ctx.user.id, event: "strategy_generated", projectId, metadata: { version: v, generator } });
-    await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "generated", objectType: "strategy", objectId: sv.id, summary: `generated strategy version ${v} (three directions)` });
-    return v as number;
-  });
-  await finishTask(ctx, input.taskId, "completed", `/projects/${projectId}/strategy?version=${version}`);
-  revalidatePath(`/projects/${projectId}/strategy`);
-  return { ok: true, data: { version } };
 }
 
 const editable = directionSchema.pick({
@@ -317,37 +323,43 @@ export async function generateCreativeBriefAction(projectId: string): Promise<Re
     return { d, brief, obs: d.run_id ? await readObservations(tx, projectId, { runId: d.run_id, limit: 40 }) : [], taskId };
   });
   if (!input) return { ok: false, error: "Select a strategy direction first." };
-  const direction = input.d.content as DirectionContent;
-  let content: CreativeBriefContent = templateCreativeBrief(input.brief, direction);
-  // Template briefs carry over the direction's verified statements as their audience-context grounding.
-  let grounding: CreativeGrounding = (direction.claims ?? []).filter((c) => c.support === "verified").map((c) => ({ ...c, section: "audienceContext" as const }));
-  let generator = input.d.is_demo ? "demo-template" : TEMPLATE_GENERATOR;
-  if (!input.d.is_demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
-    try {
-      const r = await generateStructured({
-        schema: creativeBriefOutputSchema,
-        prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. The section texts are client-facing: never write evidence ids in them. In \`grounding\`, list the factual statements the brief relies on, each with its section and the ids of the evidence items whose text supports it.`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
-      });
-      const { grounding: g, ...prose } = r.data;
-      content = prose;
-      const evidence = evidenceText(input.obs);
-      grounding = g.map((c) => ({ ...checkStatements([c], evidence)[0], section: c.section }));
-      generator = r.generator;
-    } catch (e) {
-      await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
-      return { ok: false, error: llmMessage(e) };
+  // Any failure after the task row exists must close it, or it shows as running forever.
+  try {
+    const direction = input.d.content as DirectionContent;
+    let content: CreativeBriefContent = templateCreativeBrief(input.brief, direction);
+    // Template briefs carry over the direction's verified statements as their audience-context grounding.
+    let grounding: CreativeGrounding = (direction.claims ?? []).filter((c) => c.support === "verified").map((c) => ({ ...c, section: "audienceContext" as const }));
+    let generator = input.d.is_demo ? "demo-template" : TEMPLATE_GENERATOR;
+    if (!input.d.is_demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
+      try {
+        const r = await generateStructured({
+          schema: creativeBriefOutputSchema,
+          prompt: [`Write an actionable creative brief from the selected direction. Reasons to believe may only use facts provided in the brief; otherwise say they are to be confirmed. Do not invent deliverables, budgets or metrics not implied by the brief — mark them 'to confirm'. The section texts are client-facing: never write evidence ids in them. In \`grounding\`, list the factual statements the brief relies on, each with its section and the ids of the evidence items whose text supports it.`, tag("brief", briefJson(input.brief)), tag("evidence", JSON.stringify({ direction, observations: JSON.parse(obsJson(input.obs)).slice(0, 25) }))].join("\n\n"),
+        });
+        const { grounding: g, ...prose } = r.data;
+        content = prose;
+        const evidence = evidenceText(input.obs);
+        grounding = g.map((c) => ({ ...checkStatements([c], evidence)[0], section: c.section }));
+        generator = r.generator;
+      } catch (e) {
+        await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
+        return { ok: false, error: llmMessage(e) };
+      }
     }
+    const id = await withUser(ctx.user.id, async (tx) => {
+      const [cb] = await tx`insert into creative_briefs (project_id, workspace_id, direction_id, content, grounding, generator, is_demo, created_by, updated_by)
+        values (${projectId}, ${ctx.workspace.workspaceId}, ${input.d.id}, ${tx.json(content as never)}, ${tx.json(grounding as never)}, ${generator}, ${input.d.is_demo}, ${ctx.user.id}, ${ctx.user.id}) returning id`;
+      await trackEvent(tx, { workspaceId: ctx.workspace.workspaceId, userId: ctx.user.id, event: "creative_brief_generated", projectId });
+      await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "generated", objectType: "creative_brief", objectId: cb.id, summary: `generated a creative brief from “${input.d.name}”` });
+      return cb.id as string;
+    });
+    await finishTask(ctx, input.taskId, "completed", `/projects/${projectId}/creative-brief`);
+    revalidatePath(`/projects/${projectId}`, "layout");
+    return { ok: true, data: { id } };
+  } catch (e) {
+    await finishTask(ctx, input.taskId, "failed", null, llmMessage(e)).catch(() => undefined);
+    return { ok: false, error: llmMessage(e) };
   }
-  const id = await withUser(ctx.user.id, async (tx) => {
-    const [cb] = await tx`insert into creative_briefs (project_id, workspace_id, direction_id, content, grounding, generator, is_demo, created_by, updated_by)
-      values (${projectId}, ${ctx.workspace.workspaceId}, ${input.d.id}, ${tx.json(content as never)}, ${tx.json(grounding as never)}, ${generator}, ${input.d.is_demo}, ${ctx.user.id}, ${ctx.user.id}) returning id`;
-    await trackEvent(tx, { workspaceId: ctx.workspace.workspaceId, userId: ctx.user.id, event: "creative_brief_generated", projectId });
-    await logActivity(tx, { workspaceId: ctx.workspace.workspaceId, actorId: ctx.user.id, projectId, verb: "generated", objectType: "creative_brief", objectId: cb.id, summary: `generated a creative brief from “${input.d.name}”` });
-    return cb.id as string;
-  });
-  await finishTask(ctx, input.taskId, "completed", `/projects/${projectId}/creative-brief`);
-  revalidatePath(`/projects/${projectId}`, "layout");
-  return { ok: true, data: { id } };
 }
 
 const sectionKey = z.enum(CREATIVE_SECTIONS.map(([k]) => k) as [CreativeSectionKey, ...CreativeSectionKey[]]);

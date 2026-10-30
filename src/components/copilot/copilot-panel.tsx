@@ -41,8 +41,14 @@ export function CopilotPanel({
     setError(null);
     setValue("");
     setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: question, generator: null, cited: [], action: null, steps: [], createdAt: new Date().toISOString() }]);
-    const res = await askCopilotAction({ projectId, conversationId, question });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof askCopilotAction>>;
+    try {
+      res = await askCopilotAction({ projectId, conversationId, question });
+    } catch {
+      res = { ok: false, error: "The assistant could not answer (the request failed or timed out). Try again." };
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       setError(res.error);
       return;

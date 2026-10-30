@@ -21,9 +21,16 @@ export function GenerateButton({
     if (started.current) return;
     started.current = true;
     setPending(true);
-    const r = await action();
-    setPending(false);
-    started.current = false;
+    let r: { ok: boolean; error?: string };
+    try {
+      r = await action();
+    } catch {
+      // A thrown action (timeout, network) must not leave the button spinning.
+      r = { ok: false, error: "The request failed or timed out. Nothing was saved; try again." };
+    } finally {
+      setPending(false);
+      started.current = false;
+    }
     if (!r.ok) toast({ tone: "error", title: "Not generated", description: r.error });
     else {
       toast({ tone: "success", title: successTitle });

@@ -5,6 +5,7 @@ import { ResearchWorkspace } from "@/components/research/research-workspace";
 import { generatorLabel } from "@/lib/ai";
 import { loadConversation } from "@/lib/ai/copilot-actions";
 import { withUser } from "@/lib/db";
+import { sweepStaleRuns } from "@/lib/research/lifecycle";
 import { demoModeAllowed, env } from "@/lib/env";
 import { loadBrief } from "@/lib/data/briefs";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -22,6 +23,8 @@ export default async function ResearchPage({ params, searchParams }: PageProps<"
   const { projectId } = await params;
   const sp = await searchParams;
   const { ctx, project, stages } = await getProjectContext(projectId);
+  // A run whose worker died is closed before the page renders, so it never shows as running forever.
+  await withUser(ctx.user.id, (tx) => sweepStaleRuns(tx, projectId));
   const view = await getResearchView(ctx, projectId, typeof sp.run === "string" ? sp.run : null);
   const { brief, featured, oppCount, webEnabled } = await withUser(ctx.user.id, async (tx) => {
     const [f] = await tx`select id, title, description, is_demo, generator, cardinality(evidence_ids) as n from opportunities

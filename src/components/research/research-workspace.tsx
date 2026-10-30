@@ -53,6 +53,7 @@ function useRunWatcher(projectId: string, run: RunRow | null) {
   React.useEffect(() => {
     if (!run || (run.status !== "queued" && run.status !== "running")) return;
     let stop = false;
+    let polls = 0;
     const tick = async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}/runs/${run.id}`, { cache: "no-store" });
@@ -65,7 +66,9 @@ function useRunWatcher(projectId: string, run: RunRow | null) {
           }
         }
       } catch {}
-      if (!stop) setTimeout(tick, 1800);
+      // Poll briskly at first, then ease off: long runs don't need a request every 2 seconds.
+      polls++;
+      if (!stop) setTimeout(tick, polls < 20 ? 1800 : 5000);
     };
     const t = setTimeout(tick, 1200);
     return () => {
@@ -104,10 +107,21 @@ export function ResearchWorkspace(p: Props) {
     if (starting) return;
     keyRef.current[mode] ??= crypto.randomUUID();
     setStarting(mode);
-    // Demo runs and retries use the multi-source pipeline (Qloo + web + documents) at the previous or standard depth.
-    const res = await startResearchAction({ projectId: p.project.id, mode, idempotencyKey: keyRef.current[mode], depth: p.run?.depth ?? "standard", question: p.deep?.question ?? null });
-    setStarting(null);
-    delete keyRef.current[mode];
+    let res: Awaited<ReturnType<typeof startResearchAction>>;
+    try {
+      // Demo runs and retries use the multi-source pipeline (Qloo + web + documents) at the previous or standard depth.
+      res = await startResearchAction({ projectId: p.project.id, mode, idempotencyKey: keyRef.current[mode], depth: p.run?.depth ?? "standard", question: p.deep?.question ?? null });
+    } catch {
+      res = { ok: false, error: "The request failed. Check your connection and try again." };
+    } finally {
+      setStarting(null);
+      delete keyRef.current[mode];
+    }
+    if (!res.ok && res.activeRunId) {
+      toast({ tone: "info", title: "A research run is already in progress", description: "Showing it now. Start another once it finishes, or cancel it." });
+      router.push(`/projects/${p.project.id}/research?run=${res.activeRunId}`);
+      return router.refresh();
+    }
     if (!res.ok) return toast({ tone: "error", title: "Research not started", description: res.error });
     toast({ tone: "success", title: res.reused ? "A research run is already in progress" : mode === "demo" ? "Demonstration run started" : "Research run started" });
     router.push(`/projects/${p.project.id}/research?run=${res.runId}`);

@@ -5,6 +5,7 @@ import { withUser } from "@/lib/db";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx, type Ctx } from "@/lib/data/workspace";
 import { ForbiddenError } from "@/lib/permissions";
+import { sweepStaleRuns } from "./lifecycle";
 
 /** Structured, non-sensitive API errors. */
 export const apiError = (status: number, code: string, message: string) => NextResponse.json({ error: { code, message } }, { status, headers: { "Cache-Control": "no-store" } });
@@ -23,7 +24,11 @@ export async function apiCtx(): Promise<Ctx | NextResponse> {
 /** Loads a job the caller can see (RLS); 404 for anything else, including other workspaces' jobs. */
 export async function loadJob(ctx: Ctx, jobId: string) {
   if (!isUuid(jobId)) return null;
-  const [row] = await withUser(ctx.user.id, (tx) => tx`select * from research_runs where id = ${jobId}`);
+  const [row] = await withUser(ctx.user.id, async (tx) => {
+    const [r] = await tx`select project_id from research_runs where id = ${jobId}`;
+    if (r) await sweepStaleRuns(tx, r.project_id as string);
+    return tx`select * from research_runs where id = ${jobId}`;
+  });
   return row ?? null;
 }
 

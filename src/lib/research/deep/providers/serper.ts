@@ -104,6 +104,8 @@ export async function serperNews(opts: {
   query: string;
   window: "d" | "w";
   count?: number;
+  /** Results page (1-based); page 2 holds results 11–20. */
+  page?: number;
   country?: string | null;
   apiKey: string;
   usdPerCall?: number;
@@ -114,14 +116,15 @@ export async function serperNews(opts: {
   const num = Math.min(opts.count ?? 10, 20);
   const gl = opts.country && /^[a-z]{2}$/i.test(opts.country) ? opts.country.toLowerCase() : undefined;
   const tbs = `qdr:${opts.window}`;
+  const page = opts.page && opts.page > 1 ? opts.page : undefined;
   return requestJson<Hit[]>({
     url: "https://google.serper.dev/news",
     init: {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-KEY": opts.apiKey },
-      body: JSON.stringify({ q, num, tbs, ...(gl ? { gl } : {}) }),
+      body: JSON.stringify({ q, num, tbs, ...(gl ? { gl } : {}), ...(page ? { page } : {}) }),
     },
-    params: { q, num: String(num), tbs, ...(gl ? { gl } : {}) },
+    params: { q, num: String(num), tbs, ...(gl ? { gl } : {}), ...(page ? { page: String(page) } : {}) },
     fallback: [],
     usdPerCall: opts.usdPerCall ?? 0.001,
     fetcher: opts.fetcher,

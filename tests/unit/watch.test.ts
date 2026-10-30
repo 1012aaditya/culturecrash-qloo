@@ -41,6 +41,14 @@ describe("Serper news adapter", () => {
     expect(r.data[0]).toMatchObject({ sourceType: "news", publisher: "News Test", publishedAt: "2026-10-30T09:00:00.000Z", publishedPrecision: "approximate" });
     expect(r.data[1]).toMatchObject({ publishedAt: null, publishedPrecision: undefined });
   });
+  it("asks for page 2 only when told to", async () => {
+    const fetcher = vi.fn(async () => json({ news: [] }));
+    await serperNews({ query: '"Nike"', window: "w", page: 2, apiKey: "secret-key", fetcher });
+    await serperNews({ query: '"Nike"', window: "w", page: 1, apiKey: "secret-key", fetcher });
+    const bodies = fetcher.mock.calls.map((c) => JSON.parse(((c as unknown as [string, RequestInit])[1]).body as string));
+    expect(bodies[0].page).toBe(2);
+    expect(bodies[1]).not.toHaveProperty("page");
+  });
 });
 
 describe("Exa adapter for news", () => {
@@ -54,21 +62,28 @@ describe("Exa adapter for news", () => {
 });
 
 describe("Watch plan", () => {
-  it("runs three searches per company and a past-week window on the first check", () => {
+  it("plans five searches per company and a past-week window on the first check", () => {
     const tasks = buildWatchPlan([nike, adidas, puma], { keywords: [], lastSuccessAt: null, now: new Date(NOW) });
-    expect(tasks).toHaveLength(9);
-    expect(new Set(tasks.map((t) => t.key)).size).toBe(9);
+    expect(tasks).toHaveLength(15);
+    expect(new Set(tasks.map((t) => t.key)).size).toBe(15);
     expect(tasks.every((t) => t.window === "w")).toBe(true);
     expect(tasks[0].since).toBe("2026-10-23T12:00:00.000Z");
     expect(tasks.filter((t) => t.provider === "exa")).toHaveLength(3);
-    expect(tasks[1].query).toBe('"Nike" launch OR campaign OR partnership OR collaboration');
+    expect(tasks[2].query).toBe('"Nike" launch OR campaign OR partnership OR collaboration');
+  });
+  it("only plans a second Serper page after the first, and keeps first-page keys stable for the cache", () => {
+    const tasks = buildWatchPlan([nike], { keywords: [], lastSuccessAt: null, now: new Date(NOW) });
+    const p2 = tasks.filter((t) => t.page === 2);
+    expect(p2.map((t) => t.afterFull)).toEqual(["n:serper:name", "n:serper:topics"]);
+    for (const t of p2) expect(tasks.findIndex((x) => x.key === t.afterFull)).toBeLessThan(tasks.indexOf(t));
+    expect(tasks.filter((t) => t.page === 1).map((t) => t.key)).toEqual(["n:serper:name", "n:serper:topics", "n:exa"]);
   });
   it("narrows to the past day after a recent success, with a day of overlap", () => {
     const last = new Date(NOW - 20 * 3_600_000);
     const [t] = buildWatchPlan([nike], { keywords: ["running shoes", "sustainability"], lastSuccessAt: last, now: new Date(NOW) });
     expect(t.window).toBe("d");
     expect(t.since).toBe(new Date(last.getTime() - 86_400_000).toISOString());
-    const topics = buildWatchPlan([nike], { keywords: ["running shoes", "sustainability"], lastSuccessAt: last, now: new Date(NOW) })[1];
+    const topics = buildWatchPlan([nike], { keywords: ["running shoes", "sustainability"], lastSuccessAt: last, now: new Date(NOW) })[2];
     expect(topics.query).toBe('"Nike" "running shoes" OR sustainability');
   });
   it("never skips a scheduled day, whenever the last check ran", () => {

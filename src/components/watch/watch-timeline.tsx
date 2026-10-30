@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Ago, When } from "@/components/ui/time";
 import { useToast } from "@/components/ui/toast";
 import { checkNowAction, setWatchStatusAction } from "@/lib/watch/actions";
-import type { SourceHealth, WatchItem, WatchView } from "@/lib/watch/data";
+import type { SourceHealth, WatchItem, WatchRun, WatchView } from "@/lib/watch/data";
 import { cn, formatDate, pluralize } from "@/lib/utils";
 
 const PROVIDER: Record<string, string> = { serper: "Google News (Serper)", exa: "Exa" };
@@ -43,6 +43,16 @@ export function WatchTimeline({ view }: { view: WatchView }) {
           </div>
         )}
       </div>
+
+      {view.watch && view.watch.consecutiveFailures >= 3 && (
+        <div role="alert" className="mt-5 flex items-start gap-3 rounded-cc-lg border border-danger/30 bg-danger/5 p-4 text-[13px]">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
+          <div>
+            <p className="font-medium text-danger">The last {view.watch.consecutiveFailures} checks failed</p>
+            <p className="mt-0.5 text-ink/80">{view.lastJob?.error ?? "No new stories are being collected."} Source health and the run history on the right show what went wrong.</p>
+          </div>
+        </div>
+      )}
 
       {!view.watch ? (
         <Empty title="Nothing watched yet" body="Set up the watch on the right. Each day we search news for the company and up to two competitors and list what we find here." />
@@ -182,5 +192,33 @@ function SourceRow({ h }: { h: SourceHealth }) {
         {h.failures7d > 0 && <span className="block text-muted">{h.failures7d} of {h.calls7d} calls failed this week{bad && h.lastError ? `: ${h.lastError.slice(0, 120)}` : ""}</span>}
       </span>
     </li>
+  );
+}
+
+const RUN_TONE: Record<string, "success" | "warning" | "danger" | "outline"> = {
+  completed: "success", partially_completed: "warning", failed: "danger", queued: "outline", running: "outline",
+};
+
+/** The last 14 checks: what each found, added and cost, so a quiet or failing watch is easy to tell apart. */
+export function WatchRunHistory({ runs }: { runs: WatchRun[] }) {
+  if (!runs.length) return null;
+  return (
+    <div className="rounded-cc-lg border border-line bg-paper p-5">
+      <p className="cc-eyebrow text-muted">Recent checks</p>
+      <ol className="mt-3 divide-y divide-line">
+        {runs.map((r) => (
+          <li key={r.id} className="py-2.5 text-[12px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-ink">{r.startedAt ? <When value={r.startedAt} /> : "Waiting"}{r.manual && <span className="text-muted"> · manual</span>}</span>
+              <Badge tone={RUN_TONE[r.status] ?? "outline"}>{JOB_LABEL[r.status] ?? r.status}</Badge>
+            </div>
+            <p className="mt-0.5 text-muted">
+              {r.added} new of {r.found} found · {r.calls} {r.calls === 1 ? "search" : "searches"}{r.failedCalls ? ` (${r.failedCalls} failed)` : ""} · ${r.costUsd.toFixed(3)}
+            </p>
+            {r.status === "failed" && r.error && <p className="mt-0.5 text-danger">{r.error}</p>}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }

@@ -252,6 +252,7 @@ d("Watch Milestone 1 (A–H)", () => {
     const [job] = await sql`select * from watch_jobs where watch_id = ${watchId} and run_key like 'schedule:%'`;
     expect(job.status).toBe("failed");
     expect(job.error_message).toMatch(/budget/i);
+    expect(job.retryable).toBe(false); // retrying later today can't fix a used-up budget
     const [w] = await sql`select last_attempted_at, last_success_at from watches where id = ${watchId}`;
     expect(w.last_attempted_at).not.toBeNull();
     await sql`update workspaces set research_budget_usd_monthly = 25 where id = ${A.ws}`;
@@ -267,19 +268,21 @@ d("Watch Milestone 1 (A–H)", () => {
     expect(r.body.result.processed).toBe(1);
     const [job] = await sql`select * from watch_jobs where watch_id = ${watchId}`;
     expect(job.status).toBe("partially_completed");
-    expect(job.error_message).toMatch(/3 of 9 searches failed/);
+    expect(job.error_message).toMatch(/3 of 9 searches failed, even after a retry/);
+    expect(job.retryable).toBe(true);
     expect(job.added).toBeGreaterThan(0);
     const docs = await sql`select provider from research_documents where watch_id = ${watchId}`;
     expect(docs.length).toBeGreaterThan(0);
     expect(docs.every((x) => x.provider === "serper")).toBe(true);
     const errors = await sql`select provider, status, http_status from research_sources where watch_job_id = ${job.id} and status = 'error'`;
-    expect(errors).toHaveLength(3);
+    // Each failing Exa search was tried, then retried once at the end of the job.
+    expect(errors).toHaveLength(6);
     expect(errors.every((e) => e.provider === "exa" && e.http_status === 500)).toBe(true);
     // The page's read model shows Exa failing and Serper working.
     const { getWatchView } = await import("@/lib/watch/data");
     const view = await getWatchView({ user: { id: A.id }, workspace: { workspaceId: A.ws } } as never, nikeClient);
     const health = Object.fromEntries(view!.health.map((h) => [h.provider, h]));
-    expect(health.exa).toMatchObject({ configured: true, lastStatus: "error", failures7d: 3 });
+    expect(health.exa).toMatchObject({ configured: true, lastStatus: "error", failures7d: 6 });
     expect(health.serper).toMatchObject({ configured: true, lastStatus: "ok", failures7d: 0 });
     expect(view!.lastJob).toMatchObject({ status: "partially_completed" });
     expect(view!.items.every((i) => i.target)).toBe(true);

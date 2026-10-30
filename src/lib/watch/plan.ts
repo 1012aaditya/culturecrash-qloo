@@ -10,6 +10,10 @@ export type WatchTask = {
   targetId: string;
   provider: "serper" | "exa";
   query: string;
+  /** Serper results page. Page 2 runs only when page 1 came back full (see `afterFull`). */
+  page: number;
+  /** The page-1 task whose full result list makes this page worth fetching. */
+  afterFull?: string;
   /** Serper's recency window: past day after a recent success, otherwise past week. */
   window: "d" | "w";
   /** Exa's lower bound on publication time (ISO). */
@@ -21,9 +25,9 @@ const DAY = 86_400_000;
 const DEFAULT_TOPICS = ["launch", "campaign", "partnership", "collaboration", "announces"];
 
 /**
- * Three searches per target: two Serper news searches (the name on its own, then the name with the
- * watch's topics) and one Exa news search from just before the last successful check. Small and fixed,
- * so a daily run for a company and two competitors stays around nine calls.
+ * Per target: Serper news for the name on its own and for the name with the watch's topics — each with a
+ * second page of results when the first is full — plus one Exa news search from just before the last
+ * successful check. A daily run for a company and two competitors makes 9 to 15 calls.
  */
 export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[]; lastSuccessAt: Date | null; now?: Date }): WatchTask[] {
   const now = opts.now ?? new Date();
@@ -34,13 +38,24 @@ export function buildWatchPlan(targets: WatchTarget[], opts: { keywords: string[
   const topics = (opts.keywords.length ? opts.keywords : DEFAULT_TOPICS).slice(0, 4);
   return targets.flatMap((t) => {
     const name = t.name.trim();
+    const base = { targetId: t.id, window, since };
+    const nameQ = `"${name}"`;
+    const topicsQ = `"${name}" ${topics.map((k) => (/\s/.test(k) ? `"${k}"` : k)).join(" OR ")}`;
     return [
-      { key: `${t.id}:serper:name`, targetId: t.id, provider: "serper" as const, query: `"${name}"`, window, since },
-      { key: `${t.id}:serper:topics`, targetId: t.id, provider: "serper" as const, query: `"${name}" ${topics.map((k) => (/\s/.test(k) ? `"${k}"` : k)).join(" OR ")}`, window, since },
-      { key: `${t.id}:exa`, targetId: t.id, provider: "exa" as const, query: `${name} ${topics.join(" ")} news`, window, since },
+      { ...base, key: `${t.id}:serper:name`, provider: "serper" as const, query: nameQ, page: 1 },
+      { ...base, key: `${t.id}:serper:name:p2`, provider: "serper" as const, query: nameQ, page: 2, afterFull: `${t.id}:serper:name` },
+      { ...base, key: `${t.id}:serper:topics`, provider: "serper" as const, query: topicsQ, page: 1 },
+      { ...base, key: `${t.id}:serper:topics:p2`, provider: "serper" as const, query: topicsQ, page: 2, afterFull: `${t.id}:serper:topics` },
+      { ...base, key: `${t.id}:exa`, provider: "exa" as const, query: `${name} ${topics.join(" ")} news`, page: 1 },
     ];
   });
 }
+
+/** Results per Serper page; a full first page means there are probably more worth fetching. */
+export const SERPER_PAGE_SIZE = 10;
+
+/** Failed runs in a row after which the watch's owner is told. */
+export const FAILING_AFTER = 3;
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

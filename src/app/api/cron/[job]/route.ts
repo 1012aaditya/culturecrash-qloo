@@ -2,13 +2,13 @@ import { timingSafeEqual } from "node:crypto";
 import { env } from "@/lib/env";
 import { runWeeklyDigest } from "@/lib/jobs/digest";
 import { runRetention } from "@/lib/jobs/retention";
-import { runWatchCron } from "@/lib/watch/schedule";
+import { runWatchCron, runWatchWorker } from "@/lib/watch/schedule";
 
 export const dynamic = "force-dynamic";
 // Watch collection runs inside the daily cron call (Vercel Hobby fires once a day), so allow the full 300 s.
 export const maxDuration = 300;
 
-const JOBS = { retention: runRetention, "weekly-digest": runWeeklyDigest, watch: () => runWatchCron() } as const;
+const JOBS = { retention: runRetention, "weekly-digest": runWeeklyDigest, watch: () => runWatchCron(), "watch-worker": () => runWatchWorker() } as const;
 
 function authorized(req: Request): boolean {
   const secret = env().CRON_SECRET;

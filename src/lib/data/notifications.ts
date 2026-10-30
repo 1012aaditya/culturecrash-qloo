@@ -2,7 +2,7 @@ import "server-only";
 import type { Tx } from "@/lib/db";
 import type { ShellNotification } from "@/components/nav/types";
 
-export type NotificationKind = "research_completed" | "research_failed" | "report_shared" | "member_added" | "task_completed";
+export type NotificationKind = "research_completed" | "research_failed" | "report_shared" | "member_added" | "task_completed" | "watch_failing" | "watch_assigned";
 
 /** Inserted under the actor's RLS context: the recipient must be a member of the workspace. */
 export async function createNotification(tx: Tx, n: {

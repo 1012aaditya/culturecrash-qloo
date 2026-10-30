@@ -3,7 +3,7 @@
 import { Ago } from "@/components/ui/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, FileText, FlaskConical, TriangleAlert, UserPlus } from "lucide-react";
+import { Bell, CheckCheck, FileText, FlaskConical, Radar, TriangleAlert, UserPlus } from "lucide-react";
 import * as React from "react";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { markAllNotificationsReadAction, openNotificationAction } from "@/lib/data/notification-actions";
@@ -15,6 +15,7 @@ const POLL_MS = 60_000;
 
 const ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   research_completed: FlaskConical, research_failed: TriangleAlert, report_shared: FileText, member_added: UserPlus,
+  watch_failing: TriangleAlert, watch_assigned: Radar,
 };
 
 /** Bell with unread count: in-app notifications plus the latest background tasks. Polls while the tab is visible. */
@@ -93,7 +94,7 @@ export function NotificationBell({ initial, tasks }: { initial: Notifications; t
               if (!n.read) setData((d) => ({ unread: Math.max(0, d.unread - 1), items: d.items.map((i) => (i.id === n.id ? { ...i, read: true } : i)) }));
               start(async () => { await openNotificationAction(n.id); });
             }}>
-              <span className={cn("mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full", n.kind === "research_failed" ? "bg-danger/10 [&_svg]:!text-danger" : "bg-lilac/70 [&_svg]:!text-violet")}>
+              <span className={cn("mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full", n.kind === "research_failed" || n.kind === "watch_failing" ? "bg-danger/10 [&_svg]:!text-danger" : "bg-lilac/70 [&_svg]:!text-violet")}>
                 <Icon className="size-3.5" />
               </span>
               <span className="min-w-0 flex-1">

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ClientHeader } from "@/components/workspace/client-header";
-import { WatchHealth, WatchTimeline } from "@/components/watch/watch-timeline";
+import { WatchHealth, WatchRunHistory, WatchTimeline } from "@/components/watch/watch-timeline";
 import { WatchConfigForm } from "@/components/watch/watch-config-form";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
@@ -29,6 +29,7 @@ export default async function WatchPage({ params }: PageProps<"/workspace/client
         </section>
         <aside className="order-1 space-y-4 lg:order-2" aria-label="Watch settings and health">
           <WatchHealth view={view} canEdit={canEdit} />
+          <WatchRunHistory runs={view.runs} />
           <WatchConfigForm
             clientId={view.client.id}
             canEdit={canEdit}

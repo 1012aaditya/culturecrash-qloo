@@ -131,7 +131,7 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
         <div className="relative min-h-0 flex-1 bg-ivory">
           {src
             // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
-            ? <img src={src} alt={data.alt || data.title || "Reference image"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className="h-full w-full object-cover" />
+            ? <img src={src} alt={data.alt || data.title || "Reference image"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className={cn("h-full w-full object-cover", rights === "ai" && "cc-develop")} />
             : <div className="flex h-full items-center justify-center text-[12px] text-muted">Image unavailable</div>}
           {presenting && (rights === "reference" || rights === "ai") && (
             <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-charcoal/70 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wider text-white">{RIGHTS_LABEL[rights]}</span>

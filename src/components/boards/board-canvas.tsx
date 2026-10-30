@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, useReactFlow, type NodeChange, type OnNodeDrag } from "@xyflow/react";
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, Frame, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
+  ArrowLeft, ChevronLeft, ChevronRight, Frame, Pause, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
   Redo2, Sparkles, StickyNote, Trash2, Undo2, Wand2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import { ConceptDialog, type ConceptRequest } from "./concept-dialog";
 import { conceptJobsAction, improveConceptAction, type ConceptResult } from "@/lib/concepts/actions";
 import { ConceptTrailDialog } from "./concept-trail";
 import type { PendingConcept } from "@/lib/concepts/data";
+import { WORLD_FRAMES_Y } from "@/lib/concepts/story";
 
 const SAVE_DELAY_MS = 1200;
 const HISTORY_SETTLE_MS = 350;
@@ -59,6 +60,22 @@ async function extractPalette(src: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Cards build in when the board opens, in reading order (top to bottom, left to right, a group's cards
+ * after the group), so a story board unfolds chapter by chapter. Class and delay are never saved.
+ */
+function buildIn(nodes: BoardNode[]): BoardNode[] {
+  const abs = new Map(nodes.map((n) => [n.id, n.position]));
+  const at = (n: BoardNode) => {
+    const p = n.parentId ? abs.get(n.parentId) : undefined;
+    return { x: n.position.x + (p?.x ?? 0), y: n.position.y + (p?.y ?? 0) };
+  };
+  // Rows of about 300px read left to right, so a whole chapter row appears before the next.
+  const order = [...nodes].sort((a, b) => Math.floor(at(a).y / 300) - Math.floor(at(b).y / 300) || at(a).x - at(b).x || at(a).y - at(b).y);
+  const delay = new Map(order.map((n, i) => [n.id, Math.min(i * 28, 1600)]));
+  return nodes.map((n) => ({ ...n, className: "cc-node-in", style: { ...n.style, ["--cc-delay" as string]: `${delay.get(n.id)}ms` } }));
 }
 
 /** Puts freshly signed URLs on the cards that use those files. */
@@ -95,7 +112,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
-  const initial = React.useMemo(() => normalise((board.content.nodes as unknown as BoardNode[]).map(hydrate)), [board.content.nodes]);
+  const initial = React.useMemo(() => buildIn(normalise((board.content.nodes as unknown as BoardNode[]).map(hydrate))), [board.content.nodes]);
   const [nodes, setNodes, onNodesChange] = useNodesState<BoardNode>(initial);
   const [name, setName] = React.useState(board.name);
   const [panel, setPanel] = React.useState(entities.length > 0 || evidence.length > 0);
@@ -104,6 +121,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
   const searchParams = useSearchParams();
   const [presenting, setPresenting] = React.useState(() => searchParams.get("present") === "1");
   const [slide, setSlide] = React.useState(0);
+  const [autoplay, setAutoplay] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [critiqueOpen, setCritiqueOpen] = React.useState(false);
   const [critique, setCritique] = React.useState<{ data: BoardCritique | null; pending: boolean; error: string | null }>({ data: null, pending: false, error: null });
@@ -286,7 +304,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
       toast({ title: "Board is full", description: `A board holds up to ${MAX_NODES} cards. Start another board.`, tone: "error" });
       if (room <= 0) return [];
     }
-    const made = incoming.slice(0, Math.max(0, room)).map((n) => hydrate({ ...n, id: "id" in n && n.id ? n.id : crypto.randomUUID(), selected: true } as BoardNode));
+    const made = incoming.slice(0, Math.max(0, room)).map((n) => hydrate({ ...n, id: "id" in n && n.id ? n.id : crypto.randomUUID(), selected: true, className: "cc-node-in" } as BoardNode));
     setNodes((ns) => normalise([...ns.map((x) => ({ ...x, selected: false })), ...made]));
     return made.map((n) => n.id);
   }, [rf, setNodes, toast]);
@@ -366,14 +384,19 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
    */
   const placeConcept = React.useCallback(async (job: PendingConcept, r: ConceptResult, i: number) => {
     const [colours, size] = await Promise.all([extractPalette(r.thumbUrl), r.width && r.height ? { w: r.width, h: r.height } : imageSize(r.thumbUrl)]);
-    const width = 260;
+    // Landscape frames get a wider card so the board isn't a grid of identical squares.
+    const width = size.w > size.h * 1.15 ? 380 : 260;
     const height = Math.round(Math.min(560, Math.max(120, (width * size.h) / size.w))) + 64;
     const group = job.group ? rf.getNode(job.group) : undefined;
     const anchor = job.anchor ? rf.getNode(job.anchor) : undefined;
     let place: { position: { x: number; y: number }; parentId?: string };
     if (group?.type === "group") {
-      const k = rf.getNodes().filter((n) => n.parentId === group.id && n.type === "image").length;
-      place = { parentId: group.id, position: { x: 20 + (k % 2) * (width + 20), y: 186 + Math.floor(k / 2) * (height + 20) } };
+      // Frames line up left to right under the chapter's note; a third frame starts a new line.
+      const siblings = rf.getNodes().filter((n) => n.parentId === group.id && n.type === "image");
+      const line = Math.floor(siblings.length / 2);
+      const inLine = siblings.filter((n) => n.position.y === WORLD_FRAMES_Y + line * 480);
+      const x = inLine.reduce((m, n) => Math.max(m, n.position.x + (n.width ?? 260) + 20), 20);
+      place = { parentId: group.id, position: { x, y: WORLD_FRAMES_Y + line * 480 } };
     } else if (anchor) {
       place = { parentId: anchor.parentId, position: { x: anchor.position.x + (anchor.width ?? width) + 40, y: anchor.position.y } };
     } else {
@@ -662,6 +685,14 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
     // fitBounds moves at once; fitView waits for the next node change, which never comes while presenting.
     if (s.ids.length) void rf.fitBounds(rf.getNodesBounds(s.ids), { padding: 0.08, duration: 600 });
   }, [rf, slides]);
+  // Animatic: auto-play glides through the chapters, holding each long enough to read; stops at the end.
+  React.useEffect(() => {
+    if (!presenting || !autoplay) return;
+    const last = slide >= slides.length - 1;
+    const t = setTimeout(() => (last ? setAutoplay(false) : showSlide(slide + 1)), slide === 0 ? 3500 : 7000);
+    return () => clearTimeout(t);
+  }, [presenting, autoplay, slide, slides.length, showSlide]);
+
   const startPresenting = () => {
     setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
     setPresenting(true);
@@ -670,6 +701,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
   };
   const stopPresenting = React.useCallback(() => {
     setPresenting(false);
+    setAutoplay(false);
     if (location.search.includes("present=1")) window.history.replaceState(null, "", location.pathname);
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
   }, []);
@@ -859,9 +891,11 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
         {presenting && (
           <div className="absolute inset-x-0 bottom-5 z-30 flex justify-center">
             <div className="flex items-center gap-1 rounded-full bg-paper/90 px-2 py-1.5 shadow-float backdrop-blur" role="toolbar" aria-label="Presentation controls">
-              <Button variant="ghost" size="icon-sm" aria-label="Previous" disabled={slide === 0} onClick={() => showSlide(slide - 1)}><ChevronLeft /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={autoplay ? "Pause auto-play" : "Auto-play the story"} title={autoplay ? "Pause" : "Auto-play: glide through every chapter"} aria-pressed={autoplay}
+                onClick={() => { if (!autoplay && slide >= slides.length - 1) showSlide(0); setAutoplay((a) => !a); }}>{autoplay ? <Pause /> : <Play />}</Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Previous" disabled={slide === 0} onClick={() => { setAutoplay(false); showSlide(slide - 1); }}><ChevronLeft /></Button>
               <span className="min-w-36 px-2 text-center text-[13px] font-medium" aria-live="polite">{slides[slide]?.label} <span className="text-muted">· {slide + 1}/{slides.length}</span></span>
-              <Button variant="ghost" size="icon-sm" aria-label="Next" disabled={slide >= slides.length - 1} onClick={() => showSlide(slide + 1)}><ChevronRight /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Next" disabled={slide >= slides.length - 1} onClick={() => { setAutoplay(false); showSlide(slide + 1); }}><ChevronRight /></Button>
               <Button variant="ghost" size="sm" onClick={() => { void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?present=1`); toast({ title: "Presentation link copied", description: "Opens straight into presentation mode for anyone in this workspace.", tone: "success" }); }}><Link2 /> Copy link</Button>
               <Button variant="ghost" size="icon-sm" aria-label="Exit presentation" title="Exit (Esc)" onClick={stopPresenting}><X /></Button>
             </div>

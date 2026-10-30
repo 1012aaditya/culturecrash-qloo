@@ -22,13 +22,15 @@ export type Provenance = {
 export type DirectionFacts = {
   id: string; slot: number; name: string; coreIdea: string; audienceContext: string; creativeImplications: string;
   connections: string[]; evidenceIds: string[];
+  positioning: string; tension: string; brandRole: string; pillars: string[]; experiment: string;
 };
 export type ConceptContext = {
   brief: { brand: string | null; category: string | null; audience: string | null };
   signals: { name: string; affinity: number | null }[];
 };
 
-export const SAFETY = "Editorial photograph, natural light, real textures, no text, no logos, no recognisable people.";
+/** Content rules only; the look comes from the art direction so frames do not all share one style. */
+export const SAFETY = "No text, no logos, no recognisable people.";
 
 const s = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
@@ -39,6 +41,9 @@ export function directionFacts(row: Record<string, unknown>): DirectionFacts {
     audienceContext: s(c.audienceContext, 400), creativeImplications: s(c.creativeImplications, 600),
     connections: Array.isArray(c.culturalConnections) ? c.culturalConnections.filter((x): x is string => typeof x === "string").map((x) => x.slice(0, 120)).slice(0, 6) : [],
     evidenceIds: ((row.evidence_ids as string[] | null) ?? []).slice(0, 12),
+    positioning: s(c.positioningStatement, 500), tension: s(c.consumerTension, 500), brandRole: s(c.brandRole, 300),
+    pillars: Array.isArray(c.messagingPillars) ? c.messagingPillars.filter((x): x is string => typeof x === "string").map((x) => x.slice(0, 120)).slice(0, 4) : [],
+    experiment: s(c.suggestedExperiment, 400),
   };
 }
 

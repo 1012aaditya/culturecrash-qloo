@@ -9,13 +9,14 @@ import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
 import { colourName } from "@/lib/boards/colour";
-import { BOARD_BUCKET, mediaPrefix, signPaths } from "@/lib/boards/data";
+import { BOARD_BUCKET, boardEntities, mediaPrefix, signPaths } from "@/lib/boards/data";
 import { processImage } from "@/lib/boards/media";
-import { boardPalette, parseBoardContent } from "@/lib/boards/schema";
+import { boardPalette, parseBoardContent, safeUrl } from "@/lib/boards/schema";
 import { storeImages } from "@/lib/boards/store";
 import { basePrompt, currentDirections, loadContext, loadDirection, loadEvidence, provenanceFor, type Provenance } from "./context";
 import { conceptsEnabled } from "./data";
-import { improvePrompt, writeShots, type Shot } from "./director";
+import { improvePrompt, SIZES, writeShots, type Shot, type ShotPlan } from "./director";
+import { pickEntities, storyLayout, type StoryDirection } from "./story";
 import { engineStatus } from "./worker";
 
 type R<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -179,12 +180,12 @@ export async function conceptJobsAction(boardId: string, ids: string[]): Promise
 }
 
 // ---------------------------------------------------------------- visual futures
-const GROUP = { w: 600, h: 560, gap: 60, top: 180 };
-
 /**
- * One click on the strategy page: a new board with a group per direction of the current strategy
- * version, and two concept frames queued per direction. With AI on, an art director writes two distinct
- * shots per direction; otherwise the frames use the direction's idea and cultural connections directly.
+ * One click on the strategy page: a story canvas with a row per direction of the current strategy
+ * version (who, tension, idea, world, how it shows up), filled from the research: Qloo entities, cited
+ * evidence, source links, and the direction's own words. With AI on, an art director gives each direction
+ * its own photographic look, two shots (portrait hero, landscape world) and copy lines; two frames per
+ * direction are queued for the GPU PC and land in the world chapter.
  */
 export async function visualFuturesAction(projectId: string): Promise<R<{ boardId: string; frames: number }>> {
   if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
@@ -197,42 +198,61 @@ export async function visualFuturesAction(projectId: string): Promise<R<{ boardI
       if (!cur?.directions.length) return null;
       const cc = await loadContext(tx, projectId);
       const evidence = new Map(await Promise.all(cur.directions.map(async (d) => [d.id, await loadEvidence(tx, d.evidenceIds)] as const)));
-      return { ...cur, cc, evidence };
+      const evIds = cur.directions.flatMap((d) => d.evidenceIds);
+      const evCards = evIds.length ? await tx`select id, claim, evidence_type, source_provider, source_url, quality->>'score' as score from evidence_items where id = any(${evIds})` : [];
+      const [run] = await tx`select id from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
+      const docs = run ? await tx`select canonical_url, title, provider, publisher, source_type, left(excerpt, 240) as excerpt from research_documents
+        where run_id = ${run.id} and canonical_url is not null and source_type in ('community_post', 'news', 'video', 'web_page') and duplicate_of is null
+        order by (source_type = 'community_post') desc, (source_type = 'news') desc, published_at desc nulls last limit 30` : [];
+      return { ...cur, cc, evidence, evCards, docs };
     });
     if (!facts) return { ok: false, error: "Generate strategy directions first." };
+    const entities = await boardEntities(ctx, projectId);
 
-    let shots = new Map<number, Shot[]>();
+    let plan: ShotPlan = { shots: new Map(), copy: new Map() };
     if (await llmEnabled(ctx.user.id, ws)) {
       try {
-        shots = await writeShots(facts.cc, facts.directions, []);
+        plan = await writeShots(facts.cc, facts.directions, []);
       } catch (e) {
         console.error("[concepts] art director failed; using direction prompts", e instanceof Error ? e.message : e);
       }
     }
     const fallback = (d: (typeof facts.directions)[number]): Shot[] => [
-      { title: "A human moment", prompt: `A candid human moment. ${basePrompt(facts.cc, d, [])}`, why: "" },
-      { title: "The world around it", prompt: `An object and environment still life, no people. ${basePrompt(facts.cc, d, [])}`, why: "" },
+      { title: "A human moment", prompt: `A candid human moment, portrait framing. ${basePrompt(facts.cc, d, [])}`, why: "", ...SIZES.hero },
+      { title: "The world around it", prompt: `An object and environment still life, wide framing, no people. ${basePrompt(facts.cc, d, [])}`, why: "", ...SIZES.world },
     ];
+
+    // Research for each row: entities its connections mention, its own evidence, and sources it cites (else fresh ones).
+    const usedEntities = new Set<string>();
+    const usedLinks = new Set<string>();
+    const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+    const story: StoryDirection[] = facts.directions.map((d) => {
+      const cards = facts.evCards.filter((r) => d.evidenceIds.includes(r.id as string)).slice(0, 2).map((r) => ({
+        evidenceId: r.id as string, claim: String(r.claim).slice(0, 1200), evidenceType: r.evidence_type as string, source: (r.source_provider as string | null) ?? "",
+        url: typeof r.source_url === "string" && /^https?:\/\//.test(r.source_url) ? r.source_url : null, score: r.score === null ? null : Number(r.score),
+      }));
+      const cited = new Set(cards.map((c) => c.url).filter(Boolean));
+      const links = [...facts.docs.filter((x) => !cited.has(x.canonical_url as string)), ...facts.docs]
+        .filter((x) => !usedLinks.has(x.canonical_url as string) && safeUrl(x.canonical_url))
+        .slice(0, 2).map((x) => {
+          usedLinks.add(x.canonical_url as string);
+          return { url: x.canonical_url as string, title: String(x.title).slice(0, 200), siteName: String(x.publisher ?? x.provider ?? host(x.canonical_url as string)).slice(0, 120), note: x.excerpt ? String(x.excerpt).slice(0, 240) : "" };
+        });
+      return {
+        slot: d.slot, name: d.name, coreIdea: d.coreIdea, positioning: d.positioning, audienceContext: d.audienceContext, tension: d.tension, brandRole: d.brandRole,
+        pillars: d.pillars, experiment: d.experiment, entities: pickEntities(entities, d.connections, usedEntities), evidence: cards, links,
+        copy: plan.copy.get(d.slot) ?? null, why: (plan.shots.get(d.slot) ?? []).map((sh) => sh.why).filter(Boolean),
+      };
+    });
 
     const result = await withUser(ctx.user.id, async (tx) => {
       const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, created_by, updated_by)
         values (${projectId}, ${ws}, ${`Visual futures · strategy v${facts.version}`}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
-      const nodes: Record<string, unknown>[] = [{
-        id: crypto.randomUUID(), type: "note", position: { x: 0, y: 0 }, width: GROUP.w, height: 130,
-        data: { tone: "peach", text: `Visual futures for strategy version ${facts.version}: two AI concept frames per direction, made on the agency's GPU PC from each direction's idea, its cultural connections and the audience's Qloo taste signals. Select a frame and choose "Why this image" for its evidence trail. Concepts for discussion, not final artwork.` },
-      }];
-      const jobs: NewJob[] = [];
-      facts.directions.forEach((d, i) => {
-        const group = crypto.randomUUID();
-        nodes.push({ id: group, type: "group", position: { x: i * (GROUP.w + GROUP.gap), y: GROUP.top }, width: GROUP.w, height: GROUP.h, zIndex: -1, data: { label: `Direction 0${d.slot} · ${d.name}`.slice(0, 120) } });
-        nodes.push({ id: crypto.randomUUID(), type: "note", parentId: group, position: { x: 20, y: 56 }, width: GROUP.w - 40, height: 110, data: { tone: "lilac", text: d.coreIdea || d.name } });
-        for (const shot of (shots.get(d.slot) ?? fallback(d)).slice(0, 2)) {
-          jobs.push({
-            workflow: "w1-concept", params: { prompt: shot.prompt, seed: seed(), width: 1024, height: 1024 }, directionId: d.id,
-            provenance: provenanceFor(facts.cc, d, facts.evidence.get(d.id) ?? [], shot.prompt, { title: shot.title, why: shot.why || undefined, placement: { group } }),
-          });
-        }
-      });
+      const { nodes, world } = storyLayout(facts.version, story);
+      const jobs: NewJob[] = facts.directions.flatMap((d) => (plan.shots.get(d.slot) ?? fallback(d)).slice(0, 2).map((shot): NewJob => ({
+        workflow: "w1-concept", params: { prompt: shot.prompt, seed: seed(), width: shot.width, height: shot.height }, directionId: d.id,
+        provenance: provenanceFor(facts.cc, d, facts.evidence.get(d.id) ?? [], shot.prompt, { title: shot.title, why: shot.why || undefined, placement: { group: world.get(d.slot) } }),
+      })));
       const parsed = parseBoardContent({ nodes, viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
       if (!parsed) throw new Error("visual futures layout failed validation");
       await tx`update inspiration_boards set content = ${tx.json(parsed as never)}, revision = revision + 1 where id = ${b.id}`;

@@ -136,17 +136,25 @@ export async function generateStrategyAction(projectId: string): Promise<Result<
   let generator = demo ? "demo-template" : TEMPLATE_GENERATOR;
   if (!demo && (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) {
     try {
-      const r = await generateStructured({
-        schema: strategySchema,
-        prompt: [
-          "Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence; cite evidence ids. If evidence is thin for a direction, set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources.",
-          tag("brief", briefJson(input.brief)),
-          tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
-        ].join("\n\n"),
-      });
-      directions = r.data.directions.slice(0, 3);
-      generator = r.generator;
-      if (directions.length !== 3) throw new LLMError("The model did not return three directions", "invalid_output");
+      // With thin evidence the model sometimes drops a direction (live: 2 of 3 attempts), so a short
+      // answer is retried once with a reminder before the action fails.
+      let returned = 3;
+      for (let attempt = 1; ; attempt++) {
+        const r = await generateStructured({
+          schema: strategySchema,
+          prompt: [
+            "Generate exactly THREE positioning directions that differ in their underlying strategic rationale (not just wording). Ground them in the brief and evidence; cite evidence ids. If evidence is thin for a direction, still include it: set isExploratory=true and say so in uncertainties. consumerTension must be an empty string unless supported. Do not invent product benefits or sources.",
+            ...(attempt > 1 ? [`Your previous answer contained ${returned} direction(s). Return exactly three; mark weakly supported ones exploratory rather than leaving them out.`] : []),
+            tag("brief", briefJson(input.brief)),
+            tag("evidence", JSON.stringify({ observations: JSON.parse(obsJson(input.obs)), opportunities: input.opps })),
+          ].join("\n\n"),
+        });
+        directions = r.data.directions.slice(0, 3);
+        generator = r.generator;
+        returned = r.data.directions.length;
+        if (directions.length === 3) break;
+        if (attempt === 2) throw new LLMError("The model did not return three directions", "invalid_output");
+      }
     } catch (e) {
       await finishTask(ctx, input.taskId, "failed", null, llmMessage(e));
       return { ok: false, error: llmMessage(e) };

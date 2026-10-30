@@ -56,6 +56,7 @@ export function describe(n: BoardNode): string {
     case "entity": return `Qloo ${String(d.type)}: ${String(d.name)}${typeof d.affinity === "number" ? `, affinity ${d.affinity.toFixed(2)}` : ""}${lock}`;
     case "group": return `Group: ${String(d.label || "untitled")}${lock}`;
     case "evidence": return `Evidence: ${String(d.claim || "").slice(0, 80)}${lock}`;
+    case "mockup": return `Mockup, ${String(d.format)}: ${String(d.headline || "untitled")}${lock}`;
     default: return "Card";
   }
 }

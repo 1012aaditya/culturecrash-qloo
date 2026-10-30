@@ -30,7 +30,8 @@ import { ConceptDialog, type ConceptRequest } from "./concept-dialog";
 import { conceptJobsAction, improveConceptAction, type ConceptResult } from "@/lib/concepts/actions";
 import { ConceptTrailDialog } from "./concept-trail";
 import type { PendingConcept } from "@/lib/concepts/data";
-import { WORLD_FRAMES_Y } from "@/lib/concepts/story";
+import { TOUCHPOINT_SLOTS, vividColour, WORLD_FRAMES_Y } from "@/lib/concepts/story";
+import type { MockupFormat } from "@/lib/boards/schema";
 
 const SAVE_DELAY_MS = 1200;
 const HISTORY_SETTLE_MS = 350;
@@ -82,7 +83,7 @@ function buildIn(nodes: BoardNode[]): BoardNode[] {
 function withUrls(nodes: BoardNode[], urls: Record<string, string>): BoardNode[] {
   return nodes.map((n) => {
     const d = n.data;
-    if (n.type === "image") {
+    if (n.type === "image" || n.type === "mockup") {
       const url = typeof d.path === "string" ? urls[d.path] : undefined;
       const thumbUrl = typeof d.thumbPath === "string" ? urls[d.thumbPath] : undefined;
       return url || thumbUrl ? { ...n, data: { ...d, ...(url ? { url } : {}), ...(thumbUrl ? { thumbUrl } : {}) } } : n;
@@ -96,6 +97,8 @@ type CanvasProps = {
   board: BoardDoc; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[]; canEdit: boolean; canComment: boolean;
   /** Image generation on the agency's GPU PC; null when not set up or not allowed. */
   concepts: { pending: PendingConcept[] } | null;
+  /** Brand name shown on touchpoint mockups. */
+  brand: string;
 };
 type ConceptJob = PendingConcept & { status: "queued" | "running"; position: number | null };
 const CONCEPT_POLL_MS = 3000;
@@ -108,7 +111,7 @@ export function BoardCanvas(props: CanvasProps) {
   );
 }
 
-function Canvas({ board, entities, evidence, directions, canEdit, canComment, concepts }: CanvasProps) {
+function Canvas({ board, entities, evidence, directions, canEdit, canComment, concepts, brand }: CanvasProps) {
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
@@ -415,7 +418,32 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
         ? { ...n, width: Math.max(n.width ?? 0, right), height: Math.max(n.height ?? 0, bottom) } : n));
     }
     if (id) void runFit(id, r.thumbPath, true);
-  }, [add, centre, rf, runFit, setNodes]);
+    // Story boards: the frame also appears as touchpoints with the direction's copy.
+    const touch = job.touch ? rf.getNode(job.touch) : undefined;
+    if (touch?.type === "group") {
+      const formats: MockupFormat[] = size.w > size.h * 1.15 ? ["playlist", "billboard"] : ["post", "story"];
+      addNodes(formats.map((f) => ({ type: "mockup", parentId: touch.id, position: { x: TOUCHPOINT_SLOTS[f].x, y: TOUCHPOINT_SLOTS[f].y }, width: TOUCHPOINT_SLOTS[f].width, height: TOUCHPOINT_SLOTS[f].height,
+        data: { format: f, path: r.path, thumbPath: r.thumbPath, url: r.url, thumbUrl: r.thumbUrl, headline: job.copy?.headline ?? title, line: job.copy?.line ?? "", brand, accent: vividColour(colours) } })));
+    }
+  }, [add, addNodes, brand, centre, rf, runFit, setNodes]);
+
+  /** Any image as touchpoints: a new group beside the card with all four formats and the card's caption as headline. */
+  const makeMockups = React.useCallback((cardId: string) => {
+    const n = rf.getNode(cardId);
+    if (n?.type !== "image" || typeof n.data.path !== "string") return;
+    const parent = n.parentId ? rf.getNode(n.parentId) : undefined;
+    const x = n.position.x + (parent?.position.x ?? 0) + (n.width ?? 260) + 60;
+    const y = n.position.y + (parent?.position.y ?? 0);
+    const group = crypto.randomUUID();
+    const d = n.data;
+    const formats = ["post", "story", "playlist", "billboard"] as const;
+    addNodes([
+      { id: group, type: "group", position: { x, y }, width: 880, height: 700, zIndex: -1, data: { label: `Touchpoints · ${String(d.title || "concept")}`.slice(0, 120) } },
+      ...formats.map((f) => ({ type: "mockup" as const, parentId: group, position: { x: TOUCHPOINT_SLOTS[f].x, y: TOUCHPOINT_SLOTS[f].y }, width: TOUCHPOINT_SLOTS[f].width, height: TOUCHPOINT_SLOTS[f].height,
+        data: { format: f, path: d.path, thumbPath: d.thumbPath, url: d.url, thumbUrl: d.thumbUrl, headline: String(d.title || brand || "Your headline").slice(0, 120), line: "", brand, accent: vividColour(Array.isArray(d.palette) ? d.palette as string[] : []) } })),
+    ] as BoardNode[]);
+    setTimeout(() => void rf.fitView({ nodes: [{ id: group }], padding: 0.15, maxZoom: 1, duration: 500 }), 60);
+  }, [addNodes, brand, rf]);
 
   // Polls every few seconds while images are on their way; each poll's state update re-arms the next one.
   React.useEffect(() => {
@@ -754,8 +782,8 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
 
   const mod = isMac() ? "⌘" : "Ctrl+";
   const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting,
-    makeVariations: concepts ? makeVariations : null, improve: concepts ? (id: string) => void improve(id) : null, improvePending, openTrail: setTrailCard,
-  }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting, concepts, makeVariations, improve, improvePending]);
+    makeVariations: concepts ? makeVariations : null, makeMockups, improve: concepts ? (id: string) => void improve(id) : null, improvePending, openTrail: setTrailCard,
+  }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting, concepts, makeVariations, makeMockups, improve, improvePending]);
 
   return (
     <BoardCtx.Provider value={ctx}>

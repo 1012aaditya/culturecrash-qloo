@@ -60,7 +60,7 @@ export async function signNodes(nodes: Record<string, unknown>[]): Promise<Recor
   const signed = await signPaths(mediaPaths(nodes as { type?: string; data: Record<string, unknown> }[]));
   return nodes.map((n) => {
     const d = n.data as Record<string, unknown>;
-    if (n.type === "image") {
+    if (n.type === "image" || n.type === "mockup") {
       return { ...n, data: { ...d, url: typeof d.path === "string" ? signed.get(d.path) : undefined, thumbUrl: typeof d.thumbPath === "string" ? signed.get(d.thumbPath) : undefined } };
     }
     if (n.type === "link" && typeof d.imagePath === "string") return { ...n, data: { ...d, previewUrl: signed.get(d.imagePath) } };

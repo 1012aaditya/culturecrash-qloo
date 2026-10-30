@@ -6,7 +6,7 @@ import { storageAvailable } from "@/lib/boards/data";
 import type { Provenance } from "./context";
 
 /** An image on its way to the board, with where its card goes (a group, or beside the card it improves on). */
-export type PendingConcept = { id: string; kind: "concept" | "variation"; title?: string; group?: string; anchor?: string; improvedFrom?: string };
+export type PendingConcept = { id: string; kind: "concept" | "variation"; title?: string; group?: string; anchor?: string; improvedFrom?: string; touch?: string; copy?: { headline: string; line: string } };
 
 /** Generation needs a GPU PC token and Storage for the results. */
 export function conceptsEnabled() {
@@ -28,5 +28,12 @@ export function pendingFrom(id: string, workflow: string, p: Provenance | null):
     id, kind: workflow === "w3-variation" ? "variation" : "concept",
     ...(p?.title ? { title: p.title } : {}), ...(p?.placement?.group ? { group: p.placement.group } : {}),
     ...(p?.placement?.anchor ? { anchor: p.placement.anchor } : {}), ...(p?.improvement ? { improvedFrom: p.improvement.fromLevel } : {}),
+    ...(p?.placement?.touch ? { touch: p.placement.touch } : {}), ...(p?.placement?.copy ? { copy: p.placement.copy } : {}),
   };
+}
+
+/** The brand name for touchpoint mockups (from the campaign brief). */
+export async function briefBrand(ctx: Ctx, projectId: string): Promise<string> {
+  const [b] = await withUser(ctx.user.id, (tx) => tx`select brand from campaign_briefs where project_id = ${projectId}`);
+  return typeof b?.brand === "string" ? b.brand.slice(0, 60) : "";
 }

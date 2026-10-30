@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /** Card kinds on an inspiration board. Each is a React Flow node type. */
-export const BOARD_NODE_TYPES = ["image", "note", "link", "entity", "group", "evidence"] as const;
+export const BOARD_NODE_TYPES = ["image", "note", "link", "entity", "group", "evidence", "mockup"] as const;
 export type BoardNodeType = (typeof BOARD_NODE_TYPES)[number];
 
 /** Fields every card may carry. `locked` cards cannot be moved, resized or deleted until unlocked. */
@@ -29,12 +29,22 @@ export type EntityData = CommonData & {
   entityId: string; name: string; type: string; role: string; affinity: number | null; imageUrl: string | null; evidenceId: string | null;
 };
 export type GroupData = CommonData & { label: string };
+/**
+ * A touchpoint mockup: an image already on the board shown as a social post, story, playlist cover or
+ * billboard with a headline. It reuses the image's stored files (path/thumbPath), so nothing is uploaded.
+ */
+export const MOCKUP_FORMATS = ["post", "story", "playlist", "billboard"] as const;
+export type MockupFormat = (typeof MOCKUP_FORMATS)[number];
+export type MockupData = CommonData & {
+  format: MockupFormat; path: string | null; thumbPath: string | null; url?: string; thumbUrl?: string;
+  headline: string; line: string; brand: string; accent: string | null;
+};
 
 /**
  * Signed-URL fields filled in at load time and stripped before saving, per card type. A link card's
  * `url` is its real address and is kept; only an image card's `url` is a signed display URL.
  */
-export const TRANSIENT_KEYS: Partial<Record<BoardNodeType, readonly string[]>> = { image: ["url", "thumbUrl"], link: ["previewUrl"] };
+export const TRANSIENT_KEYS: Partial<Record<BoardNodeType, readonly string[]>> = { image: ["url", "thumbUrl"], mockup: ["url", "thumbUrl"], link: ["previewUrl"] };
 
 export const MAX_NODES = 400;
 
@@ -112,6 +122,12 @@ function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix:
       } satisfies EntityData;
     case "group":
       return { ...common, label: str(120).parse(d.label ?? "") } satisfies GroupData;
+    case "mockup":
+      return {
+        ...common, format: z.enum(MOCKUP_FORMATS).catch("post").parse(d.format), path: ownPath(d.path, mediaPrefix), thumbPath: ownPath(d.thumbPath, mediaPrefix),
+        headline: str(120).parse(d.headline ?? ""), line: str(240).parse(d.line ?? ""), brand: str(60).parse(d.brand ?? ""),
+        accent: hex.safeParse(d.accent).success ? (d.accent as string) : null,
+      } satisfies Omit<MockupData, "url" | "thumbUrl">;
   }
 }
 
@@ -146,7 +162,7 @@ export function boardPalette(nodes: { type?: string; data: Record<string, unknow
 export function mediaPaths(nodes: { type?: string; data: Record<string, unknown> }[]): string[] {
   const out: string[] = [];
   for (const n of nodes) {
-    for (const k of n.type === "image" ? ["path", "thumbPath"] : n.type === "link" ? ["imagePath"] : []) {
+    for (const k of n.type === "image" || n.type === "mockup" ? ["path", "thumbPath"] : n.type === "link" ? ["imagePath"] : []) {
       const v = n.data[k];
       if (typeof v === "string" && v) out.push(v);
     }

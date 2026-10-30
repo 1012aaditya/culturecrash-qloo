@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Budget, DEPTH_PROFILES, llmCostUsd } from "@/lib/research/deep/budget";
 import { cacheKey } from "@/lib/research/deep/cache";
-import { dedupe, independentCount, isRepeatQuery, mergeClaims } from "@/lib/research/deep/dedupe";
+import { dedupe, independentCount, isRepeatQuery, mergeClaims, takeAcrossQuestions } from "@/lib/research/deep/dedupe";
 import { scoreClaim } from "@/lib/research/deep/quality";
 import { assertPublicUrl, canonicalizeUrl, isPrivateAddress } from "@/lib/research/deep/url";
 
@@ -119,5 +119,15 @@ describe("budget", () => {
   it("prices LLM tokens per model", () => {
     expect(llmCostUsd("claude-haiku-5-5", 1_000_000, 0)).toBeCloseTo(0.1);
     expect(llmCostUsd("claude-opus-5-5", 0, 1_000_000)).toBeCloseTo(20);
+  });
+});
+
+describe("takeAcrossQuestions", () => {
+  const doc = (id: string, q: string) => ({ id, questionKeys: [q] });
+  it("shares the extraction cap across questions instead of filling it from the first", () => {
+    const docs = [doc("a1", "q1"), doc("a2", "q1"), doc("a3", "q1"), doc("a4", "q1"), doc("b1", "q2"), doc("b2", "q2"), doc("c1", "q3")];
+    expect(takeAcrossQuestions(docs, 5).map((d) => d.id)).toEqual(["a1", "b1", "c1", "a2", "b2"]);
+    expect(takeAcrossQuestions(docs, 99)).toHaveLength(7);
+    expect(takeAcrossQuestions(docs, 0)).toEqual([]);
   });
 });

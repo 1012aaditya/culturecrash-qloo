@@ -7,7 +7,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { localDeleteAccount, localSignIn, localUpdatePassword } from "@/lib/auth/local";
 import { getSessionUser } from "@/lib/auth/session";
-import { supabaseSignIn, supabaseUpdatePassword } from "@/lib/auth/supabase";
+import { supabaseServer, supabaseSignIn, supabaseSignOut, supabaseUpdatePassword } from "@/lib/auth/supabase";
 import { privilegedSql, withUser } from "@/lib/db";
 import { env } from "@/lib/env";
 import { emailConfigured, sendEmail } from "@/lib/email";
@@ -326,15 +326,24 @@ export async function deleteAccountAction(confirmEmail: string): Promise<Result>
   if (confirmEmail.trim().toLowerCase() !== ctx.user.email.toLowerCase()) {
     return { ok: false, error: "Type your account email exactly to confirm.", fieldErrors: { confirm: "Does not match your email" } };
   }
-  if (env().AUTH_MODE !== "local") {
-    return { ok: false, error: "Account deletion is handled by a workspace administrator through Supabase Auth in this deployment. Export your data first, then contact your administrator." };
-  }
   const { blocking, soloOwned } = await soleOwnerBlockers(ctx);
   if (blocking.length) {
     return { ok: false, error: `You are the only owner of ${blocking.map((b) => `“${b.name}”`).join(", ")}, which still has other members. Make someone else an owner, or remove the other members, first.` };
   }
   try {
-    await localDeleteAccount(ctx.user.id);
+    if (env().AUTH_MODE === "local") await localDeleteAccount(ctx.user.id);
+    else {
+      // Stored files of workspaces only this user belongs to go first (the database cascade can't reach Storage).
+      const ids = soloOwned.map((w) => w.id);
+      if (ids.length) {
+        const paths = await withUser(ctx.user.id, async (tx) =>
+          (await tx`select storage_path from brief_documents where workspace_id = any(${ids}::uuid[]) and storage_path is not null`).map((r) => r.storage_path as string));
+        await removeStoredFiles(paths);
+      }
+      // The account itself: deleting the auth row cascades to the profile and memberships.
+      await privilegedSql()`delete from auth.users where id = ${ctx.user.id}`;
+      await supabaseSignOut().catch(() => undefined);
+    }
     if (soloOwned.length) {
       // Workspaces this user was the only member of are now orphaned: remove them too.
       // (The owner guard prevents deleting them through RLS while the owner row exists.)
@@ -348,6 +357,17 @@ export async function deleteAccountAction(confirmEmail: string): Promise<Result>
   }
   (await cookies()).delete(WORKSPACE_COOKIE);
   redirect("/?account=deleted");
+}
+
+/** Removes stored brief files (as the signed-in user, under Storage policies). Throws if any can't be removed. */
+async function removeStoredFiles(paths: string[]) {
+  const e = env();
+  if (!paths.length || e.AUTH_MODE !== "supabase" || !e.NEXT_PUBLIC_SUPABASE_URL) return;
+  const client = await supabaseServer();
+  for (let i = 0; i < paths.length; i += 100) {
+    const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(paths.slice(i, i + 100));
+    if (error) throw new Error("storage cleanup failed");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -386,18 +406,10 @@ export async function deleteWorkspaceAction(confirmName: string): Promise<Result
   const ws = ctx.workspace;
   if (confirmName.trim() !== ws.name) return { ok: false, error: "Type the workspace name exactly to confirm.", fieldErrors: { confirm: "Does not match the workspace name" } };
   if (ctx.memberships.length < 2) return { ok: false, error: "This is your only workspace. Create another workspace first, or delete your account instead." };
-  const e = env();
   try {
     const paths = await withUser(ctx.user.id, async (tx) =>
       (await tx`select storage_path from brief_documents where workspace_id = ${ws.workspaceId} and storage_path is not null`).map((r) => r.storage_path as string));
-    if (paths.length && e.AUTH_MODE === "supabase" && e.NEXT_PUBLIC_SUPABASE_URL) {
-      const { supabaseServer } = await import("@/lib/auth/supabase");
-      const client = await supabaseServer();
-      for (let i = 0; i < paths.length; i += 100) {
-        const { error } = await client.storage.from(e.SUPABASE_STORAGE_BUCKET).remove(paths.slice(i, i + 100));
-        if (error) throw new Error("storage cleanup failed");
-      }
-    }
+    await removeStoredFiles(paths);
     await withUser(ctx.user.id, async (tx) => {
       const rows = await tx`delete from workspaces where id = ${ws.workspaceId} returning id`;
       if (!rows.length) throw Object.assign(new Error("forbidden"), { code: "42501" });

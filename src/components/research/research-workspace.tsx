@@ -3,7 +3,7 @@
 import { Ago, When } from "@/components/ui/time";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ExternalLink, FileText, FlaskConical, History, Info, List, Loader2, Network, Play, RotateCw, Search, X } from "lucide-react";
+import { ArrowRight, ExternalLink, FileText, FlaskConical, History, Info, List, Loader2, Network, RotateCw, Search, X } from "lucide-react";
 import * as React from "react";
 import { EntityImage } from "@/components/art/entity-image";
 import { ArtPlate, type PlateTheme } from "@/components/art/plate";
@@ -17,7 +17,7 @@ import type { CopilotMessage } from "@/lib/ai/copilot-actions";
 import type { EntityRow, RelRow, RunRow, SourceRow } from "@/lib/data/research";
 import { startResearchAction } from "@/lib/research/actions";
 import type { StageKey } from "@/lib/stages";
-import { cn, formatDateTime, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { CulturalNetwork, TYPE_LABEL, TYPE_THEME } from "./cultural-network";
 import { ResearchLauncher } from "./deep/research-launcher";
 import { ResearchProgress, ResearchReport } from "./deep/research-report";

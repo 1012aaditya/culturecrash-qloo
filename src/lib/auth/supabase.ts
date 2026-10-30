@@ -32,6 +32,20 @@ export async function supabaseGetUser(): Promise<SessionUser | null> {
   return { id: data.user.id, email: data.user.email };
 }
 
+/**
+ * Cheaper check for high-frequency, read-mostly endpoints (presence, status polling): verifies the
+ * JWT signature locally when the project uses asymmetric signing keys, instead of an Auth server
+ * round trip per request. Row Level Security still decides what the user can read or write.
+ */
+export async function supabaseGetClaimsUser(): Promise<SessionUser | null> {
+  const client = await supabaseServer();
+  const { data, error } = await client.auth.getClaims();
+  const sub = data?.claims?.sub;
+  const email = data?.claims?.email;
+  if (error || typeof sub !== "string" || typeof email !== "string") return null;
+  return { id: sub, email };
+}
+
 export async function supabaseSignUp(input: { email: string; password: string; fullName: string; workspaceName?: string }): Promise<AuthResult> {
   const client = await supabaseServer();
   const { data, error } = await client.auth.signUp({

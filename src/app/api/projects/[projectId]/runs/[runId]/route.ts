@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { withUser } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth/session";
+import { getPollingUser } from "@/lib/auth/session";
 import { isUuid } from "@/lib/data/projects";
 import { sweepStaleRuns } from "@/lib/research/lifecycle";
 
 /** Lightweight status endpoint polled while a run is in progress. RLS scopes visibility. */
 export async function GET(_: Request, { params }: RouteContext<"/api/projects/[projectId]/runs/[runId]">) {
-  const user = await getSessionUser();
+  const user = await getPollingUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const { projectId, runId } = await params;
   if (!isUuid(projectId) || !isUuid(runId)) return NextResponse.json({ error: "not found" }, { status: 404 });

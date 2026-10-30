@@ -41,7 +41,7 @@ async function user(email: string) {
 }
 
 let A: { id: string; ws: string }, B: { id: string; ws: string }, V: { id: string; ws: string };
-let projectA: string, projectB: string;
+let projectA: string;
 
 d("Row Level Security and workspace isolation", () => {
   beforeAll(async () => {
@@ -64,7 +64,8 @@ d("Row Level Security and workspace isolation", () => {
     const [inv] = await as(V.id, (tx) => tx`select id from my_pending_invitations()`);
     await as(V.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`);
     projectA = (await as(A.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${A.ws}, 'A secret launch', ${A.id}) returning id`))[0].id;
-    projectB = (await as(B.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${B.ws}, 'B secret launch', ${B.id}) returning id`))[0].id;
+    // Bob has a project of his own, so isolation checks below compare against real data.
+    await as(B.id, (tx) => tx`insert into projects (workspace_id, name, owner_id) values (${B.ws}, 'B secret launch', ${B.id})`);
   });
   afterAll(async () => {
     await sql?.end();
@@ -387,5 +388,25 @@ d("Row Level Security and workspace isolation", () => {
     expect(snap.sections).toContain("objections");
     expect(snap.objections?.verdict).toBe("vulnerable");
     expect(snap.objections?.items[0]).toMatchObject({ direction: "Ritual", competitor: "Competitor A", question: "Why us?", answer: "Own the ritual moment, not the claim." });
+  });
+
+  it("uploaders (and admins) can delete brief documents; other members and viewers can't", async () => {
+    const M = await user("mia@a.test");
+    await as(A.id, (tx) => tx`select invite_member(${A.ws}, 'mia@a.test', 'member')`);
+    const [inv] = await as(M.id, (tx) => tx`select id from my_pending_invitations()`);
+    await as(M.id, (tx) => tx`select respond_to_invitation(${inv.id}, true)`);
+    const add = (uid: string, name: string) => as(uid, (tx) => tx`insert into brief_documents (project_id, workspace_id, file_name, mime_type, size_bytes, extraction_status, created_by)
+      values (${projectA}, ${A.ws}, ${name}, 'text/plain', 10, 'extracted', ${uid}) returning id`);
+    const [mine] = await add(M.id, "mia.txt");
+    const [alices] = await add(A.id, "alice.txt");
+    expect(await as(M.id, (tx) => tx`delete from brief_documents where id = ${alices.id} returning id`)).toHaveLength(0);
+    expect(await as(V.id, (tx) => tx`delete from brief_documents where id = ${mine.id} returning id`)).toHaveLength(0);
+    expect(await as(M.id, (tx) => tx`delete from brief_documents where id = ${mine.id} returning id`)).toHaveLength(1);
+    expect(await as(A.id, (tx) => tx`delete from brief_documents where id = ${alices.id} returning id`)).toHaveLength(1);
+  });
+
+  it("digest delivery records are server-only", async () => {
+    await denied(as(A.id, (tx) => tx`select * from digest_deliveries`));
+    await denied(as(A.id, (tx) => tx`insert into digest_deliveries (user_id, week_start) values (${A.id}, current_date)`));
   });
 });

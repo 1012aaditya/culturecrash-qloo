@@ -14,7 +14,7 @@ import { useToast } from "@/components/ui/toast";
 import { ClaimList, GroundingScore, type Receipt, type ReceiptClaim } from "@/components/evidence/evidence-receipt";
 import { EVIDENCE_LABEL } from "@/lib/evidence-labels";
 import { setOpportunityStatusAction } from "@/lib/strategy/actions";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export type Opp = {
   id: string; title: string; description: string; whyItMatters: string | null; unknowns: string | null; strategicUse: string | null; validationStep: string | null;

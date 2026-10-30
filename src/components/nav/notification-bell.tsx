@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import type { ShellData } from "./types";
 
 type Notifications = ShellData["notifications"];
-const POLL_MS = 30_000;
+const POLL_MS = 60_000;
 
 const ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   research_completed: FlaskConical, research_failed: TriangleAlert, report_shared: FileText, member_added: UserPlus,

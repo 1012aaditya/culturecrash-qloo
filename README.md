@@ -124,7 +124,9 @@ policies because only the server writes to it.
    belong to:
    `bucket_id = 'brief-documents' and public.is_workspace_member(((storage.foldername(name))[1])::uuid)`.
    Without the bucket, uploads still work: extracted text is saved and the UI notes that the original file
-   was not stored.
+   was not stored. With the bucket, the browser uploads files straight to Storage through a one-time
+   signed URL (Vercel limits a function request to 4.5 MB), and migration `…1710_brief_storage.sql`
+   (applied with the others) allows image uploads and lets uploaders delete their own files.
 4. Environment: `DATABASE_URL` (the transaction pooler on port 6543 is fine — prepared statements are
    disabled), `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
    `APP_BASE_URL`.
@@ -137,7 +139,9 @@ policies because only the server writes to it.
 ## Configure providers
 
 - **Qloo**: `QLOO_API_KEY` and `QLOO_API_URL` (hackathon keys use `https://hackathon.api.qloo.com`). Then
-  run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`.
+  run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`. **Licence:** `QLOO_API_URL` defaults
+  to the hackathon host. Hackathon keys are not for commercial use: before charging customers, get a
+  commercial Qloo agreement and set `QLOO_API_URL` to the host Qloo gives you.
 - **LLM**: `ANTHROPIC_API_KEY`; `LLM_MODEL` defaults to `claude-opus-5-5`.
 - **Email** (optional): `RESEND_API_KEY`, `EMAIL_FROM` (a sender on a domain verified in Resend) and
   `PILOT_NOTIFY_EMAIL` (where /pricing pilot requests are forwarded). Sends team invitations, plus "research

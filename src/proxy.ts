@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PROTECTED = ["/dashboard", "/projects", "/search", "/tasks", "/workspace", "/settings", "/help"];
 const LOCAL_COOKIE = "cc_local_session";
+/** Not a credential: tells static marketing pages whether to show "Dashboard" or "Sign in". */
+const SIGNED_IN_HINT = "cc_signed_in";
 
 /**
  * Optimistic route protection + Supabase session refresh. Real authorization happens
@@ -31,6 +33,11 @@ export async function proxy(request: NextRequest) {
     hasSession = Boolean(data?.claims?.sub);
   }
 
+  const hinted = request.cookies.get(SIGNED_IN_HINT)?.value === "1";
+  if (hinted !== hasSession) {
+    response.cookies.set(SIGNED_IN_HINT, hasSession ? "1" : "", { path: "/", sameSite: "lax", maxAge: hasSession ? 60 * 60 * 24 * 30 : 0 });
+  }
+
   if (isProtected && !hasSession) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -41,5 +48,7 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
+  // API routes authenticate themselves (and can refresh the session); skipping the proxy saves a
+  // session check on every poll.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
 };

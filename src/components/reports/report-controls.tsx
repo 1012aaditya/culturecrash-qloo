@@ -1,6 +1,5 @@
 "use client";
 
-import { When } from "@/components/ui/time";
 import { Copy, FileText, Link2, Loader2, Plus, Share2, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -11,7 +10,6 @@ import { Field, Input, Select } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import { createReportAction, createReportVersionAction, createShareLinkAction, revokeShareLinkAction } from "@/lib/reports/actions";
 import { PITCH_PACK_SECTIONS, REPORT_SECTIONS } from "@/lib/reports/types";
-import { formatDateTime } from "@/lib/utils";
 
 function SectionPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   return (

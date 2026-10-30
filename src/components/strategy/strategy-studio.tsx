@@ -16,7 +16,7 @@ import { useToast } from "@/components/ui/toast";
 import type { DirectionContent } from "@/lib/ai/schemas";
 import { ClaimList, GroundingScore, type Receipt } from "@/components/evidence/evidence-receipt";
 import { editDirectionAction, reviseDirectionAction, selectDirectionAction } from "@/lib/strategy/actions";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export type DirectionView = {
   id: string; slot: number; revision: number; name: string; content: DirectionContent; status: string; isExploratory: boolean; revisionNote: string | null;

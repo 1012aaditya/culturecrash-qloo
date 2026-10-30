@@ -6,7 +6,7 @@ import { Avatar } from "@/components/nav/avatar";
 import type { PresencePeer } from "@/app/api/projects/[projectId]/presence/route";
 import { cn } from "@/lib/utils";
 
-const BEAT_MS = 5_000;
+const BEAT_MS = 10_000;
 const PAGE_LABEL: Record<string, string> = {
   overview: "Overview", brief: "Brief", research: "Research", evidence: "Evidence", opportunities: "Opportunities",
   strategy: "Strategy", "creative-brief": "Creative brief", experiments: "Experiments", reports: "Reports",
@@ -14,8 +14,8 @@ const PAGE_LABEL: Record<string, string> = {
 
 /**
  * Presence for one project: who else is here, on which page, and which field they are in.
- * A heartbeat (every 5 s, and immediately when your focused field changes) records your
- * position and returns everyone active in the last 30 s. Fields opt in with
+ * A heartbeat (every 10 s, and immediately when your focused field changes) records your
+ * position and returns everyone active in the last 45 s. Fields opt in with
  * `data-presence-field`; a field a teammate is editing gets `data-peer-editing` (styled in CSS).
  */
 export function ProjectPresence({ projectId }: { projectId: string }) {

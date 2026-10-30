@@ -3,8 +3,10 @@ import { withUser } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Ctx } from "@/lib/data/workspace";
 import { storageAvailable } from "@/lib/boards/data";
+import type { Provenance } from "./context";
 
-export type PendingConcept = { id: string; kind: "concept" | "variation" };
+/** An image on its way to the board, with where its card goes (a group, or beside the card it improves on). */
+export type PendingConcept = { id: string; kind: "concept" | "variation"; title?: string; group?: string; anchor?: string; improvedFrom?: string };
 
 /** Generation needs a GPU PC token and Storage for the results. */
 export function conceptsEnabled() {
@@ -14,9 +16,17 @@ export function conceptsEnabled() {
 /** This user's images still on their way to the board, so a reload picks them up again. */
 export async function pendingConcepts(ctx: Ctx, boardId: string): Promise<PendingConcept[]> {
   if (!conceptsEnabled()) return [];
-  const rows = await withUser(ctx.user.id, (tx) => tx`select id, workflow from concept_jobs
+  const rows = await withUser(ctx.user.id, (tx) => tx`select id, workflow, provenance from concept_jobs
     where board_id = ${boardId} and created_by = ${ctx.user.id} and created_at > now() - interval '2 hours'
       and (status in ('queued', 'running') or (status = 'done' and result_path is null))
     order by created_at limit 20`);
-  return rows.map((r) => ({ id: r.id as string, kind: r.workflow === "w3-variation" ? "variation" : "concept" }));
+  return rows.map((r) => pendingFrom(r.id as string, r.workflow as string, r.provenance as Provenance | null));
+}
+
+export function pendingFrom(id: string, workflow: string, p: Provenance | null): PendingConcept {
+  return {
+    id, kind: workflow === "w3-variation" ? "variation" : "concept",
+    ...(p?.title ? { title: p.title } : {}), ...(p?.placement?.group ? { group: p.placement.group } : {}),
+    ...(p?.placement?.anchor ? { anchor: p.placement.anchor } : {}), ...(p?.improvement ? { improvedFrom: p.improvement.fromLevel } : {}),
+  };
 }

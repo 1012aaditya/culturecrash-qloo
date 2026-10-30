@@ -1,15 +1,21 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { privilegedSql, withUser } from "@/lib/db";
+import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
+import { logActivity } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
 import { colourName } from "@/lib/boards/colour";
-import { mediaPrefix, signPaths, storageAvailable } from "@/lib/boards/data";
+import { BOARD_BUCKET, mediaPrefix, signPaths } from "@/lib/boards/data";
 import { processImage } from "@/lib/boards/media";
-import { boardPalette } from "@/lib/boards/schema";
+import { boardPalette, parseBoardContent } from "@/lib/boards/schema";
 import { storeImages } from "@/lib/boards/store";
+import { basePrompt, currentDirections, loadContext, loadDirection, loadEvidence, provenanceFor, type Provenance } from "./context";
+import { conceptsEnabled } from "./data";
+import { improvePrompt, writeShots, type Shot } from "./director";
 import { engineStatus } from "./worker";
 
 type R<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -17,6 +23,7 @@ type R<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
 /** Unfinished jobs allowed per board, so one click can't fill the PC's queue for everyone. */
 const MAX_ACTIVE_PER_BOARD = 8;
 const VARIATION_NEGATIVE = "text, watermark, logo, deformed hands, low quality, blurry";
+const NOT_SET_UP = "Image generation is not set up on this server.";
 
 async function guard() {
   const ctx = await getCtx();
@@ -28,39 +35,26 @@ function err(e: unknown, fallback: string): { ok: false; error: string } {
   console.error("[concepts]", e instanceof Error ? e.message : e);
   return { ok: false, error: fallback };
 }
+const paletteWords = (nodes: unknown[]) => [...new Set(boardPalette(nodes as never).slice(0, 4).map((h) => colourName(h).toLowerCase()))];
+const seed = () => Math.floor(Math.random() * 2 ** 32);
 
 export type ConceptSetup = { engine: { online: boolean; ready: boolean; gpu: string | null }; prompt: string };
 
 /**
  * GPU PC status and a starting prompt built from the project: brand and audience from the brief, the
- * board's strategy direction (or the selected one), the strongest Qloo taste tags and the board palette.
+ * board's strategy direction (or the selected one), its cultural connections and the board palette.
  */
 export async function conceptSetupAction(boardId: string): Promise<R<ConceptSetup>> {
   if (!isUuid(boardId)) return { ok: false, error: "Invalid board." };
   try {
     const ctx = await guard();
-    const facts = await withUser(ctx.user.id, async (tx) => {
+    const prompt = await withUser(ctx.user.id, async (tx) => {
       const [b] = await tx`select project_id, direction_id, content->'nodes' as nodes from inspiration_boards where id = ${boardId}`;
       if (!b) return null;
-      const [brief] = await tx`select brand, category, audience from campaign_briefs where project_id = ${b.project_id}`;
-      const [dir] = await tx`select d.name, d.content->>'coreIdea' as core_idea from strategy_directions d
-        where d.id = coalesce(${b.direction_id}::uuid, (select selected_direction_id from projects where id = ${b.project_id}))`;
-      const [run] = await tx`select id from research_runs where project_id = ${b.project_id} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
-      const tags = run ? await tx`select name from cultural_entities where run_id = ${run.id} and role = 'tag' order by affinity desc nulls last limit 5` : [];
-      return { nodes: (b.nodes ?? []) as { type: string; data: Record<string, unknown> }[], brief, dir, tags: tags.map((t) => t.name as string) };
+      const [cc, dir] = await Promise.all([loadContext(tx, b.project_id), loadDirection(tx, b.project_id, b.direction_id)]);
+      return basePrompt(cc, dir, paletteWords(b.nodes ?? []));
     });
-    if (!facts) return { ok: false, error: "Board not found." };
-    const colours = [...new Set(boardPalette(facts.nodes as never).slice(0, 4).map((h) => colourName(h).toLowerCase()))];
-    const brand = facts.brief?.brand as string | null;
-    const category = facts.brief?.category as string | null;
-    const prompt = [
-      `Editorial campaign photograph${brand ? ` for ${brand}` : ""}${category ? `, a ${category} brand` : ""}.`,
-      facts.dir ? `Concept: ${(facts.dir.core_idea as string | null) || facts.dir.name}.` : "",
-      facts.brief?.audience ? `Audience: ${String(facts.brief.audience).slice(0, 200)}.` : "",
-      facts.tags.length ? `Cultural cues: ${facts.tags.join(", ")}.` : "",
-      colours.length ? `Colour palette: ${colours.join(", ")}.` : "",
-      "Natural light, real textures, no text, no logos, no recognisable people.",
-    ].filter(Boolean).join(" ").slice(0, 2000);
+    if (prompt === null) return { ok: false, error: "Board not found." };
     return { ok: true, data: { engine: await engineStatus(), prompt } };
   } catch (e) {
     return err(e, "Could not reach the image studio.");
@@ -80,10 +74,10 @@ export async function queueConceptsAction(boardId: string, input: z.input<typeof
   const parsed = queueInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid request." };
   const { kind, prompt, count, sourcePath } = parsed.data;
-  if (!storageAvailable()) return { ok: false, error: "Generated images need Supabase Storage, which is not configured on this server." };
+  if (!conceptsEnabled()) return { ok: false, error: NOT_SET_UP };
   try {
     const ctx = await guard();
-    const [b] = await withUser(ctx.user.id, (tx) => tx`select project_id, workspace_id from inspiration_boards where id = ${boardId}`);
+    const [b] = await withUser(ctx.user.id, (tx) => tx`select project_id, workspace_id, direction_id from inspiration_boards where id = ${boardId}`);
     if (!b) return { ok: false, error: "Board not found." };
     let image: string | undefined;
     if (kind === "variation") {
@@ -92,25 +86,34 @@ export async function queueConceptsAction(boardId: string, input: z.input<typeof
       if (!image) return { ok: false, error: "The source image could not be read." };
     }
     const ids = await withUser(ctx.user.id, async (tx) => {
-      const [{ n }] = await tx`select count(*)::int as n from concept_jobs where board_id = ${boardId} and status in ('queued', 'running')`;
-      if (n + count > MAX_ACTIVE_PER_BOARD) return null;
-      const out: string[] = [];
-      for (let i = 0; i < count; i++) {
-        const seed = Math.floor(Math.random() * 2 ** 32);
-        const params = kind === "concept"
-          ? { prompt, seed, width: 1024, height: 1024 }
-          : { prompt, negative: VARIATION_NEGATIVE, seed, denoise: 0.45, image };
-        const [row] = await tx`insert into concept_jobs (workspace_id, project_id, board_id, created_by, workflow, params)
-          values (${b.workspace_id}, ${b.project_id}, ${boardId}, ${ctx.user.id}, ${kind === "concept" ? "w1-concept" : "w3-variation"}, ${tx.json(params)}) returning id`;
-        out.push(row.id as string);
-      }
-      return out;
+      const [cc, dir] = await Promise.all([loadContext(tx, b.project_id), loadDirection(tx, b.project_id, b.direction_id)]);
+      const prov = provenanceFor(cc, dir, await loadEvidence(tx, dir?.evidenceIds ?? []), prompt);
+      return insertJobs(tx, { workspace_id: b.workspace_id as string, project_id: b.project_id as string, board_id: boardId }, ctx.user.id, Array.from({ length: count }, () => ({
+        workflow: kind === "concept" ? "w1-concept" : "w3-variation",
+        params: kind === "concept" ? { prompt, seed: seed(), width: 1024, height: 1024 } : { prompt, negative: VARIATION_NEGATIVE, seed: seed(), denoise: 0.45, image },
+        directionId: dir?.id ?? null, provenance: prov,
+      })));
     });
     if (!ids) return { ok: false, error: `This board already has ${MAX_ACTIVE_PER_BOARD} images on the way. Wait for some to finish.` };
     return { ok: true, data: { ids } };
   } catch (e) {
     return err(e, "The images could not be queued.");
   }
+}
+
+type NewJob = { workflow: "w1-concept" | "w3-variation"; params: Record<string, unknown>; directionId: string | null; parentId?: string | null; provenance: Provenance };
+
+/** Inserts jobs unless the board would exceed its limit of unfinished images (then null). */
+async function insertJobs(tx: Parameters<Parameters<typeof withUser>[1]>[0], b: { workspace_id: string; project_id: string; board_id: string }, userId: string, jobs: NewJob[]) {
+  const [{ n }] = await tx`select count(*)::int as n from concept_jobs where board_id = ${b.board_id} and status in ('queued', 'running')`;
+  if (n + jobs.length > MAX_ACTIVE_PER_BOARD) return null;
+  const ids: string[] = [];
+  for (const j of jobs) {
+    const [row] = await tx`insert into concept_jobs (workspace_id, project_id, board_id, created_by, workflow, params, direction_id, parent_id, provenance)
+      values (${b.workspace_id}, ${b.project_id}, ${b.board_id}, ${userId}, ${j.workflow}, ${tx.json(j.params as never)}, ${j.directionId}, ${j.parentId ?? null}, ${tx.json(j.provenance as never)}) returning id`;
+    ids.push(row.id as string);
+  }
+  return ids;
 }
 
 export type ConceptResult = { path: string; thumbPath: string; url: string; thumbUrl: string; width: number | null; height: number | null };
@@ -172,5 +175,158 @@ export async function conceptJobsAction(boardId: string, ids: string[]): Promise
     return { ok: true, data: out };
   } catch (e) {
     return err(e, "Could not check on the images.");
+  }
+}
+
+// ---------------------------------------------------------------- visual futures
+const GROUP = { w: 600, h: 560, gap: 60, top: 180 };
+
+/**
+ * One click on the strategy page: a new board with a group per direction of the current strategy
+ * version, and two concept frames queued per direction. With AI on, an art director writes two distinct
+ * shots per direction; otherwise the frames use the direction's idea and cultural connections directly.
+ */
+export async function visualFuturesAction(projectId: string): Promise<R<{ boardId: string; frames: number }>> {
+  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+  if (!conceptsEnabled()) return { ok: false, error: NOT_SET_UP };
+  try {
+    const ctx = await guard();
+    const ws = ctx.workspace.workspaceId;
+    const facts = await withUser(ctx.user.id, async (tx) => {
+      const cur = await currentDirections(tx, projectId);
+      if (!cur?.directions.length) return null;
+      const cc = await loadContext(tx, projectId);
+      const evidence = new Map(await Promise.all(cur.directions.map(async (d) => [d.id, await loadEvidence(tx, d.evidenceIds)] as const)));
+      return { ...cur, cc, evidence };
+    });
+    if (!facts) return { ok: false, error: "Generate strategy directions first." };
+
+    let shots = new Map<number, Shot[]>();
+    if (await llmEnabled(ctx.user.id, ws)) {
+      try {
+        shots = await writeShots(facts.cc, facts.directions, []);
+      } catch (e) {
+        console.error("[concepts] art director failed; using direction prompts", e instanceof Error ? e.message : e);
+      }
+    }
+    const fallback = (d: (typeof facts.directions)[number]): Shot[] => [
+      { title: "A human moment", prompt: `A candid human moment. ${basePrompt(facts.cc, d, [])}`, why: "" },
+      { title: "The world around it", prompt: `An object and environment still life, no people. ${basePrompt(facts.cc, d, [])}`, why: "" },
+    ];
+
+    const result = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, created_by, updated_by)
+        values (${projectId}, ${ws}, ${`Visual futures · strategy v${facts.version}`}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
+      const nodes: Record<string, unknown>[] = [{
+        id: crypto.randomUUID(), type: "note", position: { x: 0, y: 0 }, width: GROUP.w, height: 130,
+        data: { tone: "peach", text: `Visual futures for strategy version ${facts.version}: two AI concept frames per direction, made on the agency's GPU PC from each direction's idea, its cultural connections and the audience's Qloo taste signals. Select a frame and choose "Why this image" for its evidence trail. Concepts for discussion, not final artwork.` },
+      }];
+      const jobs: NewJob[] = [];
+      facts.directions.forEach((d, i) => {
+        const group = crypto.randomUUID();
+        nodes.push({ id: group, type: "group", position: { x: i * (GROUP.w + GROUP.gap), y: GROUP.top }, width: GROUP.w, height: GROUP.h, zIndex: -1, data: { label: `Direction 0${d.slot} · ${d.name}`.slice(0, 120) } });
+        nodes.push({ id: crypto.randomUUID(), type: "note", parentId: group, position: { x: 20, y: 56 }, width: GROUP.w - 40, height: 110, data: { tone: "lilac", text: d.coreIdea || d.name } });
+        for (const shot of (shots.get(d.slot) ?? fallback(d)).slice(0, 2)) {
+          jobs.push({
+            workflow: "w1-concept", params: { prompt: shot.prompt, seed: seed(), width: 1024, height: 1024 }, directionId: d.id,
+            provenance: provenanceFor(facts.cc, d, facts.evidence.get(d.id) ?? [], shot.prompt, { title: shot.title, why: shot.why || undefined, placement: { group } }),
+          });
+        }
+      });
+      const parsed = parseBoardContent({ nodes, viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
+      if (!parsed) throw new Error("visual futures layout failed validation");
+      await tx`update inspiration_boards set content = ${tx.json(parsed as never)}, revision = revision + 1 where id = ${b.id}`;
+      const ids = await insertJobs(tx, { workspace_id: b.workspace_id, project_id: b.project_id, board_id: b.id }, ctx.user.id, jobs);
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "created", objectType: "board", objectId: b.id, summary: "started visual futures for the strategy directions" });
+      return { boardId: b.id as string, frames: ids?.length ?? 0 };
+    });
+    revalidatePath(`/projects/${projectId}/boards`);
+    return { ok: true, data: result };
+  } catch (e) {
+    return err(e, "The visual futures could not be started.");
+  }
+}
+
+// ---------------------------------------------------------------- evidence trail
+export type ConceptTrail = { provenance: Provenance; fit: { level: string; rationale: string; tags: string[] } | null; parentFit: { level: string } | null; model: string; createdAt: string };
+
+/** Everything a frame was built from, for the "Why this image" panel. Readable by anyone in the workspace. */
+export async function conceptTrailAction(boardId: string, jobId: string): Promise<R<ConceptTrail>> {
+  if (!isUuid(boardId) || !isUuid(jobId)) return { ok: false, error: "Invalid request." };
+  try {
+    const ctx = await getCtx();
+    const row = await withUser(ctx.user.id, async (tx) => {
+      const [j] = await tx`select j.provenance, j.fit, j.workflow, j.created_at, p.fit as parent_fit
+        from concept_jobs j left join concept_jobs p on p.id = j.parent_id where j.id = ${jobId} and j.board_id = ${boardId}`;
+      return j;
+    });
+    if (!row) return { ok: false, error: "This image's trail was not found." };
+    const fit = row.fit as ConceptTrail["fit"];
+    return { ok: true, data: {
+      provenance: row.provenance as Provenance,
+      fit: fit ? { level: fit.level, rationale: fit.rationale, tags: fit.tags ?? [] } : null,
+      parentFit: row.parent_fit ? { level: (row.parent_fit as { level: string }).level } : null,
+      model: row.workflow === "w3-variation" ? "RealVisXL V5 (image to image)" : "Z-Image Turbo",
+      createdAt: new Date(row.created_at as string).toISOString(),
+    } };
+  } catch (e) {
+    return err(e, "The trail could not be loaded.");
+  }
+}
+
+// ---------------------------------------------------------------- art-director loop
+const improveInput = z.object({
+  cardId: z.string().min(1).max(80),
+  thumbPath: z.string().max(400),
+  jobId: z.string().uuid().nullable(),
+  title: z.string().max(200),
+  fit: z.object({ level: z.enum(["partial", "off"]), rationale: z.string().max(400), descriptors: z.array(z.string().max(60)).max(8) }),
+});
+
+/**
+ * "Make it fit better": the art director looks at a weak frame and its fit result, names what to change,
+ * and queues a rewritten frame (same seed, so it stays recognisably the same shot) beside the original.
+ */
+export async function improveConceptAction(boardId: string, input: z.input<typeof improveInput>): Promise<R<{ id: string; changes: string[]; diagnosis: string }>> {
+  if (!isUuid(boardId)) return { ok: false, error: "Invalid board." };
+  const parsed = improveInput.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Only frames with a partial or off fit can be improved." };
+  const { cardId, thumbPath, jobId, title, fit } = parsed.data;
+  if (!conceptsEnabled()) return { ok: false, error: NOT_SET_UP };
+  try {
+    const ctx = await guard();
+    if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: LLM_UNAVAILABLE };
+    const facts = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select project_id, workspace_id, direction_id from inspiration_boards where id = ${boardId}`;
+      if (!b) return null;
+      const [parent] = jobId ? await tx`select id, params, provenance, direction_id from concept_jobs where id = ${jobId} and board_id = ${boardId}` : [];
+      const [cc, dir] = await Promise.all([loadContext(tx, b.project_id), loadDirection(tx, b.project_id, (parent?.direction_id as string | null) ?? b.direction_id)]);
+      return { b, parent, cc, dir, evidence: await loadEvidence(tx, dir?.evidenceIds ?? []) };
+    });
+    if (!facts) return { ok: false, error: "Board not found." };
+    if (!thumbPath.startsWith(mediaPrefix(facts.b.workspace_id, facts.b.project_id, boardId)) || thumbPath.includes("..")) return { ok: false, error: "That image is not on this board." };
+    const { supabaseServer } = await import("@/lib/auth/supabase");
+    const { data: file, error } = await (await supabaseServer()).storage.from(BOARD_BUCKET).download(thumbPath);
+    if (error || !file) return { ok: false, error: "The image could not be read." };
+
+    const parentProv = facts.parent?.provenance as Provenance | undefined;
+    const parentParams = (facts.parent?.params ?? {}) as { prompt?: string; seed?: number };
+    const before = parentProv?.prompt || parentParams.prompt || basePrompt(facts.cc, facts.dir, []);
+    const better = await improvePrompt(Buffer.from(await file.arrayBuffer()), facts.cc, facts.dir, { prompt: before, level: fit.level, rationale: fit.rationale, descriptors: fit.descriptors });
+
+    const ids = await withUser(ctx.user.id, (tx) => insertJobs(tx, { workspace_id: facts.b.workspace_id, project_id: facts.b.project_id, board_id: boardId }, ctx.user.id, [{
+      workflow: "w1-concept",
+      params: { prompt: better.prompt, seed: typeof parentParams.seed === "number" ? parentParams.seed : seed(), width: 1024, height: 1024 },
+      directionId: facts.dir?.id ?? null, parentId: facts.parent?.id as string | undefined ?? null,
+      provenance: provenanceFor(facts.cc, facts.dir, facts.evidence, better.prompt, {
+        title: `Improved · ${(parentProv?.title ?? title) || "concept"}`.slice(0, 80), why: parentProv?.why,
+        placement: { anchor: cardId },
+        improvement: { fromLevel: fit.level, fromRationale: fit.rationale, diagnosis: better.diagnosis, changes: better.changes },
+      }),
+    }]));
+    if (!ids) return { ok: false, error: `This board already has ${MAX_ACTIVE_PER_BOARD} images on the way. Wait for some to finish.` };
+    return { ok: true, data: { id: ids[0], changes: better.changes, diagnosis: better.diagnosis } };
+  } catch (e) {
+    return err(e, "The frame could not be improved. Try again shortly.");
   }
 }

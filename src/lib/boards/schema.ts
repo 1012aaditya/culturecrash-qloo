@@ -14,6 +14,9 @@ export type ImageData = CommonData & {
   fit?: ImageFitData;
   /** Usage rights: a found reference (default), a licensed image, the client's or agency's own asset, or an AI concept. */
   rights?: ImageRights;
+  /** AI concepts: the generation job (its evidence trail), and the fit level of the frame it improves on. */
+  conceptJobId?: string;
+  improvedFrom?: ImageFitData["level"];
 };
 export const IMAGE_RIGHTS = ["reference", "licensed", "own", "ai"] as const;
 export type ImageRights = (typeof IMAGE_RIGHTS)[number];
@@ -83,6 +86,8 @@ function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix:
         alt: str(300).parse(d.alt ?? ""), sourceUrl: safeUrl(d.sourceUrl), palette,
         ...(fitSchema.safeParse(d.fit).success ? { fit: fitSchema.parse(d.fit) } : {}),
         rights: z.enum(IMAGE_RIGHTS).catch("reference").parse(d.rights),
+        ...(typeof d.conceptJobId === "string" && /^[0-9a-f-]{36}$/i.test(d.conceptJobId) ? { conceptJobId: d.conceptJobId } : {}),
+        ...(z.enum(["strong", "partial", "off", "unknown"]).safeParse(d.improvedFrom).success ? { improvedFrom: d.improvedFrom as ImageFitData["level"] } : {}),
       } satisfies Omit<ImageData, "url" | "thumbUrl">;
     }
     case "evidence":

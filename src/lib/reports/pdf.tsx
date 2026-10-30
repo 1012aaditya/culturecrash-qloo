@@ -190,6 +190,11 @@ function ReportPdf({ s, version, createdAt, pageNumbers, images }: { s: ReportSn
             {s.visualWorld ? <VisualWorldPdf v={s.visualWorld} images={images} /> : <Text>{s.visualWorld === undefined ? "This report version was created before boards could be included." : "No inspiration board is linked to the selected direction."}</Text>}
           </Sec>
         )}
+        {on("futures") && (
+          <Sec k="futures" n={++n}>
+            {s.visualFutures ? <VisualFuturesPdf v={s.visualFutures} images={images} /> : <Text>{s.visualFutures === undefined ? "This report version was created before visual futures existed." : "No AI concept frames have been made for these directions yet."}</Text>}
+          </Sec>
+        )}
         {on("experiments") && (
           <Sec k="experiments" n={++n}>
             {s.experiments.length === 0 && <Text>No experiments planned.</Text>}
@@ -239,6 +244,39 @@ export async function renderReportPdf(s: ReportSnapshot, version: number, create
 }
 
 const RIGHTS = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" } as const;
+
+const FIT: Record<string, string> = { strong: "Strong fit", partial: "Partial fit", off: "Off-taste", unknown: "Not judged" };
+
+function VisualFuturesPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualFutures"]>; images: Map<string, Buffer> }) {
+  return (
+    <View>
+      <Text style={st.p}>The same audience, three possible campaigns: AI concept frames made from each direction’s idea, its cultural connections and the audience’s Qloo taste signals. Fit is an AI hypothesis, not evidence of performance.</Text>
+      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+        {v.directions.map((d) => (
+          <View key={d.slot} style={{ width: "31.5%" }} wrap={false}>
+            <Text style={st.eyebrow}>Direction 0{d.slot}{d.selected ? " · selected" : ""}</Text>
+            <Text style={{ fontSize: 9.5, fontFamily: "Helvetica-Bold", marginTop: 2, marginBottom: 5 }}>{d.name}</Text>
+            {d.frames.length === 0 && <Text style={st.small}>No frames yet.</Text>}
+            {d.frames.map((f) => {
+              const data = images.get(f.thumbPath);
+              return (
+                <View key={f.path} style={{ marginBottom: 8 }}>
+                  {/* eslint-disable-next-line jsx-a11y/alt-text -- react-pdf Image has no alt; the caption below names the frame */}
+                  {data ? <Image src={{ data, format: "jpg" }} style={{ width: "100%", height: 150, objectFit: "cover", borderRadius: 4 }} /> : (
+                    <View style={{ height: 150, borderRadius: 4, backgroundColor: "#F2EFEA", justifyContent: "center", padding: 6 }}><Text style={[st.small, { textAlign: "center" }]}>{f.title}</Text></View>
+                  )}
+                  <Text style={{ fontSize: 8.5, fontFamily: "Helvetica-Bold", marginTop: 3 }}>{f.title}</Text>
+                  <Text style={st.small}>{f.fit ? FIT[f.fit] ?? f.fit : "Fit not checked"}{f.improved ? " · improved by the AI art director" : ""}</Text>
+                  <Text style={[st.small, { color: "#8a3d22" }]}>{RIGHTS.ai}</Text>
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
 
 function VisualWorldPdf({ v, images }: { v: NonNullable<ReportSnapshot["visualWorld"]>; images: Map<string, Buffer> }) {
   return (

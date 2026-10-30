@@ -34,7 +34,7 @@ export async function signPaths(paths: string[]): Promise<Map<string, string>> {
 /** Board images as JPEG bytes for the PDF report (react-pdf reads only JPEG and PNG). Missing files are skipped. */
 export async function boardImagesAsJpeg(paths: string[]): Promise<Map<string, Buffer>> {
   const out = new Map<string, Buffer>();
-  const unique = [...new Set(paths.filter(Boolean))].slice(0, 12);
+  const unique = [...new Set(paths.filter(Boolean))].slice(0, 18);
   if (!unique.length || !storageAvailable()) return out;
   const [{ supabaseServer }, { default: sharp }] = await Promise.all([import("@/lib/auth/supabase"), import("sharp")]);
   const client = await supabaseServer();

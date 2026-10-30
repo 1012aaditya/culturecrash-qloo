@@ -24,7 +24,10 @@ export async function GET(request: NextRequest, { params }: RouteContext<"/api/r
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   try {
     const snap = row.snapshot as ReportSnapshot;
-    const images = snap.sections.includes("visual") ? await boardImagesAsJpeg((snap.visualWorld?.images ?? []).map((i) => i.thumbPath ?? i.path)) : new Map<string, Buffer>();
+    const images = await boardImagesAsJpeg([
+      ...(snap.sections.includes("visual") ? (snap.visualWorld?.images ?? []).map((i) => i.thumbPath ?? i.path) : []),
+      ...(snap.sections.includes("futures") ? (snap.visualFutures?.directions ?? []).flatMap((d) => d.frames.map((f) => f.thumbPath)) : []),
+    ]);
     const pdf = await renderReportPdf(snap, row.version, new Date(row.created_at).toISOString(), images);
     const name = `${String(row.title).replace(/[^\w-]+/g, "-").slice(0, 60)}-v${row.version}.pdf`;
     return new NextResponse(new Uint8Array(pdf), { headers: { "content-type": "application/pdf", "content-disposition": `attachment; filename="${name}"`, "cache-control": "private, no-store" } });

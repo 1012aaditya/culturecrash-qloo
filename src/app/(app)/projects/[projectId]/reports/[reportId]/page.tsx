@@ -33,7 +33,7 @@ export default async function ReportPage({ params, searchParams }: PageProps<"/p
   const want = Number(sp.v) || null;
   const v = data.versions.find((x) => x.version === want) ?? data.versions[0];
   const snap = v.snapshot as ReportSnapshot;
-  const boardImages = Object.fromEntries(await signPaths((snap.visualWorld?.images ?? []).map((i) => i.thumbPath ?? i.path)));
+  const boardImages = Object.fromEntries(await signPaths([...(snap.visualWorld?.images ?? []).map((i) => i.thumbPath ?? i.path), ...(snap.visualFutures?.directions ?? []).flatMap((d) => d.frames.map((f) => f.thumbPath))]));
   const stale = data.latestRunId && snap.refs.runId !== data.latestRunId;
   return (
     <div>

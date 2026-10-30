@@ -46,11 +46,16 @@ export function describe(n: BoardNode): string {
   const d = n.data;
   const lock = d.locked ? ", locked" : "";
   switch (n.type) {
-    case "image": return `Image: ${String(d.alt || d.title || "untitled")}${d.sourceUrl ? `, source ${host(d.sourceUrl)}` : ", no source"}${lock}`;
+    case "image": {
+      const fit = d.fit as { level?: string; tags?: string[] } | undefined;
+      const fitText = fit?.level === "strong" || fit?.level === "partial" ? `, fits ${fit.tags?.join(" and ") || "the audience partly"}` : fit?.level === "off" ? ", off-audience" : "";
+      return `Image: ${String(d.alt || d.title || "untitled")}${d.sourceUrl ? `, source ${host(d.sourceUrl)}` : ", no source"}${fitText}${lock}`;
+    }
     case "note": return `Note: ${String(d.text || "empty").slice(0, 80)}${lock}`;
     case "link": return `Link: ${String(d.title || host(d.url) || "untitled")}${lock}`;
     case "entity": return `Qloo ${String(d.type)}: ${String(d.name)}${typeof d.affinity === "number" ? `, affinity ${d.affinity.toFixed(2)}` : ""}${lock}`;
     case "group": return `Group: ${String(d.label || "untitled")}${lock}`;
+    case "evidence": return `Evidence: ${String(d.claim || "").slice(0, 80)}${lock}`;
     default: return "Card";
   }
 }

@@ -13,17 +13,17 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import {
-  addBoardCommentAction, deleteBoardAction, getBoardVersionAction, linkPreviewAction, listBoardCommentsAction, refreshMediaUrlsAction, renameBoardAction,
-  saveBoardAction, uploadBoardImageAction, type CardComment,
+  addBoardCommentAction, assessImageFitAction, deleteBoardAction, getBoardVersionAction, linkPreviewAction, listBoardCommentsAction, refreshMediaUrlsAction, renameBoardAction,
+  saveBoardAction, setBoardDirectionAction, uploadBoardImageAction, type CardComment,
 } from "@/lib/boards/actions";
-import type { BoardDoc } from "@/lib/boards/data";
+import type { BoardDoc, DirectionOption } from "@/lib/boards/data";
 import { cn } from "@/lib/utils";
-import { boardPalette, MAX_NODES, mediaPaths, safeUrl, type EntityData } from "@/lib/boards/schema";
+import { boardPalette, evidenceCoverage, MAX_NODES, mediaPaths, safeUrl, type EntityData, type EvidenceCardData } from "@/lib/boards/schema";
 import {
   align, contentKey, describe, distribute, History, hydrate, inTextField, mergeBoards, nodeKey, nodesKey, normalise, serialise, stripTransient,
   type AlignMode, type BoardNode, type Box,
 } from "./board-logic";
-import { CommentsPanel, ENTITY_MIME, EntityPanel, HistoryDialog, LinkDialog, ListView, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
+import { CommentsPanel, ENTITY_MIME, EVIDENCE_MIME, EvidenceMeter, HistoryDialog, LinkDialog, ListView, ResearchPanel, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
 import { BoardCtx, nodeTypes } from "./nodes";
 
 const SAVE_DELAY_MS = 1200;
@@ -70,7 +70,9 @@ function withUrls(nodes: BoardNode[], urls: Record<string, string>): BoardNode[]
   });
 }
 
-export function BoardCanvas(props: { board: BoardDoc; entities: EntityData[]; canEdit: boolean; canComment: boolean }) {
+type CanvasProps = { board: BoardDoc; entities: EntityData[]; evidence: EvidenceCardData[]; directions: DirectionOption[]; canEdit: boolean; canComment: boolean };
+
+export function BoardCanvas(props: CanvasProps) {
   return (
     <ReactFlowProvider>
       <Canvas {...props} />
@@ -78,14 +80,16 @@ export function BoardCanvas(props: { board: BoardDoc; entities: EntityData[]; ca
   );
 }
 
-function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; entities: EntityData[]; canEdit: boolean; canComment: boolean }) {
+function Canvas({ board, entities, evidence, directions, canEdit, canComment }: CanvasProps) {
   const router = useRouter();
   const { toast } = useToast();
   const rf = useReactFlow<BoardNode>();
   const initial = React.useMemo(() => normalise((board.content.nodes as unknown as BoardNode[]).map(hydrate)), [board.content.nodes]);
   const [nodes, setNodes, onNodesChange] = useNodesState<BoardNode>(initial);
   const [name, setName] = React.useState(board.name);
-  const [panel, setPanel] = React.useState(entities.length > 0);
+  const [panel, setPanel] = React.useState(entities.length > 0 || evidence.length > 0);
+  const [directionId, setDirectionId] = React.useState(board.directionId);
+  const [fitPending, setFitPending] = React.useState<ReadonlySet<string>>(new Set());
   const [listView, setListView] = React.useState(false);
   const [linkOpen, setLinkOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -109,6 +113,7 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
   const lastRefresh = React.useRef(0);
   const [fitOnOpen] = React.useState(() => !board.content.viewport && initial.length > 0);
   const palette = React.useMemo(() => boardPalette(nodes), [nodes]);
+  const coverage = React.useMemo(() => evidenceCoverage(nodes), [nodes]);
   const selected = nodes.filter((n) => n.selected);
 
   // ---------------------------------------------------------------- saving (with per-card merge on conflict)
@@ -285,6 +290,24 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
     })));
   }, [add, board.id, centre, setNodes]);
 
+  /** Cultural-fit check for one image card; the result is stored on the card. */
+  const runFit = React.useCallback(async (cardId: string, thumbPath: string, quiet = false) => {
+    setFitPending((p) => new Set(p).add(cardId));
+    const r = await assessImageFitAction(board.id, thumbPath);
+    setFitPending((p) => { const n = new Set(p); n.delete(cardId); return n; });
+    if (r.ok && r.data) setNodes((ns) => ns.map((n) => (n.id === cardId ? hydrate({ ...n, data: { ...n.data, fit: r.data } }) : n)));
+    else if (!quiet) toast({ title: "Fit not checked", description: r.ok ? undefined : r.error, tone: "error" });
+  }, [board.id, setNodes, toast]);
+  const checkFit = React.useCallback((cardId: string) => {
+    const n = rf.getNode(cardId);
+    if (n?.type === "image" && typeof n.data.thumbPath === "string") void runFit(cardId, n.data.thumbPath);
+  }, [rf, runFit]);
+
+  const addEvidence = React.useCallback((e: EvidenceCardData, at?: { x: number; y: number }) => {
+    const p = at ?? centre();
+    add({ type: "evidence", position: { x: p.x - 140, y: p.y - 90 }, width: 280, height: 180, data: { ...e } });
+  }, [add, centre]);
+
   const uploadFiles = React.useCallback(async (files: File[], at?: { x: number; y: number }) => {
     const images = files.filter((f) => f.type.startsWith("image/"));
     if (!images.length) return;
@@ -302,14 +325,16 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
         const size = u.width && u.height ? { w: u.width, h: u.height } : await imageSize(local);
         const width = 260;
         const height = Math.round(Math.min(560, Math.max(120, (width * size.h) / size.w))) + 64;
-        add({ type: "image", position: { x: origin.x - width / 2 + i * 28, y: origin.y - height / 2 + i * 28 }, width, height,
+        const id = add({ type: "image", position: { x: origin.x - width / 2 + i * 28, y: origin.y - height / 2 + i * 28 }, width, height,
           data: { path: u.path, thumbPath: u.thumbPath, url: u.url, thumbUrl: u.thumbUrl, title: file.name.replace(/\.[a-z0-9]+$/i, "").slice(0, 200), alt: "", sourceUrl: null, palette: colours } });
+        // Checked in the background; a workspace with AI turned off simply gets no fit chip.
+        if (id) void runFit(id, u.thumbPath, true);
       } finally {
         URL.revokeObjectURL(local);
         setUploading((n) => n - 1);
       }
     }));
-  }, [add, board.id, centre, toast]);
+  }, [add, board.id, centre, runFit, toast]);
 
   const addEntity = React.useCallback((e: EntityData, at?: { x: number; y: number }) => {
     const p = at ?? centre();
@@ -325,6 +350,13 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
     if (!canEdit) return;
     e.preventDefault();
     const at = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const ev = e.dataTransfer.getData(EVIDENCE_MIME);
+    if (ev) {
+      try {
+        addEvidence(JSON.parse(ev) as EvidenceCardData, at);
+      } catch { /* not ours */ }
+      return;
+    }
     const raw = e.dataTransfer.getData(ENTITY_MIME);
     if (raw) {
       try {
@@ -532,7 +564,7 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
   };
 
   const mod = isMac() ? "⌘" : "Ctrl+";
-  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard }), [canEdit, board.projectId, refreshUrls, commentCounts]);
+  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending]);
 
   return (
     <BoardCtx.Provider value={ctx}>
@@ -609,6 +641,22 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
             {listView ? <LayoutGrid /> : <List />}
           </Button>
           <Button variant="ghost" size="icon-sm" aria-label="Version history" title="Version history" onClick={() => setHistoryOpen(true)}><HistoryIcon /></Button>
+          {directions.length > 0 && (
+            <select aria-label="Strategy direction for this board" value={directionId ?? ""} disabled={!canEdit}
+              onChange={async (e) => {
+                const next = e.target.value || null;
+                const prev = directionId;
+                setDirectionId(next);
+                const r = await setBoardDirectionAction(board.id, next);
+                if (!r.ok) { setDirectionId(prev); toast({ title: "Not linked", description: r.error, tone: "error" }); }
+              }}
+              className="h-8 max-w-[200px] truncate rounded-full border border-line bg-paper/80 px-2.5 text-[12px] outline-none focus:border-violet">
+              <option value="">No direction</option>
+              {directions.map((d) => <option key={d.id} value={d.id}>{`Direction 0${d.slot}: ${d.name}${d.selected ? " (selected)" : ""}`}</option>)}
+              {directionId && !directions.some((d) => d.id === directionId) && <option value={directionId}>An earlier strategy version</option>}
+            </select>
+          )}
+          <EvidenceMeter {...coverage} />
           <SaveBadge state={canEdit ? save : "saved"} readOnly={!canEdit} onReload={() => router.refresh()} onRetry={() => void doSave()} />
           {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Delete board" title="Delete board" onClick={() => setDeleteOpen(true)}><Trash2 /></Button>}
         </div>
@@ -642,7 +690,7 @@ function Canvas({ board, entities, canEdit, canComment }: { board: BoardDoc; ent
         <Button variant="outline" size="icon-sm" className="absolute right-3 top-3 z-20 shadow-card" aria-label={panel ? "Hide research panel" : "Show research panel"} onClick={() => setPanel((p) => !p)}>
           {panel ? <PanelRightClose /> : <PanelRightOpen />}
         </Button>
-        {panel && <EntityPanel entities={entities} canEdit={canEdit} onAdd={(e) => addEntity(e)} projectId={board.projectId} />}
+        {panel && <ResearchPanel entities={entities} evidence={evidence} canEdit={canEdit} onAddEntity={(e) => addEntity(e)} onAddEvidence={(e) => addEvidence(e)} projectId={board.projectId} />}
 
         {commentCard && (
           <CommentsPanel

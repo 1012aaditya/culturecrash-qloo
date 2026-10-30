@@ -3,10 +3,10 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, ExternalLink, Link2, Lock, MessageSquare, Sparkles } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
-import type { EntityData, GroupData, ImageData, LinkData, NoteData } from "@/lib/boards/schema";
+import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, LinkData, NoteData } from "@/lib/boards/schema";
 import { safeUrl } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 
@@ -15,8 +15,10 @@ export type BoardContext = {
   canEdit: boolean; projectId: string; onMediaError: () => void;
   /** Comment count per card id, and opening a card's thread. */
   commentCounts: Record<string, number>; openComments: (cardId: string) => void;
+  /** Cultural-fit check for an image card, and the cards currently being checked. */
+  checkFit: (cardId: string) => void; fitPending: ReadonlySet<string>;
 };
-export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {} });
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set() });
 
 /** Comment count on a card; opens the card's thread. */
 function CommentBadge({ id }: { id: string }) {
@@ -79,9 +81,26 @@ function host(url: string) {
   }
 }
 
+const FIT_STYLE: Record<ImageFitData["level"], string> = {
+  strong: "bg-violet text-white", partial: "bg-lilac text-violet-ink", off: "bg-coral/80 text-ink", unknown: "bg-ink/5 text-muted",
+};
+
+/** AI-assessed fit with the audience's Qloo taste tags; the tooltip carries the reasoning and descriptors. */
+function FitChip({ fit }: { fit: ImageFitData }) {
+  const label = fit.level === "strong" ? `Fits: ${fit.tags.slice(0, 2).join(", ")}`
+    : fit.level === "partial" ? (fit.tags.length ? `Partly fits: ${fit.tags[0]}` : "Partly fits")
+      : fit.level === "off" ? "Off-audience" : fit.descriptors.slice(0, 2).join(" · ") || "No taste tags to compare";
+  return (
+    <span title={`${fit.rationale}\nLooks: ${fit.descriptors.join(", ")}\nAI assessment (${fit.model}), not evidence.`}
+      className={cn("inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10.5px] font-medium", FIT_STYLE[fit.level])}>
+      <ScanEye className="size-3 shrink-0" /> <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit, onMediaError } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError, checkFit, fitPending } = React.useContext(BoardCtx);
   const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
   const [draft, setDraft] = React.useState(data.sourceUrl ?? "");
@@ -125,6 +144,11 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
               <button type="button" onClick={() => { setDraft(data.sourceUrl ?? ""); setEditingSource(true); }} className="nodrag shrink-0 text-[10.5px] text-muted hover:text-ink">Edit</button>
             )}
           </div>
+          {data.fit ? <FitChip fit={data.fit} /> : selected && canEdit && data.thumbPath && (
+            <button type="button" onClick={() => checkFit(id)} disabled={fitPending.has(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-lilac/60 px-1.5 py-0.5 text-[10.5px] font-medium text-violet-ink enabled:hover:bg-lilac">
+              {fitPending.has(id) ? <Loader2 className="size-3 animate-spin" /> : <ScanEye className="size-3" />} Check cultural fit
+            </button>
+          )}
           {data.palette.length > 0 && (
             <div className="flex gap-1 pt-0.5" aria-label={`Colours: ${data.palette.join(", ")}`}>
               {data.palette.map((c) => <span key={c} title={c} className="h-2.5 flex-1 rounded-full" style={{ background: c }} />)}
@@ -226,4 +250,24 @@ export function GroupNode({ id, data, selected }: NodeProps<Node<GroupData>>) {
   );
 }
 
-export const nodeTypes = { image: ImageNode, note: NoteNode, link: LinkNode, entity: EntityNode, group: GroupNode };
+const EVIDENCE_LABEL: Record<string, string> = { external_source: "Web claim", approved_conclusion: "Approved conclusion", experiment_result: "Experiment result" };
+
+export function EvidenceNode({ id, data, selected }: NodeProps<Node<EvidenceCardData>>) {
+  const { projectId } = React.useContext(BoardCtx);
+  return (
+    <>
+      <Resizer selected={selected} locked={data.locked} minWidth={200} minHeight={120} />
+      <div data-presence-field={`card-${id}`} className={cn(card, ring(selected), "relative flex flex-col gap-2 border-l-4 !border-l-violet p-3")}>
+        <LockBadge locked={data.locked} /><CommentBadge id={id} />
+        <p className="flex items-center gap-1.5 text-[11px] text-muted"><FileCheck2 className="size-3.5 text-violet" /> {EVIDENCE_LABEL[data.evidenceType] ?? "Evidence"}{data.score !== null ? ` · quality ${data.score.toFixed(2)}` : ""}</p>
+        <p className="nowheel min-h-0 flex-1 overflow-y-auto text-[13px] leading-relaxed">{data.claim}</p>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          {data.url && <a href={data.url} target="_blank" rel="noopener noreferrer" className="nodrag inline-flex items-center gap-1 text-violet-ink hover:underline">{host(data.url)} <ExternalLink className="size-3" /></a>}
+          <Link href={`/projects/${projectId}/evidence/${data.evidenceId}`} className="nodrag text-muted hover:text-ink hover:underline">View evidence</Link>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export const nodeTypes = { image: ImageNode, note: NoteNode, link: LinkNode, entity: EntityNode, group: GroupNode, evidence: EvidenceNode };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardPalette, MAX_NODES, parseBoardContent, safeUrl } from "@/lib/boards/schema";
+import { boardPalette, evidenceCoverage, MAX_NODES, parseBoardContent, safeUrl } from "@/lib/boards/schema";
 
 const PREFIX = "ws/project/board/";
 const node = (id: string, type: string, data: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ id, type, position: { x: 0, y: 0 }, data, ...extra });
@@ -70,5 +70,35 @@ describe("boardPalette", () => {
     const img = (p: string[]) => ({ type: "image", data: { palette: p } });
     expect(boardPalette([img(["#AA0000", "#00bb00"]), img(["#aa0000"]), { type: "note", data: { palette: ["#123456"] } }])).toEqual(["#aa0000", "#00bb00"]);
     expect(boardPalette(Array.from({ length: 10 }, (_, i) => img([`#00000${i}`])))).toHaveLength(8);
+  });
+});
+
+describe("evidence cards and cultural fit", () => {
+  it("keeps a valid fit result and drops a malformed one", () => {
+    const fit = { level: "strong", tags: ["Boutique", "Artistic"], descriptors: ["warm grain"], rationale: "Curated, crafted look.", model: "claude-haiku-5-5", at: "2026-10-30T20:00:00Z" };
+    const out = parseBoardContent({ nodes: [
+      node("a", "image", { path: `${PREFIX}a.webp`, title: "A", palette: [], fit }),
+      node("b", "image", { path: `${PREFIX}b.webp`, title: "B", palette: [], fit: { level: "amazing", tags: "all" } }),
+    ] }, PREFIX)!;
+    expect(out.nodes[0].data.fit).toEqual(fit);
+    expect(out.nodes[1].data).not.toHaveProperty("fit");
+  });
+
+  it("cleans evidence cards: http(s) sources only, bounded text", () => {
+    const out = parseBoardContent({ nodes: [
+      node("e", "evidence", { evidenceId: "ev-1", claim: "x".repeat(2000), evidenceType: "external_source", source: "serper", url: "javascript:alert(1)", score: 0.62, extra: 1 }),
+    ] }, PREFIX)!;
+    expect(out.nodes[0].data).toEqual({ evidenceId: "ev-1", claim: "x".repeat(1200), evidenceType: "external_source", source: "serper", url: null, score: 0.62 });
+  });
+});
+
+describe("evidenceCoverage", () => {
+  it("counts images, links, Qloo entities and evidence cards, not notes or groups", () => {
+    expect(evidenceCoverage([
+      { type: "image", data: { sourceUrl: "https://a" } }, { type: "image", data: { sourceUrl: null } },
+      { type: "link", data: { url: "https://b" } }, { type: "entity", data: {} }, { type: "evidence", data: {} },
+      { type: "note", data: {} }, { type: "group", data: {} },
+    ])).toEqual({ sourceable: 5, sourced: 4 });
+    expect(evidenceCoverage([{ type: "note", data: {} }])).toEqual({ sourceable: 0, sourced: 0 });
   });
 });

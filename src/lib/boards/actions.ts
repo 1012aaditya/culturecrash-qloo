@@ -8,6 +8,8 @@ import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
 import { BOARD_BUCKET, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
+import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
+import { assessImageFit, type ImageFit } from "./fit";
 import { fetchLinkPreview, processImage, type LinkPreview, type ProcessedImage } from "./media";
 import { boardPalette, mediaPaths, parseBoardContent, safeUrl } from "./schema";
 
@@ -333,5 +335,63 @@ export async function addBoardCommentAction(boardId: string, cardId: string, raw
     });
   } catch (e) {
     return err(e, "The comment could not be posted.");
+  }
+}
+
+/** Links a board to a strategy direction of this campaign, or unlinks it (null). */
+export async function setBoardDirectionAction(boardId: string, directionId: string | null): Promise<R> {
+  if (!isUuid(boardId) || (directionId !== null && !isUuid(directionId))) return { ok: false, error: "Invalid request." };
+  try {
+    const ctx = await guard();
+    const done = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select project_id, workspace_id, name from inspiration_boards where id = ${boardId}`;
+      if (!b) return "Board not found.";
+      let label = "no direction";
+      if (directionId) {
+        const [d] = await tx`select name from strategy_directions where id = ${directionId} and project_id = ${b.project_id}`;
+        if (!d) return "That direction is not part of this campaign.";
+        label = `“${d.name}”`;
+      }
+      await tx`update inspiration_boards set direction_id = ${directionId}, updated_at = now(), updated_by = ${ctx.user.id} where id = ${boardId}`;
+      await logActivity(tx, { workspaceId: b.workspace_id, actorId: ctx.user.id, projectId: b.project_id, verb: "linked", objectType: "board", objectId: boardId, summary: `linked “${b.name}” to ${label}` });
+      return null;
+    });
+    if (done) return { ok: false, error: done };
+    revalidatePath("/projects", "layout");
+    return { ok: true };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/**
+ * Assesses an image card against the audience's Qloo taste tags (latest completed research run). Uses the
+ * stored thumbnail; respects the workspace's LLM switch. The result is a hypothesis about visual fit.
+ */
+export async function assessImageFitAction(boardId: string, thumbPath: string): Promise<R<ImageFit>> {
+  if (!isUuid(boardId) || typeof thumbPath !== "string") return { ok: false, error: "Invalid request." };
+  try {
+    const ctx = await guard();
+    if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: `${LLM_UNAVAILABLE}` };
+    if (!storageAvailable()) return { ok: false, error: "Fit checks need Supabase Storage." };
+    const ctxData = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select project_id, workspace_id from inspiration_boards where id = ${boardId}`;
+      if (!b) return null;
+      const [brief] = await tx`select brand, category, audience from campaign_briefs where project_id = ${b.project_id}`;
+      const [run] = await tx`select id from research_runs where project_id = ${b.project_id} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
+      const tags = run ? await tx`select name, affinity from cultural_entities where run_id = ${run.id} and role = 'tag' order by affinity desc nulls last limit 30` : [];
+      return { b, brief, tags };
+    });
+    if (!ctxData) return { ok: false, error: "Board not found." };
+    if (!thumbPath.startsWith(mediaPrefix(ctxData.b.workspace_id, ctxData.b.project_id, boardId))) return { ok: false, error: "That image is not on this board." };
+    const { supabaseServer } = await import("@/lib/auth/supabase");
+    const { data, error } = await (await supabaseServer()).storage.from(BOARD_BUCKET).download(thumbPath);
+    if (error || !data) return { ok: false, error: "The image could not be read." };
+    const fit = await assessImageFit(Buffer.from(await data.arrayBuffer()), "image/webp",
+      ctxData.tags.map((t) => ({ name: t.name as string, affinity: t.affinity === null ? null : Number(t.affinity) })),
+      { brand: ctxData.brief?.brand ?? null, category: ctxData.brief?.category ?? null, audience: ctxData.brief?.audience ?? null });
+    return { ok: true, data: fit };
+  } catch (e) {
+    return err(e, "The fit check could not be completed. Try again shortly.");
   }
 }

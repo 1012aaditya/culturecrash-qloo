@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /** Card kinds on an inspiration board. Each is a React Flow node type. */
-export const BOARD_NODE_TYPES = ["image", "note", "link", "entity", "group"] as const;
+export const BOARD_NODE_TYPES = ["image", "note", "link", "entity", "group", "evidence"] as const;
 export type BoardNodeType = (typeof BOARD_NODE_TYPES)[number];
 
 /** Fields every card may carry. `locked` cards cannot be moved, resized or deleted until unlocked. */
@@ -10,7 +10,12 @@ export type CommonData = { locked?: boolean };
 export type ImageData = CommonData & {
   path: string | null; thumbPath: string | null; url?: string; thumbUrl?: string;
   title: string; alt: string; sourceUrl: string | null; palette: string[];
+  /** AI-assessed visual fit with the audience's Qloo taste tags (a hypothesis, not evidence). */
+  fit?: ImageFitData;
 };
+export type ImageFitData = { level: "strong" | "partial" | "off" | "unknown"; tags: string[]; descriptors: string[]; rationale: string; model: string; at: string };
+/** A stored evidence item (cited web claim, conclusion or result) placed on a board; the ledger stays the source of truth. */
+export type EvidenceCardData = CommonData & { evidenceId: string; claim: string; evidenceType: string; source: string; url: string | null; score: number | null };
 export type NoteData = CommonData & { text: string; tone: "paper" | "lilac" | "peach" };
 export type LinkData = CommonData & { url: string; title: string; note: string; siteName: string; imagePath: string | null; previewUrl?: string };
 export type EntityData = CommonData & {
@@ -38,7 +43,8 @@ export function safeUrl(v: unknown): string | null {
 }
 
 const finite = z.number().finite();
-const str = (max: number) => z.string().max(max).catch("");
+// Over-long text is shortened to the limit rather than dropped, so a card never silently loses its text.
+const str = (max: number) => z.string().transform((v) => v.slice(0, max)).catch("");
 const hex = z.string().regex(/^#[0-9a-f]{6}$/i);
 
 const nodeSchema = z.object({
@@ -54,6 +60,11 @@ const nodeSchema = z.object({
 
 export type StoredNode = z.infer<typeof nodeSchema>;
 
+const fitSchema = z.object({
+  level: z.enum(["strong", "partial", "off", "unknown"]), tags: z.array(z.string().max(120)).max(6), descriptors: z.array(z.string().max(40)).max(6),
+  rationale: z.string().max(200), model: z.string().max(60), at: z.string().max(40),
+});
+
 /** A storage path is kept only inside this board's own media folder. */
 const ownPath = (v: unknown, prefix: string) => (typeof v === "string" && v.startsWith(prefix) && !v.includes("..") && v.length <= 300 ? v : null);
 
@@ -66,8 +77,14 @@ function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix:
       return {
         ...common, path: ownPath(d.path, mediaPrefix), thumbPath: ownPath(d.thumbPath, mediaPrefix), title: str(200).parse(d.title ?? ""),
         alt: str(300).parse(d.alt ?? ""), sourceUrl: safeUrl(d.sourceUrl), palette,
+        ...(fitSchema.safeParse(d.fit).success ? { fit: fitSchema.parse(d.fit) } : {}),
       } satisfies Omit<ImageData, "url" | "thumbUrl">;
     }
+    case "evidence":
+      return {
+        ...common, evidenceId: str(80).parse(d.evidenceId ?? ""), claim: str(1200).parse(d.claim ?? ""), evidenceType: str(40).parse(d.evidenceType ?? ""),
+        source: str(120).parse(d.source ?? ""), url: safeUrl(d.url), score: typeof d.score === "number" && Number.isFinite(d.score) ? d.score : null,
+      } satisfies EvidenceCardData;
     case "note":
       return { ...common, text: str(4000).parse(d.text ?? ""), tone: z.enum(["paper", "lilac", "peach"]).catch("paper").parse(d.tone) } satisfies NoteData;
     case "link":
@@ -125,4 +142,16 @@ export function mediaPaths(nodes: { type?: string; data: Record<string, unknown>
     }
   }
   return [...new Set(out)];
+}
+
+/** Cards that can carry a source (images, links, Qloo entities, evidence) and how many of them do. */
+export function evidenceCoverage(nodes: { type?: string; data: Record<string, unknown> }[]) {
+  let sourceable = 0;
+  let sourced = 0;
+  for (const n of nodes) {
+    if (n.type === "image") { sourceable++; if (n.data.sourceUrl) sourced++; }
+    else if (n.type === "link") { sourceable++; if (n.data.url) sourced++; }
+    else if (n.type === "entity" || n.type === "evidence") { sourceable++; sourced++; }
+  }
+  return { sourceable, sourced };
 }

@@ -5,7 +5,7 @@ import * as React from "react";
 import {
   AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical, AlignHorizontalSpaceAround, AlignStartHorizontal,
   AlignStartVertical, AlignVerticalSpaceAround, ArrowDownToLine, ArrowUpToLine, Check, CloudOff, Copy, ExternalLink, History as HistoryIcon,
-  Loader2, Lock, LockOpen, MessageSquare, Plus, Search, Sparkles, Trash2, Users, X,
+  FileCheck2, Loader2, Lock, LockOpen, MessageSquare, Plus, Search, Sparkles, Trash2, Users, X,
 } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
@@ -14,7 +14,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { Ago } from "@/components/ui/time";
 import { listBoardVersionsAction, type BoardVersionRow, type CardComment } from "@/lib/boards/actions";
-import { safeUrl, type EntityData } from "@/lib/boards/schema";
+import { safeUrl, type EntityData, type EvidenceCardData } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 import { describe, type AlignMode, type BoardNode } from "./board-logic";
 
@@ -36,48 +36,78 @@ export function SaveBadge({ state, readOnly, onReload, onRetry }: { state: SaveS
   );
 }
 
-export function EntityPanel({ entities, canEdit, onAdd, projectId }: { entities: EntityData[]; canEdit: boolean; onAdd: (e: EntityData) => void; projectId: string }) {
+export const EVIDENCE_MIME = "application/x-culturecrash-evidence";
+
+const EVIDENCE_KIND: Record<string, string> = { external_source: "Web claim", approved_conclusion: "Conclusion", experiment_result: "Result" };
+
+/** Research to bring onto the board: Qloo entities and cited evidence from this campaign. */
+export function ResearchPanel({ entities, evidence, canEdit, onAddEntity, onAddEvidence, projectId }: {
+  entities: EntityData[]; evidence: EvidenceCardData[]; canEdit: boolean; onAddEntity: (e: EntityData) => void; onAddEvidence: (e: EvidenceCardData) => void; projectId: string;
+}) {
+  const [tab, setTab] = React.useState<"qloo" | "evidence">(entities.length || !evidence.length ? "qloo" : "evidence");
   const [q, setQ] = React.useState("");
-  const shown = React.useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return t ? entities.filter((e) => e.name.toLowerCase().includes(t) || (TYPE_LABEL[e.type] ?? e.type).toLowerCase().includes(t)) : entities;
-  }, [entities, q]);
+  const t = q.trim().toLowerCase();
+  const shownEntities = t ? entities.filter((e) => e.name.toLowerCase().includes(t) || (TYPE_LABEL[e.type] ?? e.type).toLowerCase().includes(t)) : entities;
+  const shownEvidence = t ? evidence.filter((e) => e.claim.toLowerCase().includes(t) || e.source.toLowerCase().includes(t)) : evidence;
+  const item = cn("flex items-center gap-2.5 rounded-cc-sm border border-line bg-paper p-1.5", canEdit && "cursor-grab active:cursor-grabbing hover:border-lavender");
   return (
-    <aside aria-label="Cultural entities from research" className="absolute inset-y-0 right-0 z-10 flex w-[300px] max-w-[85vw] flex-col border-l border-line bg-paper/95 backdrop-blur-sm">
+    <aside aria-label="Research for this board" className="absolute inset-y-0 right-0 z-10 flex w-[300px] max-w-[85vw] flex-col border-l border-line bg-paper/95 backdrop-blur-sm">
       <div className="space-y-2 border-b border-line p-3 pr-14">
         <p className="cc-eyebrow flex items-center gap-1.5 text-muted"><Sparkles className="size-3.5 text-violet" /> From research</p>
-        <p className="text-[12px] leading-snug text-muted">{canEdit ? "Drag onto the board, or press + to add." : "Qloo entities from the latest run."}</p>
-      </div>
-      {entities.length === 0 ? (
-        <div className="p-4 text-[13px] leading-relaxed text-muted">
-          No completed research yet. <Link href={`/projects/${projectId}/research`} className="text-violet-ink hover:underline">Run research</Link> to bring cultural entities onto your boards.
+        <div role="tablist" aria-label="Research sources" className="flex gap-1">
+          {([["qloo", `Qloo · ${entities.length}`], ["evidence", `Evidence · ${evidence.length}`]] as const).map(([k, label]) => (
+            <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+              className={cn("rounded-full px-2.5 py-1 text-[12px]", tab === k ? "bg-ink text-white" : "text-muted hover:bg-ink/5 hover:text-ink")}>{label}</button>
+          ))}
         </div>
-      ) : (
-        <>
-          <label className="relative m-3 block">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
-            <span className="sr-only">Filter entities</span>
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name or type" className="h-9 pl-8 text-[13px]" />
-          </label>
-          <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-3">
-            {shown.map((e) => (
-              <li key={e.entityId}
-                draggable={canEdit}
-                onDragStart={(ev) => { ev.dataTransfer.setData(ENTITY_MIME, JSON.stringify(e)); ev.dataTransfer.effectAllowed = "copy"; }}
-                className={cn("flex items-center gap-2.5 rounded-cc-sm border border-line bg-paper p-1.5", canEdit && "cursor-grab active:cursor-grabbing hover:border-lavender")}>
-                <EntityImage src={e.imageUrl} theme={TYPE_THEME[e.type] ?? "culture"} seed={e.entityId} className="size-10 shrink-0 !rounded-[8px]" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium">{e.name}</p>
-                  <p className="text-[11px] text-muted">{TYPE_LABEL[e.type] ?? e.type}{e.affinity !== null ? ` · ${e.affinity.toFixed(2)}` : ""}</p>
-                </div>
-                {canEdit && <Button variant="ghost" size="icon-sm" aria-label={`Add ${e.name} to the board`} onClick={() => onAdd(e)}><Plus /></Button>}
-              </li>
-            ))}
-            {shown.length === 0 && <li className="p-2 text-[12px] text-muted">No entities match “{q}”.</li>}
-          </ul>
-        </>
-      )}
+      </div>
+      <label className="relative m-3 block">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
+        <span className="sr-only">Filter</span>
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tab === "qloo" ? "Filter by name or type" : "Filter claims or sources"} className="h-9 pl-8 text-[13px]" />
+      </label>
+      <ul role="tabpanel" className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-3">
+        {tab === "qloo" && (entities.length === 0
+          ? <li className="p-1 text-[13px] leading-relaxed text-muted">No completed research yet. <Link href={`/projects/${projectId}/research`} className="text-violet-ink hover:underline">Run research</Link> to bring cultural entities onto your boards.</li>
+          : shownEntities.map((e) => (
+            <li key={e.entityId} draggable={canEdit} className={item}
+              onDragStart={(ev) => { ev.dataTransfer.setData(ENTITY_MIME, JSON.stringify(e)); ev.dataTransfer.effectAllowed = "copy"; }}>
+              <EntityImage src={e.imageUrl} theme={TYPE_THEME[e.type] ?? "culture"} seed={e.entityId} className="size-10 shrink-0 !rounded-[8px]" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-medium">{e.name}</p>
+                <p className="text-[11px] text-muted">{TYPE_LABEL[e.type] ?? e.type}{e.affinity !== null ? ` · ${e.affinity.toFixed(2)}` : ""}</p>
+              </div>
+              {canEdit && <Button variant="ghost" size="icon-sm" aria-label={`Add ${e.name} to the board`} onClick={() => onAddEntity(e)}><Plus /></Button>}
+            </li>
+          )))}
+        {tab === "evidence" && (evidence.length === 0
+          ? <li className="p-1 text-[13px] leading-relaxed text-muted">No cited web claims, conclusions or results yet. They appear here after research with web sources.</li>
+          : shownEvidence.map((e) => (
+            <li key={e.evidenceId} draggable={canEdit} className={cn(item, "items-start")}
+              onDragStart={(ev) => { ev.dataTransfer.setData(EVIDENCE_MIME, JSON.stringify(e)); ev.dataTransfer.effectAllowed = "copy"; }}>
+              <FileCheck2 className="mt-0.5 size-4 shrink-0 text-violet" />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-3 text-[12.5px] leading-snug">{e.claim}</p>
+                <p className="mt-0.5 text-[11px] text-muted">{EVIDENCE_KIND[e.evidenceType] ?? "Evidence"}{e.url ? ` · ${new URL(e.url).hostname.replace(/^www\./, "")}` : e.source ? ` · ${e.source}` : ""}</p>
+              </div>
+              {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Add this claim to the board" onClick={() => onAddEvidence(e)}><Plus /></Button>}
+            </li>
+          )))}
+        {((tab === "qloo" && entities.length > 0 && shownEntities.length === 0) || (tab === "evidence" && evidence.length > 0 && shownEvidence.length === 0)) && <li className="p-2 text-[12px] text-muted">Nothing matches “{q}”.</li>}
+      </ul>
     </aside>
+  );
+}
+
+/** How many sourceable cards carry a source: a quick read of how traceable the board is. */
+export function EvidenceMeter({ sourced, sourceable }: { sourced: number; sourceable: number }) {
+  if (!sourceable) return null;
+  const pct = Math.round((sourced / sourceable) * 100);
+  return (
+    <span title="Images, links, Qloo entities and evidence cards with a source. Notes and groups aren’t counted." aria-label={`${sourced} of ${sourceable} cards sourced`}
+      className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[12px] font-medium", pct === 100 ? "bg-lilac/70 text-violet-ink" : pct >= 60 ? "bg-ink/5 text-ink" : "bg-peach/60 text-[#8a3d22]")}>
+      <FileCheck2 className="size-3.5" /> {sourced}/{sourceable} sourced
+    </span>
   );
 }
 
@@ -162,7 +192,7 @@ function VersionList({ boardId, canEdit, onRestore }: { boardId: string; canEdit
   );
 }
 
-const TYPE_NAME: Record<string, string> = { image: "Image", note: "Note", link: "Link", entity: "Qloo entity", group: "Group" };
+const TYPE_NAME: Record<string, string> = { image: "Image", note: "Note", link: "Link", entity: "Qloo entity", group: "Group", evidence: "Evidence" };
 
 /** Accessible alternative to the canvas: every card as a table row, with a way to jump to it. */
 export function ListView({ nodes, onLocate }: { nodes: BoardNode[]; onLocate: (id: string) => void }) {
@@ -183,7 +213,7 @@ export function ListView({ nodes, onLocate }: { nodes: BoardNode[]; onLocate: (i
         <tbody>
           {nodes.length === 0 && <tr><td colSpan={5} className="px-3 py-4 text-muted">No cards yet.</td></tr>}
           {nodes.map((n) => {
-            const src = n.type === "image" ? n.data.sourceUrl : n.type === "link" ? n.data.url : null;
+            const src = n.type === "image" ? n.data.sourceUrl : n.type === "link" || n.type === "evidence" ? n.data.url : null;
             return (
               <tr key={n.id} className="align-top">
                 <td className="border-b border-line px-3 py-2">{describe(n).replace(/^[^:]+: /, "")}</td>

@@ -2,13 +2,13 @@ import "server-only";
 import { withUser, type Tx } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { Ctx } from "@/lib/data/workspace";
-import { mediaPaths, type EntityData } from "./schema";
+import { mediaPaths, type EntityData, type EvidenceCardData } from "./schema";
 
 export const BOARD_BUCKET = "board-media";
 const SIGNED_URL_SECONDS = 60 * 60 * 6;
 
 export type BoardSummary = { id: string; name: string; palette: string[]; cardCount: number; updatedAt: string; previewPaths: string[]; previewUrls: string[] };
-export type BoardDoc = { id: string; projectId: string; name: string; revision: number; palette: string[]; content: { nodes: Record<string, unknown>[]; viewport: { x: number; y: number; zoom: number } | null } };
+export type BoardDoc = { id: string; projectId: string; name: string; revision: number; palette: string[]; directionId: string | null; content: { nodes: Record<string, unknown>[]; viewport: { x: number; y: number; zoom: number } | null } };
 
 export function mediaPrefix(workspaceId: string, projectId: string, boardId: string) {
   return `${workspaceId}/${projectId}/${boardId}/`;
@@ -67,7 +67,7 @@ export async function getBoard(ctx: Ctx, projectId: string, boardId: string): Pr
   const [row] = await withUser(ctx.user.id, (tx) => tx`select * from inspiration_boards where id = ${boardId} and project_id = ${projectId}`);
   if (!row) return null;
   const withUrls = await signNodes((row.content?.nodes ?? []) as Record<string, unknown>[]);
-  return { id: row.id, projectId: row.project_id, name: row.name, revision: row.revision, palette: row.palette ?? [], content: { nodes: withUrls, viewport: row.content?.viewport ?? null } };
+  return { id: row.id, projectId: row.project_id, name: row.name, revision: row.revision, palette: row.palette ?? [], directionId: row.direction_id ?? null, content: { nodes: withUrls, viewport: row.content?.viewport ?? null } };
 }
 
 /** Qloo results and taste tags from the campaign's latest completed research run, for dragging onto a board. */
@@ -106,4 +106,59 @@ export async function removeBoardFolders(boards: { id: string; workspace_id: str
       if (data.length < 100) break;
     }
   }
+}
+
+/** Cited evidence that can be placed on a board: web claims, approved conclusions and experiment results. */
+export async function boardEvidence(ctx: Ctx, projectId: string): Promise<EvidenceCardData[]> {
+  const rows = await withUser(ctx.user.id, (tx) => tx`
+    select id, claim, evidence_type, source_provider, source_url, quality->>'score' as score
+    from evidence_items where project_id = ${projectId} and evidence_type in ('external_source', 'approved_conclusion', 'experiment_result')
+      and review_status <> 'rejected'
+    order by (evidence_type = 'approved_conclusion') desc, (quality->>'score')::numeric desc nulls last, created_at desc limit 120`);
+  return rows.map((r) => ({
+    evidenceId: r.id, claim: String(r.claim).slice(0, 1200), evidenceType: r.evidence_type, source: r.source_provider ?? "",
+    url: typeof r.source_url === "string" && /^https?:\/\//.test(r.source_url) ? r.source_url : null, score: r.score === null ? null : Number(r.score),
+  }));
+}
+
+export type DirectionOption = { id: string; name: string; slot: number; selected: boolean };
+
+/** The current strategy version's directions (latest revision of each slot), for linking boards. */
+export async function boardDirections(ctx: Ctx, projectId: string): Promise<DirectionOption[]> {
+  const rows = await withUser(ctx.user.id, (tx) => tx`
+    select distinct on (d.slot) d.id, d.name, d.slot, (p.selected_direction_id is not null and sel.version_id = d.version_id and sel.slot = d.slot) as selected
+    from strategy_directions d
+    join projects p on p.id = d.project_id
+    left join strategy_directions sel on sel.id = p.selected_direction_id
+    where d.project_id = ${projectId} and d.version_id = (select id from strategy_versions where project_id = ${projectId} order by version desc limit 1)
+    order by d.slot, d.revision desc`);
+  return rows.map((r) => ({ id: r.id, name: r.name, slot: r.slot, selected: Boolean(r.selected) }));
+}
+
+export type LinkedBoard = { id: string; name: string; palette: string[]; previewUrls: string[]; cardCount: number };
+
+/**
+ * Boards linked to a direction. Matching is on the direction's (version, slot), so a board stays linked
+ * to every revision of that direction.
+ */
+export async function boardsForDirections(ctx: Ctx, projectId: string, directionIds: string[]): Promise<Map<string, LinkedBoard[]>> {
+  const out = new Map<string, LinkedBoard[]>();
+  if (!directionIds.length) return out;
+  const rows = await withUser(ctx.user.id, (tx) => tx`
+    select want.id as direction_id, b.id, b.name, b.palette, b.content->'nodes' as nodes, jsonb_array_length(b.content->'nodes') as card_count
+    from strategy_directions want
+    join strategy_directions linked on linked.version_id = want.version_id and linked.slot = want.slot
+    join inspiration_boards b on b.direction_id = linked.id and b.project_id = ${projectId}
+    where want.id = any(${directionIds}::uuid[])
+    order by b.updated_at desc`);
+  const previews = rows.map((r) => imagePaths(r.nodes as Record<string, unknown>[]).slice(0, 6));
+  const signed = await signPaths(previews.flat());
+  rows.forEach((r, i) => {
+    const list = out.get(r.direction_id) ?? [];
+    if (!list.some((b) => b.id === r.id)) {
+      list.push({ id: r.id, name: r.name, palette: r.palette ?? [], cardCount: Number(r.card_count), previewUrls: previews[i].map((p) => signed.get(p)).filter((u): u is string => Boolean(u)) });
+    }
+    out.set(r.direction_id, list);
+  });
+  return out;
 }

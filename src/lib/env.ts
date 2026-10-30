@@ -52,6 +52,8 @@ const schema = z.object({
   EMAIL_FROM: opt(z.string().min(3)),
   PILOT_NOTIFY_EMAIL: opt(z.string().email()),
   CRON_SECRET: opt(z.string().min(16)),
+  // Shared secret of the agency's GPU PC (ComfyUI worker) that generates concept images.
+  CC_WORKER_TOKEN: opt(z.string().min(24)),
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   VERCEL_ENV: opt(z.string()),
 });

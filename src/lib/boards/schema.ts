@@ -12,10 +12,10 @@ export type ImageData = CommonData & {
   title: string; alt: string; sourceUrl: string | null; palette: string[];
   /** AI-assessed visual fit with the audience's Qloo taste tags (a hypothesis, not evidence). */
   fit?: ImageFitData;
-  /** Usage rights: a found reference (default), a licensed image, or the client's or agency's own asset. */
+  /** Usage rights: a found reference (default), a licensed image, the client's or agency's own asset, or an AI concept. */
   rights?: ImageRights;
 };
-export const IMAGE_RIGHTS = ["reference", "licensed", "own"] as const;
+export const IMAGE_RIGHTS = ["reference", "licensed", "own", "ai"] as const;
 export type ImageRights = (typeof IMAGE_RIGHTS)[number];
 export type ImageFitData = { level: "strong" | "partial" | "off" | "unknown"; tags: string[]; descriptors: string[]; rationale: string; model: string; at: string };
 /** A stored evidence item (cited web claim, conclusion or result) placed on a board; the ledger stays the source of truth. */

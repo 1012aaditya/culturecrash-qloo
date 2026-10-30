@@ -2,18 +2,18 @@
 
 import "@xyflow/react/dist/base.css";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 import { Background, BackgroundVariant, MiniMap, ReactFlow, ReactFlowProvider, useNodesState, useReactFlow, type NodeChange, type OnNodeDrag } from "@xyflow/react";
 import {
-  ArrowLeft, Frame, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Plus,
-  Redo2, StickyNote, Trash2, Undo2,
+  ArrowLeft, ChevronLeft, ChevronRight, Frame, History as HistoryIcon, ImagePlus, LayoutGrid, Link2, List, Loader2, Maximize, Minus, PanelRightClose, PanelRightOpen, Play, Plus,
+  Redo2, Sparkles, StickyNote, Trash2, Undo2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import {
-  addBoardCommentAction, assessImageFitAction, deleteBoardAction, getBoardVersionAction, linkPreviewAction, listBoardCommentsAction, refreshMediaUrlsAction, renameBoardAction,
+  addBoardCommentAction, assessImageFitAction, critiqueBoardAction, deleteBoardAction, getBoardVersionAction, linkPreviewAction, listBoardCommentsAction, refreshMediaUrlsAction, renameBoardAction,
   saveBoardAction, setBoardDirectionAction, uploadBoardImageAction, type CardComment,
 } from "@/lib/boards/actions";
 import type { BoardDoc, DirectionOption } from "@/lib/boards/data";
@@ -23,7 +23,8 @@ import {
   align, contentKey, describe, distribute, History, hydrate, inTextField, mergeBoards, nodeKey, nodesKey, normalise, serialise, stripTransient,
   type AlignMode, type BoardNode, type Box,
 } from "./board-logic";
-import { CommentsPanel, ENTITY_MIME, EVIDENCE_MIME, EvidenceMeter, HistoryDialog, LinkDialog, ListView, ResearchPanel, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
+import { CommentsPanel, CritiqueDialog, ENTITY_MIME, EVIDENCE_MIME, EvidenceMeter, HistoryDialog, LinkDialog, ListView, PaletteDialog, ResearchPanel, SaveBadge, SelectionBar, type SaveState } from "./board-panels";
+import type { BoardCritique } from "@/lib/boards/critique";
 import { BoardCtx, nodeTypes } from "./nodes";
 
 const SAVE_DELAY_MS = 1200;
@@ -90,6 +91,13 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   const [panel, setPanel] = React.useState(entities.length > 0 || evidence.length > 0);
   const [directionId, setDirectionId] = React.useState(board.directionId);
   const [fitPending, setFitPending] = React.useState<ReadonlySet<string>>(new Set());
+  const searchParams = useSearchParams();
+  const [presenting, setPresenting] = React.useState(() => searchParams.get("present") === "1");
+  const [slide, setSlide] = React.useState(0);
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [critiqueOpen, setCritiqueOpen] = React.useState(false);
+  const [critique, setCritique] = React.useState<{ data: BoardCritique | null; pending: boolean; error: string | null }>({ data: null, pending: false, error: null });
+  const shell = React.useRef<HTMLDivElement>(null);
   const [listView, setListView] = React.useState(false);
   const [linkOpen, setLinkOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -421,6 +429,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
 
   // ---------------------------------------------------------------- keyboard, copy and paste
   React.useEffect(() => {
+    if (presenting) return; // the presentation has its own keys
     const onKey = (e: KeyboardEvent) => {
       if (inTextField(e.target) || listView) return;
       const mod = isMac() ? e.metaKey : e.ctrlKey;
@@ -495,7 +504,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
     };
     // addNote is recreated each render but only closes over stable helpers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addLink, addNodes, board.id, canEdit, deleteSelected, duplicate, listView, redo, reorder, rf, setNodes, toast, toggleLock, undo, uploadFiles]);
+  }, [addLink, addNodes, board.id, canEdit, deleteSelected, duplicate, listView, presenting, redo, reorder, rf, setNodes, toast, toggleLock, undo, uploadFiles]);
 
   // ---------------------------------------------------------------- grouping: drop a card inside a group to attach it
   const onNodeDragStop: OnNodeDrag<BoardNode> = React.useCallback((_, dragged) => {
@@ -547,6 +556,59 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
     setTimeout(() => void rf.fitView({ nodes: [{ id }], maxZoom: 1.2, padding: 0.6, duration: 400 }), 50);
   };
 
+  // ---------------------------------------------------------------- presentation: an overview, then one group per slide
+  const slides = React.useMemo(() => {
+    const groups = nodes.filter((n) => n.type === "group").sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+    return [{ label: "Overview", ids: nodes.map((n) => n.id) }, ...groups.map((g) => ({ label: String(g.data.label || "Group"), ids: [g.id, ...nodes.filter((n) => n.parentId === g.id).map((n) => n.id)] }))];
+  }, [nodes]);
+  const showSlide = React.useCallback((i: number) => {
+    const s = slides[Math.max(0, Math.min(slides.length - 1, i))];
+    setSlide(slides.indexOf(s));
+    // fitBounds moves at once; fitView waits for the next node change, which never comes while presenting.
+    if (s.ids.length) void rf.fitBounds(rf.getNodesBounds(s.ids), { padding: 0.08, duration: 600 });
+  }, [rf, slides]);
+  const startPresenting = () => {
+    setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    setPresenting(true);
+    void shell.current?.requestFullscreen?.().catch(() => {});
+    setTimeout(() => showSlide(0), 50);
+  };
+  const stopPresenting = React.useCallback(() => {
+    setPresenting(false);
+    if (location.search.includes("present=1")) window.history.replaceState(null, "", location.pathname);
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    if (!presenting) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); showSlide(slide + 1); }
+      else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); showSlide(slide - 1); }
+      else if (e.key === "Escape") stopPresenting();
+    };
+    const onFs = () => { if (!document.fullscreenElement) setPresenting(false); };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("fullscreenchange", onFs); };
+  }, [presenting, showSlide, slide, stopPresenting]);
+
+  // ---------------------------------------------------------------- AI critique
+  const runCritique = async () => {
+    setCritique({ data: null, pending: true, error: null });
+    const r = await critiqueBoardAction(board.id, serialise(rf.getNodes(), null).nodes);
+    setCritique(r.ok ? { data: r.data!, pending: false, error: null } : { data: null, pending: false, error: r.error });
+  };
+  const keepCritique = () => {
+    const c = critique.data;
+    if (!c) return;
+    addNote([`Critique: ${c.summary}`, ...c.nextSteps.map((s, i) => `${i + 1}. ${s}`)].join("\n").slice(0, 4000));
+    setCritiqueOpen(false);
+  };
+  const locateMany = (ids: string[]) => {
+    setCritiqueOpen(false);
+    setNodes((ns) => ns.map((n) => ({ ...n, selected: ids.includes(n.id) })));
+    setTimeout(() => void rf.fitView({ nodes: ids.map((id) => ({ id })), maxZoom: 1.2, padding: 0.5, duration: 400 }), 50);
+  };
+
   const rename = async () => {
     const next = name.trim();
     if (!next || next === board.name) return setName(board.name);
@@ -564,13 +626,13 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
   };
 
   const mod = isMac() ? "⌘" : "Ctrl+";
-  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending]);
+  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting]);
 
   return (
     <BoardCtx.Provider value={ctx}>
-      <div className="relative h-[calc(100dvh-210px)] min-h-[560px] overflow-hidden rounded-cc-lg border border-line bg-ivory">
+      <div ref={shell} className={cn("relative overflow-hidden", presenting ? "fixed inset-0 z-50 bg-charcoal" : "h-[calc(100dvh-210px)] min-h-[560px] rounded-cc-lg border border-line bg-ivory")}>
         <div className="cc-atmosphere pointer-events-none absolute inset-0" aria-hidden="true" />
-        <div className={cn("absolute inset-y-0 left-0 transition-[right] duration-300", panel ? "right-0 lg:right-[300px]" : "right-0")} onDragOver={onDragOver} onDrop={onDrop}>
+        <div className={cn("absolute inset-y-0 left-0 transition-[right] duration-300", panel && !presenting ? "right-0 lg:right-[300px]" : "right-0")} onDragOver={onDragOver} onDrop={onDrop}>
           <ReactFlow<BoardNode>
             className="cc-board-flow"
             aria-label={`Inspiration board “${name}”. Use Tab to move between cards; arrow keys move the selected card.`}
@@ -586,9 +648,9 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
             onlyRenderVisibleElements
             minZoom={0.1}
             maxZoom={4}
-            nodesDraggable={canEdit}
+            nodesDraggable={canEdit && !presenting}
             nodesConnectable={false}
-            elementsSelectable
+            elementsSelectable={!presenting}
             deleteKeyCode={canEdit ? ["Backspace", "Delete"] : null}
             multiSelectionKeyCode={["Shift", "Meta", "Control"]}
             selectionKeyCode="Shift"
@@ -596,12 +658,12 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
             panOnScroll
             zoomOnPinch
           >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color="#d9d3cc" />
-            <MiniMap pannable zoomable className="!rounded-cc !border !border-line !bg-paper/80 !shadow-card max-md:!hidden" maskColor="rgba(247,245,242,0.7)"
-              nodeColor={(n) => (n.type === "group" ? "rgba(184,165,255,0.35)" : n.type === "entity" ? "#8064F5" : "#e9e5e1")} />
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} color={presenting ? "#2b2836" : "#d9d3cc"} bgColor={presenting ? "#17151e" : undefined} />
+            {!presenting && <MiniMap pannable zoomable className="!rounded-cc !border !border-line !bg-paper/80 !shadow-card max-md:!hidden" maskColor="rgba(247,245,242,0.7)"
+              nodeColor={(n) => (n.type === "group" ? "rgba(184,165,255,0.35)" : n.type === "entity" ? "#8064F5" : "#e9e5e1")} />}
           </ReactFlow>
 
-          {nodes.length === 0 && !listView && (
+          {nodes.length === 0 && !listView && !presenting && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
               <div className="max-w-sm text-center">
                 <p className="cc-display text-3xl">An empty wall.</p>
@@ -615,7 +677,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
         </div>
 
         {/* Top toolbar */}
-        <div className="cc-glass absolute left-3 right-14 top-3 z-10 flex flex-wrap items-center gap-1 rounded-cc-lg p-1.5 lg:right-auto lg:rounded-full">
+        {!presenting && <div className={cn("cc-glass absolute left-3 right-14 top-3 z-10 flex flex-wrap items-center gap-1 rounded-cc-lg p-1.5 lg:right-auto", panel ? "lg:max-w-[calc(100%-370px)]" : "lg:max-w-[calc(100%-68px)]")}>
           <Button asChild variant="ghost" size="icon-sm" aria-label="All boards"><Link href={`/projects/${board.projectId}/boards`}><ArrowLeft /></Link></Button>
           <input aria-label="Board name" value={name} disabled={!canEdit} maxLength={120} onChange={(e) => setName(e.target.value)} onBlur={rename}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
@@ -658,11 +720,13 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
           )}
           <EvidenceMeter {...coverage} />
           <SaveBadge state={canEdit ? save : "saved"} readOnly={!canEdit} onReload={() => router.refresh()} onRetry={() => void doSave()} />
+          <Button variant="ghost" size="icon-sm" aria-label="AI critique" title="AI critique" onClick={() => setCritiqueOpen(true)}><Sparkles /></Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Present" title="Present (full screen, one group at a time)" disabled={!nodes.length} onClick={startPresenting}><Play /></Button>
           {canEdit && <Button variant="ghost" size="icon-sm" aria-label="Delete board" title="Delete board" onClick={() => setDeleteOpen(true)}><Trash2 /></Button>}
-        </div>
+        </div>}
 
         {/* Bottom-left: zoom and palette */}
-        <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
+        {!presenting && <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-2">
           <div className="cc-glass flex items-center gap-0.5 rounded-full p-1">
             <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => rf.zoomOut()}><Minus /></Button>
             <Button variant="ghost" size="icon-sm" aria-label="Fit board" onClick={() => rf.fitView({ padding: 0.2, maxZoom: 1, duration: 400 })}><Maximize /></Button>
@@ -670,7 +734,7 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
           </div>
           {palette.length > 0 && selected.length === 0 && (
             <div className="cc-glass flex items-center gap-1.5 rounded-full py-1.5 pl-3 pr-1.5">
-              <span className="cc-eyebrow text-muted">Palette</span>
+              <button type="button" className="cc-eyebrow text-muted hover:text-ink" onClick={() => setPaletteOpen(true)} title="Names, contrast and CSS">Palette</button>
               {palette.map((c) => (
                 <button key={c} type="button" title={`Copy ${c}`} aria-label={`Copy colour ${c}`} className="size-6 rounded-full border-2 border-paper shadow-card transition-transform hover:scale-110"
                   style={{ background: c }}
@@ -678,27 +742,42 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment }: 
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
-        {canEdit && selected.length > 0 && !listView && (
+        {canEdit && selected.length > 0 && !listView && !presenting && (
           <SelectionBar count={selected.length} locked={selected.every((n) => n.data.locked)} onDuplicate={duplicate} onLock={toggleLock}
             onFront={() => reorder(true)} onBack={() => reorder(false)} onAlign={doAlign} onDistribute={doDistribute} onDelete={deleteSelected}
             onComments={() => setCommentCard(selected[0].id)} />
         )}
 
-        {/* Right: Qloo entities */}
-        <Button variant="outline" size="icon-sm" className="absolute right-3 top-3 z-20 shadow-card" aria-label={panel ? "Hide research panel" : "Show research panel"} onClick={() => setPanel((p) => !p)}>
-          {panel ? <PanelRightClose /> : <PanelRightOpen />}
-        </Button>
-        {panel && <ResearchPanel entities={entities} evidence={evidence} canEdit={canEdit} onAddEntity={(e) => addEntity(e)} onAddEvidence={(e) => addEvidence(e)} projectId={board.projectId} />}
+        {presenting && (
+          <div className="absolute inset-x-0 bottom-5 z-30 flex justify-center">
+            <div className="flex items-center gap-1 rounded-full bg-paper/90 px-2 py-1.5 shadow-float backdrop-blur" role="toolbar" aria-label="Presentation controls">
+              <Button variant="ghost" size="icon-sm" aria-label="Previous" disabled={slide === 0} onClick={() => showSlide(slide - 1)}><ChevronLeft /></Button>
+              <span className="min-w-36 px-2 text-center text-[13px] font-medium" aria-live="polite">{slides[slide]?.label} <span className="text-muted">· {slide + 1}/{slides.length}</span></span>
+              <Button variant="ghost" size="icon-sm" aria-label="Next" disabled={slide >= slides.length - 1} onClick={() => showSlide(slide + 1)}><ChevronRight /></Button>
+              <Button variant="ghost" size="sm" onClick={() => { void navigator.clipboard?.writeText(`${location.origin}${location.pathname}?present=1`); toast({ title: "Presentation link copied", description: "Opens straight into presentation mode for anyone in this workspace.", tone: "success" }); }}><Link2 /> Copy link</Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Exit presentation" title="Exit (Esc)" onClick={stopPresenting}><X /></Button>
+            </div>
+          </div>
+        )}
 
-        {commentCard && (
+        {/* Right: Qloo entities */}
+        {!presenting && <Button variant="outline" size="icon-sm" className="absolute right-3 top-3 z-20 shadow-card" aria-label={panel ? "Hide research panel" : "Show research panel"} onClick={() => setPanel((p) => !p)}>
+          {panel ? <PanelRightClose /> : <PanelRightOpen />}
+        </Button>}
+        {panel && !presenting && <ResearchPanel entities={entities} evidence={evidence} canEdit={canEdit} onAddEntity={(e) => addEntity(e)} onAddEvidence={(e) => addEvidence(e)} projectId={board.projectId} />}
+
+        {commentCard && !presenting && (
           <CommentsPanel
             cardLabel={(() => { const n = nodes.find((x) => x.id === commentCard); return n ? describe(n) : "Removed card"; })()}
             comments={comments.filter((c) => c.cardId === commentCard)} canComment={canComment} onPost={postComment} onClose={() => setCommentCard(null)} />
         )}
 
         <LinkDialog open={linkOpen} onOpenChange={setLinkOpen} onAdd={(d) => void addLink(d)} />
+        <PaletteDialog palette={palette} open={paletteOpen} onOpenChange={setPaletteOpen} onCopied={(what) => toast({ title: `Copied ${what}`, tone: "success" })} />
+        <CritiqueDialog open={critiqueOpen} onOpenChange={setCritiqueOpen} critique={critique.data} pending={critique.pending} error={critique.error}
+          onRun={() => void runCritique()} onLocate={locateMany} onKeep={keepCritique} canEdit={canEdit} />
         <HistoryDialog boardId={board.id} open={historyOpen} onOpenChange={setHistoryOpen} onRestore={restoreVersion} canEdit={canEdit} />
 
         <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LayoutGrid } from "lucide-react";
-import { NewBoardButton } from "@/components/boards/new-board";
+import { BuildFromResearchButton, NewBoardButton } from "@/components/boards/new-board";
 import { EmptyState } from "@/components/states";
 import { Ago } from "@/components/ui/time";
 import { listBoards } from "@/lib/boards/data";
@@ -26,15 +26,15 @@ export default async function BoardsPage({ params }: PageProps<"/projects/[proje
           <p className="max-w-md text-[14px] leading-relaxed text-muted">
             Collect references, notes, links and the cultural entities from your research on a free canvas. Every reference keeps its source.
           </p>
-          {canEdit && <NewBoardButton projectId={projectId} />}
+          {canEdit && <div className="flex flex-wrap gap-2"><NewBoardButton projectId={projectId} /><BuildFromResearchButton projectId={projectId} /></div>}
         </div>
       </div>
       {boards.length === 0 ? (
         <EmptyState
           icon={LayoutGrid}
           title="No boards yet"
-          body="Start a board for a strategy direction, a campaign territory or a client meeting. Drag in Qloo entities from the latest research run."
-          action={canEdit ? <NewBoardButton projectId={projectId} size="sm" /> : undefined}
+          body="Start a board for a strategy direction, a campaign territory or a client meeting, or build one from your research: the strongest Qloo affinities by theme and the best-supported evidence, ready to rearrange."
+          action={canEdit ? <div className="mt-1 flex flex-wrap gap-2"><NewBoardButton projectId={projectId} size="sm" /><BuildFromResearchButton projectId={projectId} size="sm" /></div> : undefined}
         />
       ) : (
         <ul className="cc-stagger grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

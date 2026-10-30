@@ -12,7 +12,11 @@ export type ImageData = CommonData & {
   title: string; alt: string; sourceUrl: string | null; palette: string[];
   /** AI-assessed visual fit with the audience's Qloo taste tags (a hypothesis, not evidence). */
   fit?: ImageFitData;
+  /** Usage rights: a found reference (default), a licensed image, or the client's or agency's own asset. */
+  rights?: ImageRights;
 };
+export const IMAGE_RIGHTS = ["reference", "licensed", "own"] as const;
+export type ImageRights = (typeof IMAGE_RIGHTS)[number];
 export type ImageFitData = { level: "strong" | "partial" | "off" | "unknown"; tags: string[]; descriptors: string[]; rationale: string; model: string; at: string };
 /** A stored evidence item (cited web claim, conclusion or result) placed on a board; the ledger stays the source of truth. */
 export type EvidenceCardData = CommonData & { evidenceId: string; claim: string; evidenceType: string; source: string; url: string | null; score: number | null };
@@ -78,6 +82,7 @@ function cleanData(type: BoardNodeType, d: Record<string, unknown>, mediaPrefix:
         ...common, path: ownPath(d.path, mediaPrefix), thumbPath: ownPath(d.thumbPath, mediaPrefix), title: str(200).parse(d.title ?? ""),
         alt: str(300).parse(d.alt ?? ""), sourceUrl: safeUrl(d.sourceUrl), palette,
         ...(fitSchema.safeParse(d.fit).success ? { fit: fitSchema.parse(d.fit) } : {}),
+        rights: z.enum(IMAGE_RIGHTS).catch("reference").parse(d.rights),
       } satisfies Omit<ImageData, "url" | "thumbUrl">;
     }
     case "evidence":

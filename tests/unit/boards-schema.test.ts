@@ -27,7 +27,7 @@ describe("parseBoardContent", () => {
       viewport: { x: 1, y: 2, zoom: 1 },
     }, PREFIX)!;
     const [i1, i2, i3, l1] = out.nodes;
-    expect(i1.data).toEqual({ path: null, thumbPath: null, title: "A", alt: "", sourceUrl: null, palette: [] });
+    expect(i1.data).toEqual({ path: null, thumbPath: null, title: "A", alt: "", sourceUrl: null, palette: [], rights: "reference" });
     expect(i2.data).toMatchObject({ path: `${PREFIX}ok.png`, sourceUrl: "https://unsplash.com/p" });
     expect(i3.data.path).toBeNull();
     expect(l1.data.url).toBe("");

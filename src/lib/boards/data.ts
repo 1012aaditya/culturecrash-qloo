@@ -55,7 +55,7 @@ export async function listBoards(ctx: Ctx, projectId: string): Promise<BoardSumm
   const rows = await withUser(ctx.user.id, (tx) => tx`
     select id, name, palette, updated_at, jsonb_array_length(content->'nodes') as card_count, content->'nodes' as nodes
     from inspiration_boards where project_id = ${projectId} order by updated_at desc`);
-  const previews = rows.map((r) => imagePaths(r.nodes as Record<string, unknown>[]).slice(0, 3));
+  const previews = rows.map((r) => [...new Set(imagePaths(r.nodes as Record<string, unknown>[]))].slice(0, 3));
   const signed = await signPaths(previews.flat());
   return rows.map((r, i) => ({
     id: r.id, name: r.name, palette: r.palette ?? [], cardCount: Number(r.card_count), updatedAt: new Date(r.updated_at).toISOString(),
@@ -151,7 +151,7 @@ export async function boardsForDirections(ctx: Ctx, projectId: string, direction
     join inspiration_boards b on b.direction_id = linked.id and b.project_id = ${projectId}
     where want.id = any(${directionIds}::uuid[])
     order by b.updated_at desc`);
-  const previews = rows.map((r) => imagePaths(r.nodes as Record<string, unknown>[]).slice(0, 6));
+  const previews = rows.map((r) => [...new Set(imagePaths(r.nodes as Record<string, unknown>[]))].slice(0, 6));
   const signed = await signPaths(previews.flat());
   rows.forEach((r, i) => {
     const list = out.get(r.direction_id) ?? [];

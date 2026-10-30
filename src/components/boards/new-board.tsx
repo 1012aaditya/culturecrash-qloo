@@ -2,12 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import * as React from "react";
-import { Plus } from "lucide-react";
+import { Loader2, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Field, Input } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
-import { createBoardAction } from "@/lib/boards/actions";
+import { createBoardAction, createBoardFromResearchAction } from "@/lib/boards/actions";
 
 export function NewBoardButton({ projectId, size = "md" }: { projectId: string; size?: "sm" | "md" }) {
   const router = useRouter();
@@ -41,5 +41,21 @@ export function NewBoardButton({ projectId, size = "md" }: { projectId: string; 
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One click to a starter board laid out from the latest research run. */
+export function BuildFromResearchButton({ projectId, size = "md" }: { projectId: string; size?: "sm" | "md" }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [pending, start] = React.useTransition();
+  return (
+    <Button size={size} variant="soft" disabled={pending} onClick={() => start(async () => {
+      const r = await createBoardFromResearchAction(projectId);
+      if (!r.ok) return toast({ title: "Board not built", description: r.error, tone: "error" });
+      router.push(`/projects/${projectId}/boards/${r.data!.id}`);
+    })}>
+      {pending ? <Loader2 className="animate-spin" /> : <Sparkles />} {pending ? "Building…" : "Build from research"}
+    </Button>
   );
 }

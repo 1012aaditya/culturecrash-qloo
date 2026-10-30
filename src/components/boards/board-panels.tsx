@@ -14,6 +14,8 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { Ago } from "@/components/ui/time";
 import { listBoardVersionsAction, type BoardVersionRow, type CardComment } from "@/lib/boards/actions";
+import { colourName, contrastLevel, contrastRatio, readablePairs } from "@/lib/boards/colour";
+import type { BoardCritique } from "@/lib/boards/critique";
 import { safeUrl, type EntityData, type EvidenceCardData } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 import { describe, type AlignMode, type BoardNode } from "./board-logic";
@@ -312,3 +314,97 @@ export function CommentsPanel({ cardLabel, comments, canComment, onPost, onClose
     </aside>
   );
 }
+
+/** The board palette with names, WCAG contrast and readable pairs; copies as CSS custom properties. */
+export function PaletteDialog({ palette, open, onOpenChange, onCopied }: { palette: string[]; open: boolean; onOpenChange: (o: boolean) => void; onCopied: (what: string) => void }) {
+  const pairs = readablePairs(palette).slice(0, 8);
+  const css = palette.map((c, i) => `--board-colour-${i + 1}: ${c}; /* ${colourName(c)} */`).join("\n");
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title="Board palette" description="The most common colours across this board’s images. Contrast follows WCAG: AA needs 4.5:1 for body text (3:1 for large text).">
+        <ul className="divide-y divide-line">
+          {palette.map((c) => {
+            const onWhite = contrastRatio(c, "#ffffff");
+            const onInk = contrastRatio(c, "#111116");
+            return (
+              <li key={c} className="flex items-center gap-3 py-2">
+                <span className="size-9 shrink-0 rounded-cc-sm border border-line" style={{ background: c }} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-medium">{colourName(c)}</p>
+                  <p className="font-mono text-[11px] text-muted">{c}</p>
+                </div>
+                <span className="text-right text-[11px] text-muted">on white {onWhite.toFixed(1)} · {contrastLevel(onWhite)}<br />on black {onInk.toFixed(1)} · {contrastLevel(onInk)}</span>
+              </li>
+            );
+          })}
+        </ul>
+        {pairs.length > 0 && (
+          <div className="mt-4">
+            <p className="cc-eyebrow text-muted">Readable text pairs</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {pairs.map((p) => (
+                <div key={`${p.text}-${p.background}`} className="rounded-cc-sm border border-line p-2 text-center" style={{ background: p.background, color: p.text }}>
+                  <p className="text-[18px] font-semibold leading-none">Aa</p>
+                  <p className="mt-1 text-[10px] opacity-80">{p.ratio.toFixed(1)} · {p.level}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard?.writeText(palette.join(", ")); onCopied("hex values"); }}>Copy hex values</Button>
+          <Button size="sm" onClick={() => { void navigator.clipboard?.writeText(css); onCopied("CSS variables"); }}>Copy as CSS</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** AI critique of the board; each point can jump to the cards it is about. */
+function CritiquePoints({ title, items, tone, onLocate }: { title: string; items: { cardIds: string[]; point: string }[]; tone: string; onLocate: (ids: string[]) => void }) {
+  return items.length ? (
+    <div>
+      <p className={cn("cc-eyebrow", tone)}>{title}</p>
+      <ul className="mt-1.5 space-y-1.5">
+        {items.map((p, i) => (
+          <li key={i} className="flex items-start justify-between gap-3 text-[13px] leading-relaxed">
+            <span>{p.point}</span>
+            {p.cardIds.length > 0 && <Button size="sm" variant="ghost" className="shrink-0" onClick={() => onLocate(p.cardIds)}>Show</Button>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  ) : null;
+}
+
+export function CritiqueDialog({ open, onOpenChange, critique, pending, error, onRun, onLocate, onKeep, canEdit }: {
+  open: boolean; onOpenChange: (o: boolean) => void; critique: BoardCritique | null; pending: boolean; error: string | null;
+  onRun: () => void; onLocate: (ids: string[]) => void; onKeep: () => void; canEdit: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[min(680px,calc(100vw-24px))]" title="Board critique" description="An AI art-director read of this board against the brief and its linked direction. Fit labels are hypotheses; the team decides.">
+        {pending ? <p className="flex items-center gap-2 text-[13px] text-muted"><Loader2 className="size-4 animate-spin" /> Reading the board…</p>
+          : error ? <div className="space-y-3"><p className="text-[13px] text-danger">{error}</p><Button size="sm" variant="outline" onClick={onRun}>Try again</Button></div>
+            : !critique ? <Button onClick={onRun}><Sparkles /> Critique this board</Button> : (
+              <div className="space-y-4">
+                <p className="text-[14px] leading-relaxed">{critique.summary}</p>
+                <CritiquePoints title="Supports the direction" items={critique.supports} tone="text-violet-ink" onLocate={onLocate} />
+                <CritiquePoints title="Off-brief" items={critique.offBrief} tone="text-[#8a3d22]" onLocate={onLocate} />
+                {critique.missing.length > 0 && <div><p className="cc-eyebrow text-muted">Missing</p><ul className="mt-1.5 list-disc space-y-1 pl-5 text-[13px]">{critique.missing.map((m, i) => <li key={i}>{m}</li>)}</ul></div>}
+                {critique.nextSteps.length > 0 && <div><p className="cc-eyebrow text-muted">Next steps</p><ol className="mt-1.5 list-decimal space-y-1 pl-5 text-[13px]">{critique.nextSteps.map((m, i) => <li key={i}>{m}</li>)}</ol></div>}
+                <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
+                  <p className="text-[11px] text-muted">{generatorLabelShort(critique.generator)} · <Ago value={critique.at} /></p>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" onClick={onRun}>Run again</Button>
+                    {canEdit && <Button size="sm" variant="outline" onClick={onKeep}>Add as note</Button>}
+                  </div>
+                </div>
+              </div>
+            )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const generatorLabelShort = (g: string) => (g.startsWith("llm:") ? `AI · ${g.slice(4)}` : g);

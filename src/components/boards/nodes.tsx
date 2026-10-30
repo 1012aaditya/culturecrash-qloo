@@ -6,7 +6,7 @@ import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "
 import { AlertTriangle, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
-import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, LinkData, NoteData } from "@/lib/boards/schema";
+import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, NoteData } from "@/lib/boards/schema";
 import { safeUrl } from "@/lib/boards/schema";
 import { cn } from "@/lib/utils";
 
@@ -17,14 +17,16 @@ export type BoardContext = {
   commentCounts: Record<string, number>; openComments: (cardId: string) => void;
   /** Cultural-fit check for an image card, and the cards currently being checked. */
   checkFit: (cardId: string) => void; fitPending: ReadonlySet<string>;
+  /** Presentation mode: no editing chrome; reference-only images are watermarked. */
+  presenting: boolean;
 };
-export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set() });
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false });
 
 /** Comment count on a card; opens the card's thread. */
 function CommentBadge({ id }: { id: string }) {
-  const { commentCounts, openComments } = React.useContext(BoardCtx);
+  const { commentCounts, openComments, presenting } = React.useContext(BoardCtx);
   const n = commentCounts[id] ?? 0;
-  if (!n) return null;
+  if (!n || presenting) return null;
   return (
     <button type="button" onClick={() => openComments(id)} aria-label={`${n} ${n === 1 ? "comment" : "comments"}`}
       className="nodrag absolute left-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-full bg-violet px-1.5 py-0.5 text-[10.5px] font-medium text-white shadow-card hover:bg-violet-ink">
@@ -100,7 +102,8 @@ function FitChip({ fit }: { fit: ImageFitData }) {
 
 export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit, onMediaError, checkFit, fitPending } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError, checkFit, fitPending, presenting } = React.useContext(BoardCtx);
+  const rights = data.rights ?? "reference";
   const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
   const [draft, setDraft] = React.useState(data.sourceUrl ?? "");
@@ -120,6 +123,9 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
             // eslint-disable-next-line @next/next/no-img-element -- signed Supabase Storage URL
             ? <img src={src} alt={data.alt || data.title || "Reference image"} draggable={false} loading="lazy" decoding="async" onError={onMediaError} className="h-full w-full object-cover" />
             : <div className="flex h-full items-center justify-center text-[12px] text-muted">Image unavailable</div>}
+          {presenting && rights === "reference" && (
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-charcoal/70 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wider text-white">Reference only · not for publication</span>
+          )}
         </div>
         <figcaption className="space-y-1 border-t border-line px-2.5 py-2">
           <InlineText value={data.title} onChange={(v) => update({ title: v })} placeholder="Caption" className="text-[12px] font-medium" />
@@ -135,7 +141,7 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
               <a href={data.sourceUrl} target="_blank" rel="noopener noreferrer" className="nodrag flex min-w-0 items-center gap-1 text-[11px] text-violet-ink hover:underline">
                 <ExternalLink className="size-3 shrink-0" /><span className="truncate">{host(data.sourceUrl)}</span>
               </a>
-            ) : (
+            ) : !presenting && (
               <button type="button" disabled={!canEdit} onClick={() => setEditingSource(true)} className="nodrag flex items-center gap-1 rounded-full bg-peach/50 px-1.5 py-0.5 text-[10.5px] text-[#8a3d22] enabled:hover:bg-peach">
                 <AlertTriangle className="size-3" /> {canEdit ? "Add source" : "No source"}
               </button>
@@ -144,7 +150,15 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
               <button type="button" onClick={() => { setDraft(data.sourceUrl ?? ""); setEditingSource(true); }} className="nodrag shrink-0 text-[10.5px] text-muted hover:text-ink">Edit</button>
             )}
           </div>
-          {data.fit ? <FitChip fit={data.fit} /> : selected && canEdit && data.thumbPath && (
+          {selected && canEdit && !presenting ? (
+            <select aria-label="Image rights" value={rights} onChange={(e) => update({ rights: e.target.value as ImageRights })}
+              className="nodrag h-6 rounded-full border border-line bg-paper px-1.5 text-[10.5px] outline-none focus:border-violet">
+              <option value="reference">Reference only</option>
+              <option value="licensed">Licensed</option>
+              <option value="own">Own asset</option>
+            </select>
+          ) : rights !== "reference" && <span className="inline-flex rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] text-muted">{rights === "own" ? "Own asset" : "Licensed"}</span>}
+          {data.fit ? !presenting && <FitChip fit={data.fit} /> : selected && canEdit && data.thumbPath && (
             <button type="button" onClick={() => checkFit(id)} disabled={fitPending.has(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-lilac/60 px-1.5 py-0.5 text-[10.5px] font-medium text-violet-ink enabled:hover:bg-lilac">
               {fitPending.has(id) ? <Loader2 className="size-3 animate-spin" /> : <ScanEye className="size-3" />} Check cultural fit
             </button>

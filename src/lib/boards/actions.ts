@@ -7,8 +7,10 @@ import { logActivity } from "@/lib/data/activity";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
 import { assertCan, ForbiddenError } from "@/lib/permissions";
-import { BOARD_BUCKET, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
+import { BOARD_BUCKET, boardEntities, boardEvidence, mediaPrefix, removeBoardFolders, signNodes, signPaths, storageAvailable } from "./data";
+import { researchBoardLayout } from "./layout";
 import { llmEnabled, LLM_UNAVAILABLE } from "@/lib/ai/enabled";
+import { critiqueBoard, type BoardCritique } from "./critique";
 import { assessImageFit, type ImageFit } from "./fit";
 import { fetchLinkPreview, processImage, type LinkPreview, type ProcessedImage } from "./media";
 import { boardPalette, mediaPaths, parseBoardContent, safeUrl } from "./schema";
@@ -393,5 +395,61 @@ export async function assessImageFitAction(boardId: string, thumbPath: string): 
     return { ok: true, data: fit };
   } catch (e) {
     return err(e, "The fit check could not be completed. Try again shortly.");
+  }
+}
+
+/** Creates a starter board laid out from the latest research run: Qloo entities grouped by theme, plus top evidence. */
+export async function createBoardFromResearchAction(projectId: string): Promise<R<{ id: string }>> {
+  if (!isUuid(projectId)) return { ok: false, error: "Invalid project." };
+  try {
+    const ctx = await guard();
+    const ws = ctx.workspace.workspaceId;
+    const [entities, evidence] = await Promise.all([boardEntities(ctx, projectId), boardEvidence(ctx, projectId)]);
+    if (!entities.length && !evidence.length) return { ok: false, error: "There is no completed research to build from yet. Run research first." };
+    const id = await withUser(ctx.user.id, async (tx) => {
+      const [run] = await tx`select created_at, mode from research_runs where project_id = ${projectId} and status in ('completed', 'partially_completed') order by created_at desc limit 1`;
+      const runLabel = run ? `${run.mode === "demo" ? "demonstration run" : "run"} of ${new Date(run.created_at).toISOString().slice(0, 10)}` : "latest run";
+      const [b] = await tx`insert into inspiration_boards (project_id, workspace_id, name, created_by, updated_by)
+        values (${projectId}, ${ws}, ${"From research"}, ${ctx.user.id}, ${ctx.user.id}) returning id, workspace_id, project_id`;
+      const parsed = parseBoardContent({ nodes: researchBoardLayout(entities, evidence, { runLabel }), viewport: null }, mediaPrefix(b.workspace_id, b.project_id, b.id));
+      if (!parsed) throw new Error("starter layout failed validation");
+      await tx`update inspiration_boards set content = ${tx.json(parsed as never)}, revision = revision + 1 where id = ${b.id}`;
+      await logActivity(tx, { workspaceId: ws, actorId: ctx.user.id, projectId, verb: "created", objectType: "board", objectId: b.id, summary: "built an inspiration board from research" });
+      return b.id as string;
+    });
+    revalidatePath(`/projects/${projectId}/boards`);
+    return { ok: true, data: { id } };
+  } catch (e) {
+    return err(e, "The board could not be built.");
+  }
+}
+
+/** AI critique of the board against the brief and its linked direction. Not stored; the team decides what to act on. */
+export async function critiqueBoardAction(boardId: string, cards: unknown): Promise<R<BoardCritique>> {
+  if (!isUuid(boardId)) return { ok: false, error: "Invalid board." };
+  try {
+    const ctx = await getCtx();
+    if (!(await llmEnabled(ctx.user.id, ctx.workspace.workspaceId))) return { ok: false, error: LLM_UNAVAILABLE };
+    const input = await withUser(ctx.user.id, async (tx) => {
+      const [b] = await tx`select b.project_id, b.workspace_id, b.palette, b.direction_id, d.name as direction_name, d.content as direction
+        from inspiration_boards b left join strategy_directions d on d.id = b.direction_id where b.id = ${boardId}`;
+      if (!b) return null;
+      const [brief] = await tx`select brand, product, category, market, audience, objective from campaign_briefs where project_id = ${b.project_id}`;
+      return { b, brief };
+    });
+    if (!input) return { ok: false, error: "Board not found." };
+    // The editor sends its current cards so unsaved edits are critiqued too; they are validated like a save.
+    const parsed = parseBoardContent({ nodes: cards, viewport: null }, mediaPrefix(input.b.workspace_id, input.b.project_id, boardId));
+    if (!parsed) return { ok: false, error: "The board could not be read." };
+    if (parsed.nodes.filter((n) => n.type !== "group").length < 3) return { ok: false, error: "Add at least three cards before asking for a critique." };
+    const dir = input.b.direction as Record<string, unknown> | null;
+    const critique = await critiqueBoard(parsed.nodes, {
+      brief: input.brief ?? {},
+      direction: dir ? { name: input.b.direction_name, coreIdea: dir.coreIdea, positioning: dir.positioningStatement, pillars: dir.messagingPillars, creativeImplications: dir.creativeImplications } : null,
+      palette: input.b.palette ?? [],
+    });
+    return { ok: true, data: critique };
+  } catch (e) {
+    return err(e, "The critique could not be written. Try again shortly.");
   }
 }

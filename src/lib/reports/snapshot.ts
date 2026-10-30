@@ -28,7 +28,7 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   const [version] = selected
     ? await tx`select id, version, generator, is_demo from strategy_versions where id = ${selected.version_id}`
     : await tx`select id, version, generator, is_demo from strategy_versions where project_id = ${projectId} order by version desc limit 1`;
-  const dirs = version ? await tx`select distinct on (slot) id, name, content, status, is_exploratory, revision from strategy_directions where version_id = ${version.id} order by slot, (status = 'selected') desc, revision desc` : [];
+  const dirs = version ? await tx`select distinct on (slot) id, slot, name, content, status, is_exploratory, revision from strategy_directions where version_id = ${version.id} order by slot, (status = 'selected') desc, revision desc` : [];
   // Only a creative brief written from the selected direction belongs in this report.
   const [cb] = selected ? await tx`select content, grounding, generator, revision from creative_briefs where project_id = ${projectId} and direction_id = ${selected.id} order by created_at desc limit 1` : [];
   const [otherBrief] = selected && !cb ? await tx`select 1 from creative_briefs where project_id = ${projectId} limit 1` : [];
@@ -37,6 +37,12 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
   // The most recently edited board linked to the selected direction (any revision of it: boards link by version and slot).
   const [board] = selected ? await tx`select b.name, b.content->'nodes' as nodes from inspiration_boards b join strategy_directions d on d.id = b.direction_id
     where b.project_id = ${projectId} and d.version_id = ${selected.version_id} and d.slot = ${selected.slot} order by b.updated_at desc limit 1` : [];
+  // Visual futures: up to two finished AI frames per direction of this strategy version, best fit first.
+  const frames = version ? await tx`select d.slot, j.result_path, j.result_thumb_path, coalesce(j.provenance->>'title', 'AI concept') as title,
+      j.fit->>'level' as fit, j.parent_id is not null as improved
+    from concept_jobs j join strategy_directions d on d.id = j.direction_id
+    where j.project_id = ${projectId} and d.version_id = ${version.id} and j.status = 'done' and j.result_path is not null and j.result_thumb_path is not null
+    order by d.slot, case j.fit->>'level' when 'strong' then 0 when 'partial' then 1 when 'off' then 3 else 2 end, j.created_at desc` : [];
   const [{ docs: externalDocs }] = run ? await tx`select count(*)::int as docs from research_documents where run_id = ${run.id}` : [{ docs: 0 }];
   const experiments = await tx`select x.id, x.name, x.hypothesis, x.method, x.primary_metric, x.decision_threshold, x.status, x.interpretation, x.next_action,
     coalesce((select json_agg(json_build_object('variant', v.label, 'metric', r.metric, 'value', r.value, 'n', r.sample_size) order by r.created_at)
@@ -118,6 +124,14 @@ export async function buildSnapshot(tx: Tx, projectId: string, sections: ReportS
       items: (crit.critique as RedTeamCritique).critiques.map((c) => ({ direction: c.directionName, objection: c.fatalFlaw, weakestEvidence: c.weakestEvidence ?? "", competitor: c.nearestCompetitor ?? "", question: c.toughestClientQuestion, answer: c.suggestedDefense })),
     } : null,
     visualWorld: board ? visualWorld(board.name as string, (board.nodes ?? []) as BoardNode[]) : null,
+    visualFutures: frames.length ? {
+      directions: dirs.map((d) => ({
+        slot: Number(d.slot), name: d.name as string, selected: d.status === "selected",
+        frames: frames.filter((f) => Number(f.slot) === Number(d.slot)).slice(0, 2).map((f) => ({
+          path: f.result_path as string, thumbPath: f.result_thumb_path as string, title: f.title as string, fit: (f.fit as string | null) ?? null, improved: Boolean(f.improved),
+        })),
+      })),
+    } : null,
     creativeBrief: cb ? { content: cb.content as CreativeBriefContent, generatedBy: generatorLabel(cb.generator), revision: cb.revision, grounding: cb.grounding ?? [] } : null,
     experiments: experiments.map((x) => ({ name: x.name, hypothesis: x.hypothesis, method: x.method, primaryMetric: x.primary_metric, threshold: x.decision_threshold, status: x.status, interpretation: x.interpretation, nextAction: x.next_action, results: x.results })),
     limitations,

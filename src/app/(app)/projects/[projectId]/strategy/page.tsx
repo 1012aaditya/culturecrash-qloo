@@ -7,6 +7,8 @@ import { EmptyState } from "@/components/states";
 import { GenerateButton } from "@/components/strategy/generate-button";
 import { CompareLink, StrategyStudio } from "@/components/strategy/strategy-studio";
 import { RedTeamButton } from "@/components/strategy/red-team-dialog";
+import { VisualFuturesButton } from "@/components/strategy/visual-futures-button";
+import { conceptsEnabled } from "@/lib/concepts/data";
 import { Button } from "@/components/ui/button";
 import { generatorLabel } from "@/lib/ai";
 import { getProjectContext } from "@/lib/data/project-context";
@@ -37,6 +39,7 @@ export default async function StrategyPage({ params, searchParams }: PageProps<"
             {canEdit && <GenerateButton action={generateStrategyAction.bind(null, projectId)} label={s.current ? "Generate new version" : "Generate three directions"} pendingLabel="Drafting directions…" successTitle="Strategy directions generated" />}
             {s.current && <CompareLink projectId={projectId} />}
             {s.current && <RedTeamButton projectId={projectId} versionId={s.current.id} llm={llm} canEdit={canEdit} saved={s.critique} />}
+            {s.current && can(ctx.workspace.role, "board.edit") && project.status !== "archived" && conceptsEnabled() && <VisualFuturesButton projectId={projectId} />}
             {project.hasSelectedDirection && (project.creativeBriefCount > 0
               ? <Button asChild variant="soft"><Link href={`/projects/${projectId}/creative-brief`}>Open creative brief <ArrowRight /></Link></Button>
               : canEdit && <GenerateButton variant="accent" action={generateCreativeBriefAction.bind(null, projectId)} label="Generate creative brief" pendingLabel="Writing brief…" successTitle="Creative brief created" />)}

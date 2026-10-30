@@ -219,6 +219,13 @@ export function ReportDocument({ s, version, createdAt, boardImages = {} }: { s:
             )}
           </Section>
         )}
+        {on("futures") && (
+          <Section id="futures" n={++n}>
+            {s.visualFutures ? <VisualFuturesSection v={s.visualFutures} urls={boardImages} /> : (
+              <p className="text-muted">{s.visualFutures === undefined ? "This report version was created before visual futures existed." : "No AI concept frames have been made for these directions yet. Use “Show me these directions” in the strategy studio."}</p>
+            )}
+          </Section>
+        )}
         {on("experiments") && (
           <Section id="experiments" n={++n}>
             {s.experiments.length === 0 ? <p className="text-muted">No experiments planned.</p> : (
@@ -267,6 +274,44 @@ export function ReportDocument({ s, version, createdAt, boardImages = {} }: { s:
 }
 
 const RIGHTS_LABEL = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" } as const;
+
+const FIT_LABEL: Record<string, string> = { strong: "Strong fit", partial: "Partial fit", off: "Off-taste", unknown: "Not judged" };
+
+function VisualFuturesSection({ v, urls }: { v: NonNullable<ReportSnapshot["visualFutures"]>; urls: Record<string, string> }) {
+  const shown = v.directions.some((d) => d.frames.some((f) => urls[f.thumbPath]));
+  return (
+    <div className="space-y-5">
+      <p className="text-[13px] text-muted">The same audience, three possible campaigns: AI concept frames made from each direction’s idea, its cultural connections and the audience’s Qloo taste signals. Fit is an AI hypothesis against those signals, not evidence of performance.</p>
+      <div className="grid gap-4 md:grid-cols-3">
+        {v.directions.map((d) => (
+          <div key={d.slot} className={cn("break-inside-avoid rounded-cc-lg border p-3", d.selected ? "border-violet bg-lilac/20" : "border-line bg-paper")}>
+            <p className="cc-eyebrow text-muted">Direction 0{d.slot}{d.selected ? " · selected" : ""}</p>
+            <p className="mt-1 text-[14px] font-semibold leading-snug">{d.name}</p>
+            <ul className="mt-3 space-y-3">
+              {d.frames.length === 0 && <li className="text-[12px] text-faint">No frames yet.</li>}
+              {d.frames.map((f) => (
+                <li key={f.path} className="overflow-hidden rounded-cc border border-line bg-paper">
+                  <div className="relative aspect-square bg-ivory">
+                    {urls[f.thumbPath] ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- short-lived signed Storage URL
+                      <img src={urls[f.thumbPath]} alt={f.title} className="h-full w-full object-cover" />
+                    ) : <span className="absolute inset-0 grid place-items-center px-3 text-center text-[11px] text-faint">{f.title}</span>}
+                    <span className="absolute inset-x-0 bottom-0 bg-ink/70 px-2 py-1 text-[10px] uppercase tracking-wide text-white">{RIGHTS_LABEL.ai}</span>
+                  </div>
+                  <div className="p-2 text-[12px]">
+                    <p className="font-medium">{f.title}</p>
+                    <p className="text-muted">{f.fit ? FIT_LABEL[f.fit] ?? f.fit : "Fit not checked"}{f.improved ? " · improved by the AI art director" : ""}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      {!shown && <p className="text-[12px] text-faint">Concept frames are private to the workspace; sign in to see them.</p>}
+    </div>
+  );
+}
 
 function VisualWorldSection({ v, urls }: { v: NonNullable<ReportSnapshot["visualWorld"]>; urls: Record<string, string> }) {
   const shown = v.images.some((i) => urls[i.thumbPath ?? i.path] ?? urls[i.path]);

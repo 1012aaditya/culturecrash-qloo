@@ -3,7 +3,7 @@
 import Link from "next/link";
 import * as React from "react";
 import { NodeResizer, useReactFlow, useStore, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Copy, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, ScanEye, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Copy, ExternalLink, FileCheck2, Link2, Loader2, Lock, MessageSquare, Route, ScanEye, Sparkles, Wand2 } from "lucide-react";
 import { EntityImage } from "@/components/art/entity-image";
 import { TYPE_LABEL, TYPE_THEME } from "@/components/research/cultural-network";
 import type { EntityData, EvidenceCardData, GroupData, ImageData, ImageFitData, ImageRights, LinkData, NoteData } from "@/lib/boards/schema";
@@ -21,8 +21,12 @@ export type BoardContext = {
   presenting: boolean;
   /** AI variations of an image card (null when no GPU PC is set up for this server). */
   makeVariations: ((cardId: string) => void) | null;
+  /** The art-director loop for weak AI frames, and the cards being improved. */
+  improve: ((cardId: string) => void) | null; improvePending: ReadonlySet<string>;
+  /** Opens an AI concept's evidence trail. */
+  openTrail: (cardId: string) => void;
 };
-export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false, makeVariations: null });
+export const BoardCtx = React.createContext<BoardContext>({ canEdit: false, projectId: "", onMediaError: () => {}, commentCounts: {}, openComments: () => {}, checkFit: () => {}, fitPending: new Set(), presenting: false, makeVariations: null, improve: null, improvePending: new Set(), openTrail: () => {} });
 
 /** Comment count on a card; opens the card's thread. */
 function CommentBadge({ id }: { id: string }) {
@@ -104,9 +108,11 @@ function FitChip({ fit }: { fit: ImageFitData }) {
 
 const RIGHTS_LABEL: Record<ImageRights, string> = { reference: "Reference only · not for publication", licensed: "Licensed", own: "Own asset", ai: "AI concept · not final artwork" };
 
+const IMPROVED_FROM: Record<string, string> = { partial: "partial fit", off: "off-taste", strong: "strong fit", unknown: "not judged" };
+
 export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageData>>) {
   const update = useUpdate(id);
-  const { canEdit, onMediaError, checkFit, fitPending, presenting, makeVariations } = React.useContext(BoardCtx);
+  const { canEdit, onMediaError, checkFit, fitPending, presenting, makeVariations, improve, improvePending, openTrail } = React.useContext(BoardCtx);
   const rights = data.rights ?? "reference";
   const zoom = useStore((st) => st.transform[2]);
   const [editingSource, setEditingSource] = React.useState(false);
@@ -172,6 +178,25 @@ export function ImageNode({ id, data, selected, width }: NodeProps<Node<ImageDat
             <button type="button" onClick={() => checkFit(id)} disabled={fitPending.has(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-lilac/60 px-1.5 py-0.5 text-[10.5px] font-medium text-violet-ink enabled:hover:bg-lilac">
               {fitPending.has(id) ? <Loader2 className="size-3 animate-spin" /> : <ScanEye className="size-3" />} Check cultural fit
             </button>
+          )}
+          {!presenting && (data.conceptJobId || data.improvedFrom) && (
+            <div className="flex flex-wrap items-center gap-1">
+              {data.improvedFrom && data.fit && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] text-muted">
+                  <ArrowUpRight className="size-3" /> was {IMPROVED_FROM[data.improvedFrom] ?? data.improvedFrom}
+                </span>
+              )}
+              {data.conceptJobId && (
+                <button type="button" onClick={() => openTrail(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-ink/5 px-1.5 py-0.5 text-[10.5px] font-medium text-ink hover:bg-ink/10">
+                  <Route className="size-3" /> Why this image
+                </button>
+              )}
+              {improve && canEdit && data.thumbPath && (data.fit?.level === "partial" || data.fit?.level === "off") && (
+                <button type="button" onClick={() => improve(id)} disabled={improvePending.has(id)} className="nodrag inline-flex items-center gap-1 rounded-full bg-violet px-1.5 py-0.5 text-[10.5px] font-medium text-white enabled:hover:bg-violet-ink disabled:opacity-70">
+                  {improvePending.has(id) ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />} Make it fit better
+                </button>
+              )}
+            </div>
           )}
           {data.palette.length > 0 && (
             <div className="flex gap-1 pt-0.5" aria-label={`Colours: ${data.palette.join(", ")}`}>

@@ -371,6 +371,8 @@ export async function assessImageFitAction(boardId: string, thumbPath: string): 
     const fit = await assessImageFit(Buffer.from(await data.arrayBuffer()), "image/webp",
       ctxData.tags.map((t) => ({ name: t.name as string, affinity: t.affinity === null ? null : Number(t.affinity) })),
       { brand: ctxData.brief?.brand ?? null, category: ctxData.brief?.category ?? null, audience: ctxData.brief?.audience ?? null });
+    // AI concepts keep their fit on the job too, so reports can rank frames per direction.
+    await withUser(ctx.user.id, (tx) => tx`update concept_jobs set fit = ${tx.json(fit as never)} where board_id = ${boardId} and result_thumb_path = ${thumbPath}`);
     return { ok: true, data: fit };
   } catch (e) {
     return err(e, "The fit check could not be completed. Try again shortly.");

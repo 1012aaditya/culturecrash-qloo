@@ -13,6 +13,7 @@ export const REPORT_SECTIONS = [
   ["objections", "Client objections & answers"],
   ["creative", "Creative brief"],
   ["visual", "Visual world"],
+  ["futures", "Three visual futures"],
   ["experiments", "Experiment plan"],
   ["limitations", "Limitations & open questions"],
   ["sources", "Sources & appendix"],
@@ -20,7 +21,7 @@ export const REPORT_SECTIONS = [
 export type ReportSectionKey = (typeof REPORT_SECTIONS)[number][0];
 
 /** A pitch-ready report: the recommendation, the taste map behind it, and the hardest objections already answered. */
-export const PITCH_PACK_SECTIONS: ReportSectionKey[] = ["cover", "executive", "landscape", "selected", "objections", "directions", "evidence", "limitations", "sources"];
+export const PITCH_PACK_SECTIONS: ReportSectionKey[] = ["cover", "executive", "landscape", "selected", "objections", "directions", "futures", "evidence", "limitations", "sources"];
 
 export type VisualWorld = {
   boardName: string;
@@ -29,6 +30,11 @@ export type VisualWorld = {
   notes: string[];
   cardCount: number;
   coverage: { sourceable: number; sourced: number };
+};
+
+/** AI concept frames per strategy direction (best cultural fit first), made on the agency's GPU PC. */
+export type VisualFutures = {
+  directions: { slot: number; name: string; selected: boolean; frames: { path: string; thumbPath: string; title: string; fit: string | null; improved: boolean }[] }[];
 };
 
 export type ReportSnapshot = {
@@ -52,6 +58,8 @@ export type ReportSnapshot = {
   selected: { name: string; content: DirectionContent; revision: number } | null;
   /** The inspiration board linked to the selected direction. Images are stored as private paths and signed when shown. */
   visualWorld?: VisualWorld | null;
+  /** Absent in reports created before visual futures existed. */
+  visualFutures?: VisualFutures | null;
   creativeBrief: { content: CreativeBriefContent; generatedBy: string; revision: number; grounding?: (GroundedClaim & { section: string })[] } | null;
   objections?: { verdict: string; summary: string; generatedBy: string; items: { direction: string; objection: string; weakestEvidence: string; competitor: string; question: string; answer: string }[] } | null;
   experiments: { name: string; hypothesis: string; method: string | null; primaryMetric: string; threshold: string | null; status: string; interpretation: string | null; nextAction: string | null; results: { variant: string | null; metric: string; value: number; n: number | null }[] }[];

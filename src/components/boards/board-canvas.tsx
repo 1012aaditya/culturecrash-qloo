@@ -18,7 +18,7 @@ import {
 } from "@/lib/boards/actions";
 import type { BoardDoc, DirectionOption } from "@/lib/boards/data";
 import { cn } from "@/lib/utils";
-import { boardPalette, evidenceCoverage, MAX_NODES, mediaPaths, safeUrl, type EntityData, type EvidenceCardData } from "@/lib/boards/schema";
+import { boardPalette, evidenceCoverage, MAX_NODES, mediaPaths, safeUrl, type EntityData, type EvidenceCardData, type ImageFitData } from "@/lib/boards/schema";
 import {
   align, contentKey, describe, distribute, History, hydrate, inTextField, mergeBoards, nodeKey, nodesKey, normalise, serialise, stripTransient,
   type AlignMode, type BoardNode, type Box,
@@ -27,7 +27,8 @@ import { CommentsPanel, CritiqueDialog, ENTITY_MIME, EVIDENCE_MIME, EvidenceMete
 import type { BoardCritique } from "@/lib/boards/critique";
 import { BoardCtx, nodeTypes } from "./nodes";
 import { ConceptDialog, type ConceptRequest } from "./concept-dialog";
-import { conceptJobsAction, type ConceptResult } from "@/lib/concepts/actions";
+import { conceptJobsAction, improveConceptAction, type ConceptResult } from "@/lib/concepts/actions";
+import { ConceptTrailDialog } from "./concept-trail";
 import type { PendingConcept } from "@/lib/concepts/data";
 
 const SAVE_DELAY_MS = 1200;
@@ -118,6 +119,8 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
   const [commentCard, setCommentCard] = React.useState<string | null>(null);
   const [canUndoRedo, setCanUndoRedo] = React.useState({ undo: false, redo: false });
   const [conceptRequest, setConceptRequest] = React.useState<ConceptRequest | null>(null);
+  const [trailCard, setTrailCard] = React.useState<string | null>(null);
+  const [improvePending, setImprovePending] = React.useState<ReadonlySet<string>>(new Set());
   const [conceptJobs, setConceptJobs] = React.useState<ConceptJob[]>(() => (concepts?.pending ?? []).map((p) => ({ ...p, status: "queued", position: null })));
 
   const revision = React.useRef(board.revision);
@@ -357,15 +360,39 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
 
   // ---------------------------------------------------------------- AI concepts from the GPU PC
   /** Places a finished concept as an "AI concept" image card, then checks its cultural fit. */
+  /**
+   * Places a finished concept as an "AI concept" image card, then checks its cultural fit. Visual-futures
+   * frames go into their direction's group, two per row; an improved frame goes right of the one it improves.
+   */
   const placeConcept = React.useCallback(async (job: PendingConcept, r: ConceptResult, i: number) => {
     const [colours, size] = await Promise.all([extractPalette(r.thumbUrl), r.width && r.height ? { w: r.width, h: r.height } : imageSize(r.thumbUrl)]);
-    const origin = centre();
     const width = 260;
     const height = Math.round(Math.min(560, Math.max(120, (width * size.h) / size.w))) + 64;
-    const id = add({ type: "image", position: { x: origin.x - width / 2 + i * 280, y: origin.y - height / 2 }, width, height,
-      data: { path: r.path, thumbPath: r.thumbPath, url: r.url, thumbUrl: r.thumbUrl, title: job.kind === "variation" ? "AI variation" : "AI concept", alt: "", sourceUrl: null, palette: colours, rights: "ai" } });
+    const group = job.group ? rf.getNode(job.group) : undefined;
+    const anchor = job.anchor ? rf.getNode(job.anchor) : undefined;
+    let place: { position: { x: number; y: number }; parentId?: string };
+    if (group?.type === "group") {
+      const k = rf.getNodes().filter((n) => n.parentId === group.id && n.type === "image").length;
+      place = { parentId: group.id, position: { x: 20 + (k % 2) * (width + 20), y: 186 + Math.floor(k / 2) * (height + 20) } };
+    } else if (anchor) {
+      place = { parentId: anchor.parentId, position: { x: anchor.position.x + (anchor.width ?? width) + 40, y: anchor.position.y } };
+    } else {
+      const origin = centre();
+      place = { position: { x: origin.x - width / 2 + i * 280, y: origin.y - height / 2 } };
+    }
+    const title = job.title ?? (job.kind === "variation" ? "AI variation" : "AI concept");
+    const id = add({ type: "image", ...place, width, height,
+      data: { path: r.path, thumbPath: r.thumbPath, url: r.url, thumbUrl: r.thumbUrl, title, alt: "", sourceUrl: null, palette: colours, rights: "ai",
+        conceptJobId: job.id, ...(job.improvedFrom ? { improvedFrom: job.improvedFrom } : {}) } });
+    // A group grows to hold what was placed in it.
+    if (place.parentId) {
+      const right = place.position.x + width + 20;
+      const bottom = place.position.y + height + 20;
+      setNodes((ns) => ns.map((n) => n.id === place.parentId && ((n.width ?? 0) < right || (n.height ?? 0) < bottom)
+        ? { ...n, width: Math.max(n.width ?? 0, right), height: Math.max(n.height ?? 0, bottom) } : n));
+    }
     if (id) void runFit(id, r.thumbPath, true);
-  }, [add, centre, runFit]);
+  }, [add, centre, rf, runFit, setNodes]);
 
   // Polls every few seconds while images are on their way; each poll's state update re-arms the next one.
   React.useEffect(() => {
@@ -391,6 +418,22 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
     }, CONCEPT_POLL_MS);
     return () => { live = false; clearTimeout(timer); };
   }, [board.id, conceptJobs, placeConcept, toast]);
+  /** The art-director loop: rewrite a weak frame's prompt and queue the improved frame beside it. */
+  const improve = React.useCallback(async (cardId: string) => {
+    const n = rf.getNode(cardId);
+    const fit = n?.data.fit as { level: string; rationale: string; descriptors: string[] } | undefined;
+    if (n?.type !== "image" || typeof n.data.thumbPath !== "string" || !fit || (fit.level !== "partial" && fit.level !== "off")) return;
+    setImprovePending((p) => new Set(p).add(cardId));
+    const r = await improveConceptAction(board.id, {
+      cardId, thumbPath: n.data.thumbPath, jobId: typeof n.data.conceptJobId === "string" ? n.data.conceptJobId : null, title: String(n.data.title ?? ""),
+      fit: { level: fit.level, rationale: fit.rationale, descriptors: fit.descriptors },
+    });
+    setImprovePending((p) => { const x = new Set(p); x.delete(cardId); return x; });
+    if (!r.ok) return void toast({ title: "Not improved", description: r.error, tone: "error" });
+    toast({ title: "Art director is on it", description: `${r.data!.diagnosis} Changes: ${r.data!.changes.join("; ")}.`, tone: "info" });
+    setConceptJobs((js) => [...js, { id: r.data!.id, kind: "concept", title: `Improved · ${String(n.data.title ?? "concept")}`.slice(0, 80), anchor: cardId, improvedFrom: fit.level, status: "queued", position: null }]);
+  }, [board.id, rf, toast]);
+
   const makeVariations = React.useCallback((cardId: string) => {
     const n = rf.getNode(cardId);
     if (n?.type === "image" && typeof n.data.path === "string") setConceptRequest({ kind: "variation", sourcePath: n.data.path, sourceTitle: String(n.data.title ?? "") });
@@ -678,7 +721,9 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
   };
 
   const mod = isMac() ? "⌘" : "Ctrl+";
-  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting, makeVariations: concepts ? makeVariations : null }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting, concepts, makeVariations]);
+  const ctx = React.useMemo(() => ({ canEdit, projectId: board.projectId, onMediaError: () => void refreshUrls(), commentCounts, openComments: setCommentCard, checkFit, fitPending, presenting,
+    makeVariations: concepts ? makeVariations : null, improve: concepts ? (id: string) => void improve(id) : null, improvePending, openTrail: setTrailCard,
+  }), [canEdit, board.projectId, refreshUrls, commentCounts, checkFit, fitPending, presenting, concepts, makeVariations, improve, improvePending]);
 
   return (
     <BoardCtx.Provider value={ctx}>
@@ -839,6 +884,13 @@ function Canvas({ board, entities, evidence, directions, canEdit, canComment, co
         <PaletteDialog palette={palette} open={paletteOpen} onOpenChange={setPaletteOpen} onCopied={(what) => toast({ title: `Copied ${what}`, tone: "success" })} />
         {concepts && conceptRequest && <ConceptDialog boardId={board.id} request={conceptRequest} onClose={() => setConceptRequest(null)}
           onQueued={(ids, kind) => setConceptJobs((js) => [...js, ...ids.map((id) => ({ id, kind, status: "queued" as const, position: null }))])} />}
+        {trailCard && (() => {
+          const n = nodes.find((x) => x.id === trailCard);
+          return n && typeof n.data.conceptJobId === "string" ? (
+            <ConceptTrailDialog boardId={board.id} jobId={n.data.conceptJobId} title={String(n.data.title ?? "")} fit={n.data.fit as ImageFitData | undefined}
+              improvedFrom={typeof n.data.improvedFrom === "string" ? n.data.improvedFrom : undefined} onClose={() => setTrailCard(null)} />
+          ) : null;
+        })()}
         <CritiqueDialog open={critiqueOpen} onOpenChange={setCritiqueOpen} critique={critique.data} pending={critique.pending} error={critique.error}
           onRun={() => void runCritique()} onLocate={locateMany} onKeep={keepCritique} canEdit={canEdit} />
         <HistoryDialog boardId={board.id} open={historyOpen} onOpenChange={setHistoryOpen} onRestore={restoreVersion} canEdit={canEdit} />

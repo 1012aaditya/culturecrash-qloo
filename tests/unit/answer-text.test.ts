@@ -14,6 +14,9 @@ describe("copilot answer text", () => {
     expect(out).toMatch(/<ol[^>]*><li>First<\/li><li>Second<\/li><\/ol>/);
     expect(out).not.toContain("**");
   });
+  it("treats a bold line on its own as a heading, not the start of the next sentence", () => {
+    expect(html("**How they differ**\nOnly one is shared.")).toBe('<div class="space-y-2"><p class="font-semibold">How they differ</p><p>Only one is shared.</p></div>');
+  });
   it("never turns model text into markup", () => {
     const out = html("<img src=x onerror=alert(1)> **<b>hi</b>**");
     expect(out).not.toContain("<img");

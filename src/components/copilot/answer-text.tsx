@@ -27,7 +27,8 @@ export function AnswerText({ text }: { text: string }) {
     const line = raw.trim();
     const bullet = /^[-*•]\s+(.*)$/.exec(line);
     const numbered = /^\d+[.)]\s+(.*)$/.exec(line);
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    // "# Title" or a line that is bold on its own ("**How they differ**") reads as a heading.
+    const heading = /^#{1,6}\s+(.*)$/.exec(line) ?? /^\*\*([^*]+)\*\*:?$/.exec(line);
     if (!line) {
       flushPara();
       flushList();

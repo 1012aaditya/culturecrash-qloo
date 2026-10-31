@@ -30,8 +30,8 @@ export type Shot = { title: string; prompt: string; why: string; width: number; 
 export type ShotPlan = { shots: Map<number, Shot[]>; copy: Map<number, StoryCopy> };
 
 const clip = (v: string, max: number) => v.trim().replace(/\s+/g, " ").slice(0, max);
-/** Portrait hero, landscape world: under a megapixel each, for a 6 GB card. */
-export const SIZES = { hero: { width: 832, height: 1216 }, world: { width: 1216, height: 832 } } as const;
+/** Portrait hero, landscape world: under a megapixel each for a 6 GB card, and within the GPU gateway's 1152px limit per side. */
+export const SIZES = { hero: { width: 896, height: 1152 }, world: { width: 1152, height: 896 } } as const;
 
 export async function writeShots(ctx: ConceptContext, dirs: DirectionFacts[], colours: string[]): Promise<ShotPlan> {
   const r = await generateStructured({

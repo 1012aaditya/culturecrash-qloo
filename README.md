@@ -1,213 +1,336 @@
 # CultureCrash
 
-*Turn cultural signals into iconic brands.* CultureCrash is a cultural intelligence and campaign strategy
-workspace for agencies and brand teams. The workflow runs **Explore → Interpret → Create → Test → Track**:
-brief, cultural research (Qloo), evidence, opportunities, three positioning directions, creative brief,
-experiments and versioned client reports.
+**Turn cultural signals into iconic brands.**
 
-- Product spec: `docs/MASTER_PROMPT.md` · visual reference: `docs/reference/culturecrash-research-canvas.webp`
-- Qloo verification status: **`docs/QLOO_INTEGRATION.md`** (key and endpoints verified live by the project owner)
-- Design system: `docs/DESIGN_SYSTEM.md`
-- Multi-source research engine (web, video, community, client documents, Qloo): **`docs/RESEARCH_ENGINE.md`**
+CultureCrash is a cultural-intelligence and campaign-strategy workspace for agencies and brand teams. It
+takes a client brief, finds out what the audience *actually* loves (Qloo's taste graph plus the open web),
+turns that into evidence-backed opportunities and three positioning directions, stress-tests them with an
+AI Devil's Advocate, and then shows each direction as a visual story: concept frames rendered on the
+agency's **own GPU**, copy, touchpoint mockups and a pitch-ready report. Every claim and every image keeps
+its receipts.
 
-## Stack
+![CultureCrash](docs/images/hero-logo.jpg)
 
-Next.js 16 App Router (TypeScript strict, React 19), Tailwind CSS v4 with CSS-variable tokens, Radix
-primitives (shadcn-style, restyled), lucide-react, Supabase (Postgres + Auth + Storage + RLS),
-`postgres` driver, zod, Anthropic SDK (structured outputs), `@react-pdf/renderer`, Vitest, Playwright.
+▶ **Watch the 3½-minute product film:** [`docs/media/culturecrash-investor-film.mp4`](docs/media/culturecrash-investor-film.mp4)
+(a real end-to-end run, from brief to report).
 
-## Architecture
+---
 
-```
-src/
-  app/(marketing)/   public site: /, /product, /solutions/*, /showcase, /pricing, /about, /privacy, /terms
-  app/(auth)/        /login, /signup, /forgot-password  (+ /auth/callback route)
-  app/(app)/         authenticated app; layout = floating command bar (no sidebar)
-     dashboard, projects, projects/[id]/{brief,research,research/history,evidence/[id],opportunities,
-     strategy,strategy/compare,creative-brief,experiments,experiments/[id],reports,reports/[id]},
-     search, tasks, workspace(/clients/[id](/brand), /activity), settings/*, help
-  app/reports/shared/[shareId]   public read-only report (token)
-  app/api/           search, run status polling, PDF export, creative-brief export, account export
-  lib/db             withUser(): every query runs as Postgres role `authenticated` with the verified user
-                     id as JWT subject → Row Level Security applies exactly as in Supabase's Data API
-  lib/auth           Supabase Auth (production) | local auth (dev/tests only, refused on Vercel prod)
-  lib/data           data access + server actions per domain; permissions checked with assertCan()
-  lib/providers/qloo adapter: client, normalisation, types, demo fixtures
-  lib/research       jobs (limits, idempotency), Qloo stage (engine.ts), deep/ = multi-source research:
-                     planner, provider registry + adapters, page retrieval, dedupe, claims, quality,
-                     budget, cache, orchestrator, synthesis; REST API under app/api/research
-  lib/ai             LLM adapter (Anthropic, schema-validated), prompts, template engine fallback
-  lib/strategy       opportunities, directions (versioned), comparison, creative brief
-  lib/experiments    experiments, variants, results
-  lib/reports        immutable snapshots, versions, PDF, share tokens
-supabase/migrations  schema, RLS, functions (apply in order)
-db/local             local-only Supabase shim (roles, auth.users, auth.uid()) for plain Postgres
-```
+## Contents
 
-**Authorization**: three layers: (1) the proxy redirects optimistically, (2) server actions call
-`getCtx()` (verified session + DB-checked membership) and `assertCan(role, permission)`, (3) Postgres RLS on
-every table (members read, members+ write, admins delete; viewers are read-only). There are also
-cross-workspace integrity triggers, an owner guard and immutable report versions. Anonymous visitors can
-reach exactly one SECURITY DEFINER function, `get_shared_report(token_hash)`. The service-role key is not
-used at all.
+- [What it does](#what-it-does)
+- [A real run, screen by screen](#a-real-run-screen-by-screen)
+- [Tech stack](#tech-stack)
+- [External APIs and services](#external-apis-and-services)
+- [Run it locally](#run-it-locally)
+- [Environment variables](#environment-variables)
+- [The local GPU image studio](#the-local-gpu-image-studio)
+- [Deploy](#deploy)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [Roadmap](#roadmap)
+- [Known issues](#known-issues)
+- [More documentation](#more-documentation)
 
-**AI orchestration**: `generateStructured()` calls Claude with zod structured outputs and re-validates
-before anything is saved. Evidence ids the model cites are filtered against stored ids, and brief,
-document and provider text is wrapped in tags and treated as untrusted. With no `ANTHROPIC_API_KEY`, a
-deterministic **template engine** writes drafts only from the brief and stored evidence; they are labelled
-"Template draft (no LLM configured)". The copilot (`lib/ai/copilot-agent.ts`) is a multi-step tool-use loop: it
-can call up to five rounds of six read-only tools (search evidence, look up an entity, list opportunities, read the
-strategy, list experiments, list research runs). Each runs under the user's RLS and is scoped to the
-project. It then gives a schema-validated answer, citing only evidence ids a tool returned. The lookups it
-made are shown under each answer. Any state-changing action it suggests is returned as a proposal that the
-user must click to run.
+---
 
-**Research engine** (details in `docs/RESEARCH_ENGINE.md`): a job plans distinct research questions,
-routes each to the configured sources that can answer it (Brave web search, YouTube, Reddit via OAuth,
-Wikipedia, the client's own documents, and Qloo), retrieves full text for the most relevant pages,
-deduplicates syndicated copies, extracts cited claims, follows up on gaps, and stops on coverage,
-budget, time or diminishing returns. It then writes a report whose findings cite claims, with
-contradictions, hypotheses and limitations. Every call is in the cost ledger; partial results survive
-provider failures. The Qloo stage: brief → plan (brand and up to 3 competitors resolved via `/search`, up to 4 audience
-interests resolved to tags via `/v2/tags` and sent as `signal.interests.tags`, market as a location signal,
-entity types by category) → `/v2/insights` per type, plus taste tags → every request
-logged to `research_sources` → entities, relationships and `provider_observation` evidence →
-interpretation. The brand's own Qloo profile tags are saved as labelled observations, and entity photos
-(`properties.image.url`, https only) are shown over the generative artwork, which stays as the fallback. Runs are idempotent (a client key plus the active-run check), rate-limited per workspace
-per day, execute in the background and are polled by the canvas. When every call fails the run fails, and
-it never falls back to fixtures.
+## What it does
 
-**Reports** are immutable snapshots tied to the research run and strategy version. New research means a
-new version, never a rewrite. PDF export uses react-pdf with citations and a provider-request appendix.
-Share links use a random 256-bit token that is shown once; only its SHA-256 hash is stored, and links can
-expire or be revoked.
+The workflow follows five stages, the same ones as the app's navigation:
 
-## Local development
+| Stage | What you get |
+|---|---|
+| **01 · Explore** | A structured brief (audience, objective, competitors, interests, uploaded brand docs and moodboards), then **live research**: Qloo cultural affinities for the brand, competitors and audience interests, followed up on the open web (Google, Exa, Tavily, YouTube, Wikipedia, Reddit, Hacker News). Every claim is cited and every call is in a cost ledger. |
+| **02 · Interpret** | An **evidence ledger** that labels everything as observed, interpretation or hypothesis, and **opportunities** written as hypotheses, each with why it may matter, what remains unknown, how to validate it and a grounding score. |
+| **03 · Create** | **Three positioning directions** that must differ in rationale, a side-by-side **compare**, a **Devil's Advocate** that attacks each direction like a sceptical CMO, a **creative brief**, and **inspiration boards**: one click turns the directions into a six-chapter story canvas with Qloo people and places, cited evidence, AI concept frames rendered on your own GPU, copy lines and touchpoint mockups. |
+| **04 · Test** | **Experiments** with a hypothesis, variants and a decision rule agreed up front; results with real statistics (lift, 95% range, plain-English verdict) flow back into the evidence ledger. |
+| **05 · Track** | Versioned **reports** and pitch packs (PDF export, read-only share links) and **Watch**: daily news monitoring of a client against two competitors, with share of voice and key developments. |
 
-Requires Node 22 and Postgres 15+ (a local Supabase stack works too).
+Across all of it: a **copilot** that reads the project and asks Qloo live, **⌘K search** over everything,
+real-time presence, notifications, comments, roles and permissions, and per-workspace spending limits.
+
+## A real run, screen by screen
+
+Every screenshot and image below comes from one live run on the production app, for **Halftime**, a
+*fictional* sparkling yerba mate brand for Gen Z in the US.
+
+### 01 · Explore
+
+| The brief | Live research |
+|---|---|
+| ![Brief](docs/images/screens/02-brief.jpg) | ![Research running](docs/images/screens/05-research-running.jpg) |
+| **The cited report:** 86 sources, 19 claims, $0.25 | **Qloo taste graph** |
+| ![Report](docs/images/screens/06-report.jpg) | ![Network](docs/images/screens/07-network.jpg) |
+
+Qloo found that this audience lives in skate, stunt comedy and streetwear: Zumiez, Steve-O, Rob Dyrdek,
+Death Wish Coffee, Theo Von, Streetwear.
+
+![Qloo culture](docs/images/qloo-culture.jpg)
+
+### 02 · Interpret
+
+| Opportunities (grounding 4/5 verified) | Evidence ledger and copilot |
+|---|---|
+| ![Opportunities](docs/images/screens/08-opportunities.jpg) | ![Copilot](docs/images/screens/14-copilot.jpg) |
+
+### 03 · Create
+
+| Three directions | Compare |
+|---|---|
+| ![Strategy](docs/images/screens/09-strategy.jpg) | ![Compare](docs/images/screens/12-compare.jpg) |
+| **Devil's Advocate:** verdict "Vulnerable" | **Creative brief** |
+| ![Devil's Advocate](docs/images/screens/10-devils-advocate.jpg) | ![Creative brief](docs/images/screens/11-creative-brief.jpg) |
+
+**"Show me these directions"** builds a story board, one row per direction: who they are → the tension →
+the idea → the world → how it shows up → touchpoints.
+
+| The story canvas | Chapter 1 · who they are |
+|---|---|
+| ![Story board](docs/images/screens/15-story-board.jpg) | ![Who they are](docs/images/screens/18-ch1-who.jpg) |
+| **Chapter 4 · the world** (AI frames) | **Chapter 6 · touchpoints** |
+| ![The world](docs/images/screens/21-ch4-world.jpg) | ![Touchpoints](docs/images/screens/22-ch6-touchpoints.jpg) |
+
+**Concept frames rendered on an RTX 3050 6 GB laptop**, about 2 minutes each and $0 per image. The AI art
+director gave each direction its own photographic look:
+
+| | | |
+|---|---|---|
+| ![](docs/images/frames/friends-laughing-after-a-fall.jpg) | ![](docs/images/frames/post-lecture-can-on-the-steps.jpg) | ![](docs/images/frames/controller-passed-across-the-couch.jpg) |
+| *Friends laughing after a fall* · strong fit | *Post-lecture can on the steps* · strong fit | *Controller passed across the couch* · partial fit |
+| ![](docs/images/frames/scuffed-deck-under-flash.jpg) | ![](docs/images/frames/late-light-on-a-skatepark-ledge.jpg) | ![](docs/images/frames/retro-console-and-cans-on-a-rug.jpg) |
+| *Scuffed deck under flash* · strong fit | *Late light on a skatepark ledge* · partial fit | *Retro console and cans on a rug* · partial fit |
+
+**Why this image?** Every frame keeps its receipts: Qloo signals → evidence → direction → art direction →
+exact prompt → fit check.
+
+![Why this image](docs/images/screens/17-why-this-image.jpg)
+
+### 04 · Test and 05 · Track
+
+| Experiment with a decision rule | Search ⌘K |
+|---|---|
+| ![Experiment](docs/images/screens/13-experiment.jpg) | ![Search](docs/images/screens/16-search.jpg) |
+| **Report: three visual futures** | **Watch** |
+| ![Report futures](docs/images/screens/23-report-futures.jpg) | ![Watch](docs/images/screens/25-watch.jpg) |
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| App framework | **Next.js 16** (App Router, Turbopack, server actions), **React 19**, TypeScript (strict) |
+| UI | **Tailwind CSS v4** with CSS-variable design tokens, Radix primitives (shadcn-style), lucide-react, Motion |
+| Canvas | **React Flow** (`@xyflow/react`) for inspiration boards and the research network |
+| Data | **Supabase**: Postgres with Row Level Security on every table, Auth, private Storage; the `postgres` driver (no ORM) |
+| Validation | **zod** for every input, model output and stored document |
+| AI | **Anthropic SDK** (Claude Opus 5.5 for synthesis and strategy, Claude Haiku 5.5 for fast tasks) with structured outputs and vision |
+| Images | **sharp** (re-encoding, thumbnails, EXIF stripping), **node-vibrant** (palettes) |
+| Documents | **@react-pdf/renderer** (report PDFs), **unpdf** and **mammoth** (reading uploaded PDF/DOCX briefs) |
+| Auth helpers | `@supabase/ssr`, `jose` and `bcryptjs` (local dev auth only) |
+| Image generation | **ComfyUI** on the agency's own GPU (via Pinokio): Z-Image Turbo, RealVisXL V5, Real-ESRGAN |
+| Hosting | **Vercel** (Fluid Compute functions, Cron jobs) |
+| Testing | **Vitest** (unit and database/RLS tests), **Playwright** (end-to-end scenarios) |
+
+## External APIs and services
+
+| Service | Used for | Environment variable(s) | Needed? |
+|---|---|---|---|
+| **Qloo Taste AI** (`/search`, `/v2/tags`, `/v2/insights`) | Cultural affinities: brands, artists, people, films, TV, podcasts, places, taste tags | `QLOO_API_KEY`, `QLOO_API_URL` | For live research |
+| **Anthropic Claude** | Research planning and synthesis, opportunities, directions, Devil's Advocate, creative brief, copilot, fit checks (vision), art direction | `ANTHROPIC_API_KEY`, `LLM_MODEL`, `LLM_MODEL_FAST` | Optional: without it a labelled template engine writes drafts |
+| **Supabase** | Postgres, Auth, Storage | `DATABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes (or plain Postgres with local auth for development) |
+| **Serper** (Google Search and News) | Web and news search | `SERPER_API_KEY` | Optional |
+| **Brave Search** | Web search | `BRAVE_API_KEY` | Optional |
+| **Tavily** | Web search with extraction | `TAVILY_API_KEY` | Optional |
+| **Exa** | Semantic search for niche essays and independent publications | `EXA_API_KEY` | Optional |
+| **YouTube Data API** | Creator perspectives, video metadata | `YOUTUBE_API_KEY` | Optional |
+| **Reddit** (OAuth) | Community discussion | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_COMMERCIAL_ACCESS` | Optional |
+| **Wikipedia** | Background on entities and scenes | none | Built in |
+| **Hacker News** (Algolia API) | Tech and community discussion | none | Built in |
+| **Google Suggest** | Autocomplete phrasing (not Google Trends) | `GOOGLE_SUGGEST=enabled` | Optional, off by default |
+| **Resend** | Invitations, "research finished", "report shared", weekly digest | `RESEND_API_KEY`, `EMAIL_FROM`, `PILOT_NOTIFY_EMAIL` | Optional |
+| **Vercel Cron** | Daily retention, weekly digest, daily Watch | `CRON_SECRET` | For scheduled jobs |
+| **ComfyUI worker** (your own GPU) | Concept frames, variations, upscales | `CC_WORKER_TOKEN` | Optional: the image buttons stay hidden without it |
+
+> **Qloo licence:** `QLOO_API_URL` defaults to the hackathon host. Hackathon keys are not for commercial
+> use; before charging customers, get a commercial Qloo agreement and set the URL Qloo gives you.
+
+## Run it locally
+
+### Prerequisites
+
+- **Node.js 22+** (tested on Node 24) and npm
+- **Postgres 15+**, either plain Postgres or a local Supabase stack
+- Optional: API keys from the table above. **None are needed to try the app in demo mode.**
+
+### 1 · Quick start (demo mode, no API keys)
 
 ```bash
+git clone https://github.com/1012aaditya/qloo-api.git culturecrash
+cd culturecrash
 npm install
-cp .env.example .env.local         # set DATABASE_URL; for plain Postgres use AUTH_MODE=local + SESSION_SECRET
+
 createdb culturecrash
-DATABASE_URL=postgres://… npm run db:migrate:local    # plain Postgres: applies db/local shim + migrations
+DATABASE_URL=postgres://localhost:5432/culturecrash npm run db:migrate:local   # local Supabase shim + all migrations
+
+cp .env.example .env.local
+```
+
+In `.env.local`, set at least:
+
+```bash
+DATABASE_URL=postgres://localhost:5432/culturecrash
+AUTH_MODE=local                       # email + password stored in your Postgres (development only)
+SESSION_SECRET=<32+ random characters> # e.g. the output of: openssl rand -hex 32
+CC_DEMO_MODE=enabled                  # labelled demonstration research, no Qloo key needed
+APP_BASE_URL=http://localhost:3000
+```
+
+Then:
+
+```bash
 npm run dev
 ```
 
-With `CC_DEMO_MODE=enabled` you can run labelled demonstration research and open a demo workspace from the
-dashboard. Without `QLOO_API_KEY`, live research is disabled and the app says so. Without
-`ANTHROPIC_API_KEY`, drafts come from the template engine.
+Open <http://localhost:3000>, sign up, create a campaign and use **Demo run** on the research page.
+Demo data is always labelled as such.
 
-## Supabase project (provisioned)
+### 2 · Full setup (live research and AI)
 
-Project `culturecrash` (ref `hmkdnzpiopxmzcbyqfqh`, region ap-south-1) was created through the Supabase
-connector. Every migration in `supabase/migrations/` has been applied, including the private
-`brief-documents` bucket with workspace-scoped policies. Signup triggers and cross-workspace isolation were
-smoke-tested there inside a rolled-back transaction. The security advisor's remaining notices are
-intentional: authenticated RPC helpers, the anon-callable `get_shared_report`, and `pilot_requests` having no
-policies because only the server writes to it.
+Add the keys you have to `.env.local`: at least `QLOO_API_KEY` and `ANTHROPIC_API_KEY`, plus any web
+sources. Check them with:
 
-- `NEXT_PUBLIC_SUPABASE_URL=https://hmkdnzpiopxmzcbyqfqh.supabase.co`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` = the project's publishable key (Dashboard → Project Settings → API Keys)
-- `DATABASE_URL` = Dashboard → Connect → Transaction pooler (port 6543), with the database password you set or reset
-- Auth → URL Configuration: Site URL = your deployed `APP_BASE_URL`; add `APP_BASE_URL/auth/callback` as a redirect URL
+```bash
+npx tsx scripts/qloo-smoke.ts
+npx tsx --env-file=.env.local scripts/research-smoke.ts
+```
 
-## Configure Supabase (production)
+### 3 · With Supabase (production-like)
 
-1. Create a project. Under **Auth → URL configuration**, set the Site URL to `APP_BASE_URL` and add
-   `APP_BASE_URL/auth/callback` as a redirect URL. Keep email confirmation on.
-2. Apply the migrations in order: either `supabase db push` with the Supabase CLI, or
-   `DATABASE_URL=<direct connection string> npm run db:migrate`. Do **not** pass `--local` — Supabase
-   already provides `auth.*` and the roles.
-3. Create a **private** Storage bucket named `brief-documents` (or set `SUPABASE_STORAGE_BUCKET`). Add a
-   storage policy allowing `insert` for `authenticated` users whose first path segment is a workspace they
-   belong to:
-   `bucket_id = 'brief-documents' and public.is_workspace_member(((storage.foldername(name))[1])::uuid)`.
-   Without the bucket, uploads still work: extracted text is saved and the UI notes that the original file
-   was not stored. With the bucket, the browser uploads files straight to Storage through a one-time
-   signed URL (Vercel limits a function request to 4.5 MB), and migration `…20261031000600_brief_storage.sql`
-   (applied with the others) allows image uploads and lets uploaders delete their own files.
-4. Environment: `DATABASE_URL` (the transaction pooler on port 6543 is fine — prepared statements are
-   disabled), `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-   `APP_BASE_URL`.
-5. Turn off the auto-generated REST API. The app talks to Postgres directly and never uses it, but it is
-   on by default and would let anyone with the public anon key and a login skip the app's permission
-   checks. Migration `…20261031000100_security_hardening.sql` already makes every Data API request fail (a
-   `pgrst.db_pre_request` hook); also remove `public` under **Settings → API → Exposed schemas** (or turn
-   the Data API off) in the dashboard.
+1. Create a Supabase project. In **Auth → URL configuration**, set the Site URL to your `APP_BASE_URL` and
+   add `APP_BASE_URL/auth/callback` as a redirect URL.
+2. Apply the migrations: `supabase db push`, or
+   `DATABASE_URL=<direct connection string> npm run db:migrate` (without `--local`).
+3. Set `AUTH_MODE=supabase`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and a
+   `DATABASE_URL` (the transaction pooler on port 6543 is fine).
+4. Remove `public` under **Settings → API → Exposed schemas**: the app talks to Postgres directly and never
+   uses the auto-generated REST API.
 
-## Configure providers
+Full details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#supabase-configuration-production).
 
-- **Qloo**: `QLOO_API_KEY` and `QLOO_API_URL` (hackathon keys use `https://hackathon.api.qloo.com`). Then
-  run `npx tsx scripts/qloo-smoke.ts` — see `docs/QLOO_INTEGRATION.md`. **Licence:** `QLOO_API_URL` defaults
-  to the hackathon host. Hackathon keys are not for commercial use: before charging customers, get a
-  commercial Qloo agreement and set `QLOO_API_URL` to the host Qloo gives you.
-- **LLM**: `ANTHROPIC_API_KEY`; `LLM_MODEL` defaults to `claude-opus-5-5`.
-- **Email** (optional): `RESEND_API_KEY`, `EMAIL_FROM` (a sender on a domain verified in Resend) and
-  `PILOT_NOTIFY_EMAIL` (where /pricing pilot requests are forwarded). Sends team invitations, plus "research
-  finished", "report shared" and the weekly digest to people who switched those on in Settings → Notifications.
-  Without a key nothing is sent and the app says so.
-- **Scheduled jobs**: `vercel.json` registers two Vercel Cron jobs, `/api/cron/retention` (daily) and
-  `/api/cron/weekly-digest` (Mondays). Set `CRON_SECRET`; Vercel sends it as a Bearer token and the route rejects
-  anything else.
-- **Research sources**: `BRAVE_API_KEY` (primary web search; `TAVILY_API_KEY` / `EXA_API_KEY` as
-  alternates), `YOUTUBE_API_KEY`, `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` +
-  `REDDIT_COMMERCIAL_ACCESS=approved` (only once Reddit has approved commercial use). Wikipedia and
-  client documents need nothing. Check them with `npx tsx --env-file=.env.local scripts/research-smoke.ts`.
-  Workspaces can turn web research off in Settings → Integrations.
-- **Spending ceiling**: `PLATFORM_SPEND_CAP_USD` caps estimated research spend across **all** workspaces per
-  calendar month. Every workspace uses this server's provider keys, so set it before opening signup; once
-  it is reached, live research pauses (demo runs still work). Live research also requires a confirmed email.
-- **Billing**: not configured. Plans are pilot-only and no payment flow exists.
+## Environment variables
 
-## Deploy (Vercel)
+The source of truth is `src/lib/env.ts` (validated with zod at startup). **Never prefix a secret with
+`NEXT_PUBLIC_`.**
 
-Import the repo and set the environment variables above (never `NEXT_PUBLIC_` for secrets). Leave
-`CC_DEMO_MODE` unset in production — it is ignored when `VERCEL_ENV=production` anyway. Research and LLM
-generation run inside server actions and `after()`, so consider raising the function `maxDuration` for long
-runs. `npm run build` must pass; then apply migrations before the first deploy.
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection string |
+| `AUTH_MODE` | `supabase` (default) or `local` (development and tests only; refused on Vercel production) |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase project URL and publishable key |
+| `SUPABASE_STORAGE_BUCKET` | Bucket for uploaded briefs (default `brief-documents`) |
+| `SESSION_SECRET` | 32+ characters, required for `AUTH_MODE=local` |
+| `APP_BASE_URL` | Public URL of the app (links in emails, auth redirects) |
+| `QLOO_API_KEY`, `QLOO_API_URL`, `QLOO_AGE_SIGNAL` | Qloo access; `QLOO_AGE_SIGNAL=enabled` sends the audience age cohort |
+| `ANTHROPIC_API_KEY`, `LLM_MODEL`, `LLM_MODEL_FAST` | Claude access and model choices (defaults `claude-opus-5-5`, `claude-haiku-5-5`) |
+| `SERPER_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `YOUTUBE_API_KEY` | Web, news and video sources |
+| `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_COMMERCIAL_ACCESS` | Reddit (set the last to `approved` only once Reddit approves commercial use) |
+| `GOOGLE_SUGGEST` | `enabled` to use Google autocomplete phrasing |
+| `*_USD_PER_REQUEST` | Per-call cost estimates for the cost ledger (Brave, Serper, Tavily, Exa) |
+| `PLATFORM_SPEND_CAP_USD` | Monthly ceiling on estimated research spend across all workspaces |
+| `CC_DEMO_MODE` | `enabled` for labelled demo research (ignored on Vercel production) |
+| `RESEND_API_KEY`, `EMAIL_FROM`, `PILOT_NOTIFY_EMAIL` | Email delivery |
+| `CRON_SECRET` | Bearer token Vercel Cron sends to `/api/cron/*` |
+| `CC_WORKER_TOKEN` | Shared secret of the GPU worker (24+ characters) |
+
+## The local GPU image studio
+
+Concept frames are rendered by **ComfyUI on a GPU the agency owns**; we use an RTX 3050 6 GB laptop. A
+small worker on that PC **polls** the website for jobs, renders them and uploads the result, so the PC needs
+no open port or tunnel, there is no per-image API fee, and no image leaves the studio.
+
+1. Install ComfyUI (we use Pinokio) with **Z-Image Turbo**, **RealVisXL V5** and **Real-ESRGAN**, all
+   commercially usable.
+2. Run the worker on the PC with your site URL and a `CC_WORKER_TOKEN`.
+3. Set the same `CC_WORKER_TOKEN` on the website and redeploy.
+
+The worker protocol, models, sizes and ComfyUI workflow contract are in
+[`docs/IMAGE_STUDIO.md`](docs/IMAGE_STUDIO.md).
+
+## Deploy
+
+1. Import the repository into **Vercel**.
+2. Set the environment variables above for Production. Leave `CC_DEMO_MODE` unset (it is ignored in
+   production anyway).
+3. Apply the migrations to your Supabase project **before** the first deploy.
+4. `vercel.json` registers three cron jobs: `/api/cron/retention` (daily), `/api/cron/weekly-digest`
+   (Mondays) and `/api/cron/watch` (daily, 06:00 UTC). Set `CRON_SECRET`.
+5. `npm run build` must pass.
 
 ## Testing
 
 ```bash
 npm run typecheck && npm run lint
-npm test                                                     # unit: Qloo adapter, normalisation, template engine, permissions, email templates, copilot loop
-TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS / isolation (creates & drops a temp DB)
-BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios A–K against a running server (local auth + demo mode)
+npm test                                                     # unit tests (Vitest)
+TEST_DATABASE_ADMIN_URL=postgres://postgres@host:port/postgres npm run test:db   # RLS and isolation (temporary database)
+BASE_URL=http://localhost:3000 npm run test:e2e              # Playwright scenarios against a running server
 ```
 
-To run the e2e suite next to your normal dev server, start the local-auth server with its own build folder so the
-two never share cached chunks (they inline different `NEXT_PUBLIC_*` values):
-`NEXT_DIST_DIR=.next-e2e AUTH_MODE=local DATABASE_URL=postgres://… SESSION_SECRET=… CC_DEMO_MODE=enabled npx next dev -p 3300`,
-then `BASE_URL=http://localhost:3300 npm run test:e2e`.
+To run the end-to-end suite next to your normal dev server, start a local-auth server with its own build
+folder:
 
-## Status
+```bash
+NEXT_DIST_DIR=.next-e2e AUTH_MODE=local DATABASE_URL=postgres://… SESSION_SECRET=… CC_DEMO_MODE=enabled npx next dev -p 3300
+BASE_URL=http://localhost:3300 npm run test:e2e
+```
 
-See the final handoff in the pull request or session notes for full detail. Summary:
+## Project structure
 
-- **Implemented and tested end to end**: auth (local mode), workspaces and roles, project library, brief
-  editor, demo research and the cultural canvas, evidence, opportunities, strategy studio, creative brief,
-  experiments, reports, PDF export, sharing, search, tasks, settings.
-- **Implemented, untested against the real service**: Supabase Auth and Storage (no Supabase project was
-  reachable from the build environment); the live Qloo API (network blocked — see above); the Anthropic
-  LLM path (no key was provided).
-- **Implemented, untested against the real service**: Resend email delivery (no key in the build environment).
-- **Implemented, not yet exercised live**: the Brave, YouTube, Reddit, Tavily, Exa and Wikipedia adapters
-  (no keys or network access in the build environment; see the status table in `docs/RESEARCH_ENGINE.md`).
-- **Not implemented**: trend time series, cross-asset visual analysis, embeddings, payments, real-time
-  co-editing.
+```
+src/app/            routes: marketing site, auth, the app, API (research, reports, cron, worker, …)
+src/components/     UI: boards (canvas, cards, story, trail), research, strategy, reports, ui primitives
+src/lib/            domain logic: db (RLS), auth, ai, research, strategy, boards, concepts, reports, watch, …
+supabase/migrations schema, Row Level Security, functions and storage buckets (apply in order)
+db/local            Supabase shim for plain Postgres (local development)
+tests/              Vitest unit and database tests
+e2e/                Playwright scenarios
+scripts/            migrations, smoke tests and evaluation scripts
+docs/               architecture, research engine, image studio, design system, images, product film
+```
 
-Presence: on any campaign page you see who else is there (avatars next to the breadcrumb), and a field a
-teammate is editing gets a coral outline with "<name> is editing". Each open page sends a heartbeat every
-5 s (and when you move to another field) to `/api/projects/[id]/presence`, which returns everyone seen in the
-last 30 s. The `presence` table is under RLS (members only, own row only). Edits are not merged live; the
-brief's revision check still prevents overwrites.
+The full map and design decisions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-Notifications: the command-bar bell shows in-app notifications (research finished or failed, a report shared
-from your campaign, being added to a workspace) with an unread count. It polls every 30 s while the tab is
-visible; opening a notification from another workspace switches to it.
+## Roadmap
 
-Workspace data: owners can set a retention period (30 days to 1 year) for raw provider responses, copilot
-conversations, activity history and finished tasks, and can delete a whole workspace (stored brief files are
-removed from Storage first). Turning the LLM off for a workspace in Settings → Integrations makes every draft
-come from the labelled template engine.
+Today CultureCrash is a research → strategy → pitch engine. The goal is **the operating system for
+culture-led marketing**:
+
+| # | Stage | Status |
+|---|---|---|
+| 1 | **Brand intelligence + Watch**: Qloo-first research, cited evidence, brand memory, daily Watch | Live |
+| 2 | **Opportunity and strategy engine**: grounded opportunities, three directions, Devil's Advocate, compare, pitch pack | Live |
+| 3 | **Creative studio**: concept frames on your own GPU, copy, mockups, fit checks; next: on-brand checks and approvals | Early |
+| 4 | **Campaign operations**: launch plans, content calendar, Meta / Google / TikTok, Figma, Slack, Drive | Next |
+| 5 | **Performance and optimisation**: experiments with real statistics today; next: live feeds and "what to change next" | Early |
+| 6 | **Persistent learning and controlled autonomy**: every campaign making the next one smarter, within limits you set | Vision |
+
+![Roadmap](docs/images/roadmap.jpg)
+
+## Known issues
+
+- **Copilot:** a free-form question can use all its lookups and return no answer, and answers can show
+  raw evidence ids.
+- **Story boards:** auto-picked source links can be irrelevant; they need a relevance filter.
+- **Billing** is not implemented: plans are pilot-only.
+
+## More documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): system diagram, code map, authorization, AI, research, boards, reports, Watch
+- [`docs/IMAGE_STUDIO.md`](docs/IMAGE_STUDIO.md): the local GPU studio, worker protocol and models
+- [`docs/RESEARCH_ENGINE.md`](docs/RESEARCH_ENGINE.md): the multi-source research engine
+- [`docs/QLOO_INTEGRATION.md`](docs/QLOO_INTEGRATION.md): Qloo endpoints and verification
+- [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md): design tokens and components
+- [`docs/MASTER_PROMPT.md`](docs/MASTER_PROMPT.md): the original product specification
+
+---
+
+Halftime is a fictional brand used for the demo. All AI images are concepts for discussion, not final
+artwork. No open-source licence has been chosen yet, so all rights are reserved by the author.

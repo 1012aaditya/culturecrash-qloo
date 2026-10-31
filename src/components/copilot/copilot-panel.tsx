@@ -5,6 +5,7 @@ import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import * as React from "react";
 import { askCopilotAction, type CopilotMessage } from "@/lib/ai/copilot-actions";
 import type { QlooRef } from "@/lib/ai/copilot-qloo";
+import { AnswerText } from "./answer-text";
 import { cn } from "@/lib/utils";
 
 const SUGGESTIONS = [
@@ -32,7 +33,10 @@ export function CopilotPanel({
   const listRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    // Show the start of the newest message, so a long answer is read from the top.
+    const list = listRef.current;
+    const last = list?.querySelector<HTMLElement>("[data-message]:last-of-type");
+    if (list && last) list.scrollTo({ top: last.offsetTop - 8, behavior: "smooth" });
   }, [messages.length]);
 
   async function ask(q: string) {
@@ -69,9 +73,9 @@ export function CopilotPanel({
       </div>
 
       {messages.length > 0 && (
-        <div ref={listRef} className={cn("mt-3 space-y-3 overflow-y-auto pr-1", compact ? "max-h-56" : "max-h-[420px]")} aria-live="polite">
+        <div ref={listRef} className={cn("relative mt-3 space-y-3 overflow-y-auto pr-1", compact ? "max-h-[min(560px,65vh)]" : "max-h-[min(720px,70vh)]")} aria-live="polite">
           {messages.map((m) => (
-            <div key={m.id} className={cn("rounded-cc-sm px-3 py-2 text-[13px] leading-relaxed", m.role === "user" ? "ml-8 bg-ink text-white" : "mr-4 bg-ivory")}>
+            <div key={m.id} data-message className={cn("rounded-cc-sm px-3 py-2 text-[13px] leading-relaxed", m.role === "user" ? "ml-8 bg-ink text-white" : "mr-4 bg-ivory")}>
               {m.role === "assistant" && m.steps.length > 0 && (
                 <details className="mb-1.5 text-[11px] text-muted">
                   <summary className="cursor-pointer select-none">{m.steps.length} lookup{m.steps.length === 1 ? "" : "s"} before answering</summary>
@@ -80,7 +84,7 @@ export function CopilotPanel({
                   </ol>
                 </details>
               )}
-              <p className="whitespace-pre-wrap">{m.content}</p>
+              {m.role === "assistant" ? <AnswerText text={m.content} /> : <p className="whitespace-pre-wrap">{m.content}</p>}
               {m.role === "assistant" && m.qloo.length > 0 && <QlooResults refs={m.qloo} />}
               {m.role === "assistant" && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">

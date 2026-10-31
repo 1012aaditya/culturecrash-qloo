@@ -164,7 +164,7 @@ exact prompt → fit check.
 ### 1 · Quick start (demo mode, no API keys)
 
 ```bash
-git clone https://github.com/1012aaditya/qloo-api.git culturecrash
+git clone https://github.com/1012aaditya/culturecrash-qloo.git culturecrash
 cd culturecrash
 npm install
 

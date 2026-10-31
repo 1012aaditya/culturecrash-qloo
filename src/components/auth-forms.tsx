@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
-import { forgotPasswordAction, signInAction, signUpAction, type FormState } from "@/app/(auth)/actions";
+import { useActionState, useEffect, useRef, type RefObject } from "react";
+import { finishSignUpAction, forgotPasswordAction, signInAction, signUpAction, type FormState } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 
@@ -37,8 +37,19 @@ export function SignInForm({ next }: { next?: string }) {
 
 export function SignUpForm() {
   const [state, action, pending] = useActionState(signUpAction, undefined);
+  // Kept in memory only, so this tab can sign in by itself once the email link is confirmed anywhere.
+  const credentials = useRef<{ email: string; password: string } | null>(null);
+  useSignInWhenConfirmed(Boolean(state?.awaitingConfirmation), credentials);
   return (
-    <form action={action} className="space-y-4" noValidate>
+    <form
+      action={action}
+      onSubmit={(e) => {
+        const f = new FormData(e.currentTarget);
+        credentials.current = { email: String(f.get("email") ?? "").trim(), password: String(f.get("password") ?? "") };
+      }}
+      className="space-y-4"
+      noValidate
+    >
       <Alert state={state} />
       <Field label="Full name" htmlFor="fullName" error={state?.fieldErrors?.fullName}>
         <Input id="fullName" name="fullName" autoComplete="name" required />
@@ -58,6 +69,44 @@ export function SignUpForm() {
       </p>
     </form>
   );
+}
+
+const CONFIRM_POLL_MS = 15_000;
+const CONFIRM_GIVE_UP_MS = 30 * 60_000;
+
+/** After sign-up, tries to sign in when the tab regains focus and every 15s, until the email is confirmed. */
+function useSignInWhenConfirmed(waiting: boolean, credentials: RefObject<{ email: string; password: string } | null>) {
+  useEffect(() => {
+    const creds = credentials.current;
+    if (!waiting || !creds) return;
+    let done = false;
+    let busy = false;
+    const started = Date.now();
+    const attempt = () => {
+      if (done || busy || document.visibilityState !== "visible") return;
+      if (Date.now() - started > CONFIRM_GIVE_UP_MS) return stop();
+      busy = true;
+      finishSignUpAction(creds.email, creds.password)
+        .then((r) => {
+          if (r.ok && !done) {
+            stop();
+            window.location.replace("/dashboard?welcome=1");
+          }
+        })
+        .catch(() => {})
+        .finally(() => { busy = false; });
+    };
+    const timer = window.setInterval(attempt, CONFIRM_POLL_MS);
+    document.addEventListener("visibilitychange", attempt);
+    window.addEventListener("focus", attempt);
+    function stop() {
+      done = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", attempt);
+      window.removeEventListener("focus", attempt);
+    }
+    return stop;
+  }, [waiting, credentials]);
 }
 
 export function ForgotPasswordForm() {

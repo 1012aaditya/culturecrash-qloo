@@ -7,7 +7,7 @@ import { safeInternalPath } from "@/lib/safe-path";
 import { localSignIn, localSignOut, localSignUp } from "@/lib/auth/local";
 import { supabaseResetPassword, supabaseSignIn, supabaseSignOut, supabaseSignUp } from "@/lib/auth/supabase";
 
-export type FormState = { error?: string; message?: string; fieldErrors?: Record<string, string> } | undefined;
+export type FormState = { error?: string; message?: string; fieldErrors?: Record<string, string>; awaitingConfirmation?: boolean } | undefined;
 
 const safeNext = (next: FormDataEntryValue | null) => safeInternalPath(next);
 
@@ -34,7 +34,10 @@ export async function signUpAction(_: FormState, form: FormData): Promise<FormSt
   if (!result.ok) return { error: result.error };
   if (result.needsEmailConfirmation) {
     // Supabase sends nothing (and says nothing) when the address already has an account, so say so here.
-    return { message: "Check your inbox for a link to confirm your email — it works on any device. No email? If this address already has an account, sign in or use “Forgot password?” instead." };
+    return {
+      awaitingConfirmation: true,
+      message: "Check your inbox for a link to confirm your email — it works on any device, and this page signs you in once you have. No email? If this address already has an account, sign in or use “Forgot password?” instead.",
+    };
   }
   redirect("/dashboard?welcome=1");
 }
@@ -57,6 +60,20 @@ export async function signInAction(_: FormState, form: FormData): Promise<FormSt
   }
   if (!result.ok) return { error: result.error };
   redirect(safeNext(form.get("next")));
+}
+
+/**
+ * The sign-up tab asks this until the email is confirmed (the link may be opened on a phone, which can't
+ * sign this browser in). The password only ever lives in that tab's memory; it's checked exactly as a sign-in.
+ */
+export async function finishSignUpAction(email: unknown, password: unknown): Promise<{ ok: boolean }> {
+  const parsed = signInSchema.safeParse({ email, password });
+  if (!parsed.success || env().AUTH_MODE !== "supabase") return { ok: false };
+  try {
+    return { ok: (await supabaseSignIn(parsed.data.email, parsed.data.password)).ok };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export async function forgotPasswordAction(_: FormState, form: FormData): Promise<FormState> {

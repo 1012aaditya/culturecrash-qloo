@@ -140,6 +140,8 @@ export const copilotAnswerSchema = z.object({
   }),
 });
 export type CopilotAnswer = z.infer<typeof copilotAnswerSchema>;
+/** What the agent returns: the answer plus the live Qloo results (refs like "Q3") it relied on. */
+export const agentAnswerSchema = copilotAnswerSchema.extend({ qlooRefs: z.array(z.string()) });
 
 export const briefExtractionSchema = z.object({
   brand: z.string(), product: z.string(), category: z.string(), market: z.string(), audience: z.string(),

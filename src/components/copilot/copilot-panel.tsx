@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUp, Loader2, Sparkles } from "lucide-react";
 import * as React from "react";
 import { askCopilotAction, type CopilotMessage } from "@/lib/ai/copilot-actions";
+import type { QlooRef } from "@/lib/ai/copilot-qloo";
 import { cn } from "@/lib/utils";
 
 const SUGGESTIONS = [
@@ -40,7 +41,7 @@ export function CopilotPanel({
     setPending(true);
     setError(null);
     setValue("");
-    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: question, generator: null, cited: [], action: null, steps: [], createdAt: new Date().toISOString() }]);
+    setMessages((m) => [...m, { id: `local-${Date.now()}`, role: "user", content: question, generator: null, cited: [], action: null, steps: [], qloo: [], createdAt: new Date().toISOString() }]);
     let res: Awaited<ReturnType<typeof askCopilotAction>>;
     try {
       res = await askCopilotAction({ projectId, conversationId, question });
@@ -63,7 +64,7 @@ export function CopilotPanel({
         <span className="flex size-9 items-center justify-center rounded-full bg-ink text-white"><Sparkles className="size-4" /></span>
         <div>
           <h2 className="text-[14px] font-semibold">Ask CultureCrash</h2>
-          <p className="text-[12px] text-muted">{llm ? "Looks up this project’s evidence, entities, strategy and experiments before answering." : "No LLM configured — answers come from stored records only."}</p>
+          <p className="text-[12px] text-muted">{llm ? "Looks up this project’s evidence and strategy, and asks Qloo’s taste graph live when the research doesn’t cover it." : "No LLM configured — answers come from stored records only."}</p>
         </div>
       </div>
 
@@ -80,6 +81,7 @@ export function CopilotPanel({
                 </details>
               )}
               <p className="whitespace-pre-wrap">{m.content}</p>
+              {m.role === "assistant" && m.qloo.length > 0 && <QlooResults refs={m.qloo} />}
               {m.role === "assistant" && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
                   <span>{m.generator === "template-engine" ? "Template answer" : m.generator ? `AI · ${m.generator.replace("llm:", "")}` : ""}</span>
@@ -93,7 +95,7 @@ export function CopilotPanel({
               )}
             </div>
           ))}
-          {pending && <p className="flex items-center gap-2 text-[12px] text-muted"><Loader2 className="size-3.5 animate-spin" /> {llm ? "Looking things up in this project…" : "Reading project evidence…"}</p>}
+          {pending && <p className="flex items-center gap-2 text-[12px] text-muted"><Loader2 className="size-3.5 animate-spin" /> {llm ? "Looking things up in this project and Qloo…" : "Reading project evidence…"}</p>}
         </div>
       )}
       {error && <p role="alert" className="mt-2 text-[12px] text-danger">{error}</p>}
@@ -113,5 +115,24 @@ export function CopilotPanel({
         </button>
       </form>
     </section>
+  );
+}
+
+/** The live Qloo results an answer relied on, grouped by the question asked of Qloo. */
+function QlooResults({ refs }: { refs: QlooRef[] }) {
+  const byAsked = new Map<string, QlooRef[]>();
+  refs.forEach((r) => byAsked.set(r.asked, [...(byAsked.get(r.asked) ?? []), r]));
+  const groups = [...byAsked];
+  return (
+    <div className="mt-2 space-y-1.5 rounded-cc-sm border border-violet/20 bg-paper px-2.5 py-2 text-[11px]">
+      <p className="font-medium text-violet">Live from Qloo</p>
+      {groups.map(([asked, list]) => (
+        <div key={asked}>
+          <p className="text-muted">{asked}</p>
+          <p className="text-ink/85">{list.map((r) => `${r.name}${r.affinity === null ? "" : ` (${r.affinity.toFixed(2)})`}`).join(" · ")}</p>
+        </div>
+      ))}
+      <p className="text-faint">Affinity: how much this audience over-indexes. Correlation, not purchase intent.</p>
+    </div>
   );
 }

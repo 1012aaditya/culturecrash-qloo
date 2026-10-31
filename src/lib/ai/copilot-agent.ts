@@ -3,9 +3,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { withUser } from "@/lib/db";
 import { env } from "@/lib/env";
+import { describeQlooCall, isQlooTool, QLOO_RULES, QLOO_TOOLS, type QlooRef, type QlooSession } from "./copilot-qloo";
 import { COPILOT_TOOLS, describeToolCall, runCopilotTool } from "./copilot-tools";
 import { LLMError, SYSTEM_RULES } from "./index";
-import { copilotAnswerSchema, type CopilotAnswer } from "./schemas";
+import { agentAnswerSchema, type CopilotAnswer } from "./schemas";
 
 const MAX_STEPS = 6;
 
@@ -14,20 +15,25 @@ You are answering a strategist's question inside one campaign. You have read-onl
 When you have enough, give the final answer in the required JSON format. Cite only evidence ids that a tool returned. If the data cannot answer the question, say what is missing. You may propose ONE follow-up action; it only runs if the user confirms.`;
 
 export type AgentStep = { label: string; ok: boolean };
-export type AgentAnswer = { answer: CopilotAnswer; generator: string; steps: AgentStep[]; seenEvidenceIds: Set<string> };
+/** `qloo` holds the live Qloo results the answer cited, each one a result a tool really returned. */
+export type AgentAnswer = { answer: CopilotAnswer; generator: string; steps: AgentStep[]; seenEvidenceIds: Set<string>; qloo: QlooRef[] };
 
 /**
  * Multi-step copilot: a manual tool-use loop (read-only tools under RLS), finishing with a
  * schema-validated answer via structured outputs. Forced tool_choice is not used (the
  * current Opus rejects it); on the last step tool_choice "none" makes the model answer.
  */
-export async function runCopilotAgent(opts: { userId: string; projectId: string; context: string; question: string; client?: Pick<Anthropic, "messages"> }): Promise<AgentAnswer> {
+export async function runCopilotAgent(opts: { userId: string; projectId: string; context: string; question: string; qloo?: QlooSession | null; client?: Pick<Anthropic, "messages"> }): Promise<AgentAnswer> {
   const e = env();
   if (!e.ANTHROPIC_API_KEY && !opts.client) throw new LLMError("No LLM provider is configured", "api");
   const client = opts.client ?? new Anthropic({ apiKey: e.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 120_000 });
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: `${opts.context}\n\n${opts.question}` }];
   const steps: AgentStep[] = [];
   const seen = new Set<string>();
+  // Live Qloo tools are offered only when a Qloo key is configured.
+  const qloo = opts.qloo ?? null;
+  const tools = qloo ? [...COPILOT_TOOLS, ...QLOO_TOOLS] : COPILOT_TOOLS;
+  const rules = qloo ? `${AGENT_RULES}\n${QLOO_RULES}` : AGENT_RULES;
 
   try {
     for (let step = 1; step <= MAX_STEPS; step++) {
@@ -35,10 +41,10 @@ export async function runCopilotAgent(opts: { userId: string; projectId: string;
       const response = await client.messages.parse({
         model: e.LLM_MODEL,
         max_tokens: 16000,
-        system: [{ type: "text", text: AGENT_RULES, cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: rules, cache_control: { type: "ephemeral" } }],
         thinking: { type: "adaptive" },
-        output_config: { effort: "medium", format: zodOutputFormat(copilotAnswerSchema) },
-        tools: COPILOT_TOOLS,
+        output_config: { effort: "medium", format: zodOutputFormat(agentAnswerSchema) },
+        tools,
         tool_choice: last ? { type: "none" } : { type: "auto" },
         messages,
       });
@@ -50,15 +56,23 @@ export async function runCopilotAgent(opts: { userId: string; projectId: string;
       }
       if (response.stop_reason !== "tool_use") {
         if (!response.parsed_output) throw new LLMError("The model returned output that did not match the expected structure", "invalid_output");
-        const validated = copilotAnswerSchema.safeParse(response.parsed_output);
+        const validated = agentAnswerSchema.safeParse(response.parsed_output);
         if (!validated.success) throw new LLMError("The model output failed validation", "invalid_output");
-        return { answer: validated.data, generator: `llm:${e.LLM_MODEL}`, steps, seenEvidenceIds: seen };
+        const { qlooRefs, ...answer } = validated.data;
+        const cited = [...new Set(qlooRefs)].flatMap((r) => qloo?.refs.get(r) ?? []);
+        return { answer, generator: `llm:${e.LLM_MODEL}`, steps, seenEvidenceIds: seen, qloo: cited };
       }
 
       // Keep the full assistant content (including thinking blocks) unchanged.
       messages.push({ role: "assistant", content: response.content });
       const calls = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
       const results = await Promise.all(calls.map(async (call): Promise<Anthropic.ToolResultBlockParam> => {
+        if (qloo && isQlooTool(call.name)) {
+          const out = await qloo.run(call.name, call.input);
+          const isError = Boolean(out.result && typeof out.result === "object" && "error" in (out.result as object));
+          steps.push({ label: describeQlooCall(call.name, call.input), ok: !isError });
+          return { type: "tool_result", tool_use_id: call.id, content: JSON.stringify(out.result).slice(0, 40_000), is_error: isError || undefined };
+        }
         try {
           const out = await withUser(opts.userId, (tx) => runCopilotTool(tx, opts.projectId, call.name, call.input));
           out.evidenceIds.forEach((id) => seen.add(id));

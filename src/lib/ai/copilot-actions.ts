@@ -6,13 +6,15 @@ import { withUser } from "@/lib/db";
 import { loadBrief } from "@/lib/data/briefs";
 import { isUuid } from "@/lib/data/projects";
 import { getCtx } from "@/lib/data/workspace";
+import { qloo as qlooClient } from "@/lib/providers/qloo";
 import { runCopilotAgent, type AgentStep } from "./copilot-agent";
+import { QlooSession, type QlooRef } from "./copilot-qloo";
 import { tag, TEMPLATE_GENERATOR } from "./index";
 import { readObservations } from "./context";
 import type { CopilotAnswer } from "./schemas";
 import { templateCopilot } from "./template";
 
-export type CopilotMessage = { id: string; role: "user" | "assistant"; content: string; generator: string | null; cited: string[]; action: CopilotAnswer["proposedAction"] | null; steps: AgentStep[]; createdAt: string };
+export type CopilotMessage = { id: string; role: "user" | "assistant"; content: string; generator: string | null; cited: string[]; action: CopilotAnswer["proposedAction"] | null; steps: AgentStep[]; qloo: QlooRef[]; createdAt: string };
 export type CopilotResult = { ok: true; conversationId: string; message: CopilotMessage } | { ok: false; error: string };
 
 const input = z.object({ projectId: z.string().refine(isUuid), conversationId: z.string().refine(isUuid).nullable(), question: z.string().trim().min(2).max(2000) });
@@ -36,20 +38,25 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
     const history = parsed.data.conversationId
       ? await tx`select role, content from conversation_messages where conversation_id = ${parsed.data.conversationId} order by created_at desc limit 6`
       : [];
-    return { brief, observations: [...new Map([...focused, ...observations].map((o) => [o.id, o])).values()], dirs, opps, history: history.reverse() };
+    // Live Qloo lookups follow the workspace's Qloo switch in Settings → Integrations, like research does.
+    const [qs] = await tx`select enabled from integration_settings where workspace_id = ${ws} and provider = 'qloo'`;
+    return { qlooOn: !qs || Boolean(qs.enabled), brief, observations: [...new Map([...focused, ...observations].map((o) => [o.id, o])).values()], dirs, opps, history: history.reverse() };
   });
   if (!gathered) return { ok: false, error: "Project not found." };
 
   let answer: CopilotAnswer;
   let generator = TEMPLATE_GENERATOR;
   let steps: AgentStep[] = [];
+  let qloo: QlooRef[] = [];
   if (await llmEnabled(ctx.user.id, ctx.workspace.workspaceId)) {
     try {
       // A compact starting context; the agent looks up anything else it needs with its read-only tools.
       const top = gathered.observations.slice(0, 20);
+      const client = qlooClient();
       const out = await runCopilotAgent({
         userId: ctx.user.id,
         projectId,
+        qloo: gathered.qlooOn && client.configured ? new QlooSession(client) : null,
         context: [
           tag("brief", JSON.stringify({ name: gathered.brief.name, brand: gathered.brief.brand, category: gathered.brief.category, market: gathered.brief.market, audience: gathered.brief.audience, objective: gathered.brief.objective, competitors: gathered.brief.competitors, interests: gathered.brief.interests ?? [] })),
           tag("evidence", JSON.stringify({ topObservations: top.map((o) => ({ id: o.id, text: o.claim.slice(0, 280), entity: o.entityName, type: o.entityType, affinity: o.affinity, role: o.role })), totalObservations: gathered.observations.length, directions: gathered.dirs.map((d) => d.name), opportunities: gathered.opps })),
@@ -60,6 +67,7 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
       answer = { ...out.answer, citedEvidenceIds: out.answer.citedEvidenceIds.filter((id) => valid.has(id)) };
       generator = out.generator;
       steps = out.steps;
+      qloo = out.qloo;
     } catch {
       return { ok: false, error: "The assistant could not answer right now (LLM request failed). Nothing was saved." };
     }
@@ -79,12 +87,12 @@ export async function askCopilotAction(raw: z.input<typeof input>): Promise<Copi
     }
     await tx`insert into conversation_messages (conversation_id, workspace_id, role, content) values (${conversationId}, ${ws}, 'user', ${question})`;
     const [m] = await tx`insert into conversation_messages (conversation_id, workspace_id, role, content, tool_calls, generator)
-      values (${conversationId}, ${ws}, 'assistant', ${answer.answer}, ${tx.json({ cited: answer.citedEvidenceIds, action: answer.proposedAction, steps } as never)}, ${generator}) returning id, created_at`;
+      values (${conversationId}, ${ws}, 'assistant', ${answer.answer}, ${tx.json({ cited: answer.citedEvidenceIds, action: answer.proposedAction, steps, qloo } as never)}, ${generator}) returning id, created_at`;
     await tx`update conversations set updated_at = now() where id = ${conversationId}`;
     return {
       ok: true as const,
       conversationId: conversationId!,
-      message: { id: m.id, role: "assistant" as const, content: answer.answer, generator, cited: answer.citedEvidenceIds, action: answer.proposedAction.type === "none" ? null : answer.proposedAction, steps, createdAt: new Date(m.created_at).toISOString() },
+      message: { id: m.id, role: "assistant" as const, content: answer.answer, generator, cited: answer.citedEvidenceIds, action: answer.proposedAction.type === "none" ? null : answer.proposedAction, steps, qloo, createdAt: new Date(m.created_at).toISOString() },
     };
   });
 }
@@ -98,7 +106,7 @@ export async function loadConversation(projectId: string): Promise<{ conversatio
     const rows = await tx`select id, role, content, generator, tool_calls, created_at from conversation_messages where conversation_id = ${c.id} order by created_at desc limit 20`;
     return {
       conversationId: c.id,
-      messages: rows.reverse().map((r) => ({ id: r.id, role: r.role, content: r.content, generator: r.generator, cited: r.tool_calls?.cited ?? [], action: r.tool_calls?.action?.type && r.tool_calls.action.type !== "none" ? r.tool_calls.action : null, steps: Array.isArray(r.tool_calls?.steps) ? r.tool_calls.steps : [], createdAt: new Date(r.created_at).toISOString() })),
+      messages: rows.reverse().map((r) => ({ id: r.id, role: r.role, content: r.content, generator: r.generator, cited: r.tool_calls?.cited ?? [], action: r.tool_calls?.action?.type && r.tool_calls.action.type !== "none" ? r.tool_calls.action : null, steps: Array.isArray(r.tool_calls?.steps) ? r.tool_calls.steps : [], qloo: Array.isArray(r.tool_calls?.qloo) ? r.tool_calls.qloo : [], createdAt: new Date(r.created_at).toISOString() })),
     };
   });
 }
